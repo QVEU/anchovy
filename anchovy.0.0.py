@@ -145,11 +145,15 @@ def poolBlocks(query,pdSam,nthreads=16):#uses multithreading to compute the matc
         pdSam['minD'],   pdSam['minPos'],   pdSam['matchseq']   = zip(*p.map(blockDist, [(c.upper(),query.upper()) for c in pdSam.seq]))
     return(pdSam)
 
-def cellMatch(input):#TUPLE including (matchseq, CBCs, blocks):
-
-    matchseq=input[0]
-    CBCs=input[1]
-    blocks=input[2]
+def cellMatch(input):#TUPLE including (readID, readSeq, matchSeq, matchseq, CBCs, blocks):
+    readID=input[0]
+    #print(readID)
+    readSeq=input[1]
+    #print(readSeq)
+    matchseq=input[2]
+    #print(matchseq)
+    CBCs=input[3]
+    blocks=input[4]
 
     #print("Query: "+matchseq)
     #Define Levenshtein distance function
@@ -169,26 +173,18 @@ def cellMatch(input):#TUPLE including (matchseq, CBCs, blocks):
     #print(CBCs.iloc[minPos])
     #print(matchseq)
     #print("\n")
+    return(CBCs.iloc[minPos][0], minD, minPos, matchblock, matchseq, readID, readSeq)
 
-    return(CBCs.iloc[minPos][0], minD, minPos, matchblock, matchseq)
-
-def cellID(pdSam, pdCBCs, nthreads=16):
-    #make reconstructed query containing CBC and constant portions of index and TSO
-    blocks=np.array(["CTACACGACGCTCTTCCGATCT"+i+"NNNNNNNNNNTTTCTTATAT" for i in pdCBCs.CBC])
-    pdSam=pdSam[pdSam.minD<30]
-    CBCtable=pd.DataFrame([cellMatch(i, pdCBCs, blocks) for i in pdSam.matchseq])
-    print(CBCtable)
-    return(CBCtable)
-
-#Pooled cell ID function...
-def cellIDPool(pdSam,   pdCBCs,nthreads=16):
+#Pooled cell ID function
+def cellIDPool(pdSam, pdCBCs, nthreads=16):
     blocks=np.array(["CTACACGACGCTCTTCCGATCT"+i+"NNNNNNNNNNTTTCTTATAT" for i in pdCBCs.CBC])
     pdSam=pdSam[pdSam.minD<30]
     anchOut=pd.DataFrame()
-
+    print(pdSam)
     with Pool(nthreads) as p:
-        print("\n1. Identifying Cell barcodes...")
-        anchOut['CBCpos'], anchOut['minD'], anchOut['minPos'], anchOut['matchblock'],anchOut['matchseq']   = zip(*p.map(cellMatch, [(mS,pdCBCs,blocks) for mS in pdSam.matchseq]))
+        print("\n2. Identifying Cell Barcodes...")
+        anchOut['CBC'], anchOut['minD'], anchOut['BC_ID'], anchOut['reconQuery'], anchOut['matchseq'], anchOut['read'], anchOut['readSeq'] = zip(*p.map(cellMatch, [(f[1], f[10], f[15], pdCBCs, blocks) for f in pdSam.itertuples()]))
+    print(anchOut)
     return(anchOut)
 
 if __name__=="__main__":
