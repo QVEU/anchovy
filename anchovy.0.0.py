@@ -44,6 +44,7 @@ def Initialize(args):
 
     #Query
     query=args[3]
+    #5' query: CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT
     whitelist=args[2]
 
     quL=len(query)
@@ -144,8 +145,13 @@ def poolBlocks(query,pdSam,nthreads=16):#uses multithreading to compute the matc
         pdSam['minD'],   pdSam['minPos'],   pdSam['matchseq']   = zip(*p.map(blockDist, [(c.upper(),query.upper()) for c in pdSam.seq]))
     return(pdSam)
 
-def cellMatch(matchseq, CBCs, blocks):
-    print("Query: "+matchseq)
+def cellMatch(input):#TUPLE including (matchseq, CBCs, blocks):
+
+    matchseq=input[0]
+    CBCs=input[1]
+    blocks=input[2]
+
+    #print("Query: "+matchseq)
     #Define Levenshtein distance function
     BlockDistance = lambda Block: Levenshtein.distance(Block,matchseq)
 
@@ -158,13 +164,13 @@ def cellMatch(matchseq, CBCs, blocks):
     #compute minimum and position of minimum
     minD=min(bDist.astype(int))
     minPos=np.argmin(bDist.astype(int))
-    matchseq=blocks[minPos]
+    matchblock=blocks[minPos]
 
-    print(CBCs.iloc[minPos])
-    print(matchseq)
-    print("\n")
+    #print(CBCs.iloc[minPos])
+    #print(matchseq)
+    #print("\n")
 
-    return(CBCs.iloc[minPos], minD, minPos, matchseq)
+    return(CBCs.iloc[minPos][0], minD, minPos, matchblock, matchseq)
 
 def cellID(pdSam, pdCBCs, nthreads=16):
     #make reconstructed query containing CBC and constant portions of index and TSO
@@ -174,15 +180,26 @@ def cellID(pdSam, pdCBCs, nthreads=16):
     print(CBCtable)
     return(CBCtable)
 
+#Pooled cell ID function...
+def cellIDPool(pdSam,   pdCBCs,nthreads=16):
+    blocks=np.array(["CTACACGACGCTCTTCCGATCT"+i+"NNNNNNNNNNTTTCTTATAT" for i in pdCBCs.CBC])
+    pdSam=pdSam[pdSam.minD<30]
+    anchOut=pd.DataFrame()
+
+    with Pool(nthreads) as p:
+        print("\n1. Identifying Cell barcodes...")
+        anchOut['CBCpos'], anchOut['minD'], anchOut['minPos'], anchOut['matchblock'],anchOut['matchseq']   = zip(*p.map(cellMatch, [(mS,pdCBCs,blocks) for mS in pdSam.matchseq]))
+    return(anchOut)
+
 if __name__=="__main__":
     t0=(time.time())
     query, pdCBCs, pdSam, outfileName = Initialize(sys.argv)
     pdSam = poolBlocks(query,pdSam)
     print("\nMapped hits in {} reads.".format(np.sum([int(i)>0 for i in pdSam.minPos])))
 
-    pdSam = cellID(pdSam, pdCBCs)
+    anchOut = cellIDPool(pdSam, pdCBCs)
 
-    pdSam[(pdSam.minPos>0)].to_csv(outfileName)
+    anchOut.to_csv(outfileName)
 
     t1=(time.time())
     print("Done in {} minutes.".format((t1-t0)/60))

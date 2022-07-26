@@ -1,9 +1,9 @@
 #!/bin/bash -e
 #$ -S /bin/bash
-#$ -N threaded16_stickle
+#$ -N threaded16_anchovy
 #$ -M Patrick.Dolan@nih.gov
 #$ -m be
-#$ -l h_vmem=32G
+#$ -l h_vmem=15G
 #$ -cwd
 #$ -o anchOut/
 #$ -pe threaded 16
