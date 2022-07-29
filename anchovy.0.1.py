@@ -19,6 +19,7 @@ import re
 import numpy as np
 import sys
 from multiprocessing import Pool
+import pysam
 
 ##### Functions #####
 def Initialize(args):
@@ -75,15 +76,56 @@ def loadSAM(inputData,quL):
         samInput=[lin.split("\t")[0:11] for lin in IF if lin.startswith("@") is False]#Filter out headers with @
 
     names=["read","FLAG","template","pos","mapq","cigar","Rnext","Pnext","Tlen","seq","Qscore"]#SAM columns
+    samFile    = sys.argv[1];
+    print("Parsing Cigars...")
+    samFP = pysam.Samfile(samFile, "rb");
+    cigars=[]
+    for read in samFP:
+        readLen=0#match
+        CreadLen=0#match
+        if( not( read.is_unmapped ) ):   #if it's mapped
+            cigarLine=read.cigar;
+            switch=0
+            for (cigarType,cigarLength) in cigarLine:
+                try:
+                    if(cigarType == 0):
+                        readLen+=cigarLength#match
+                        CreadLen+=cigarLength#match
+                        switch=1
+                    elif(cigarType == 1):
+                        readLen+=cigarLength#insertions
+                        CreadLen+=cigarLength#insertions
+                        switch=1
+                    elif(cigarType == 2): pass #deletion
+                    elif(cigarType == 3):
+                        readLen+=cigarLength#skip
+                        CreadLen+=cigarLength#skip
+                        switch=1
+                    elif(cigarType == 4):
+                        if switch==0:
+                            readLen+=cigarLength#soft clipping
+                        switch=1
+                    elif(cigarType == 5): pass#hard clipping
+                    elif(cigarType == 6): pass#padding
+                    else:
+                        print ("Wrong CIGAR number");
+                        sys.exit(1);
+                except:
+                    print("Problem")
+            cigarLengths=[readLen,CreadLen,readLen-CreadLen]
+            cigars.append(cigarLengths)
 
+    print("Done.")
     minL=quL
     size=len(samInput)
     print("Total Candidate Reads: {}".format(size))
     pdSam=pd.DataFrame(samInput,columns=names)
-    #print(pdSam)
-    #pdSam.astype(typeDict)
+    pdSam=pdSam[pdSam.template!="*"]
+    print(len(pdSam))
+    print(len(cigars))
+    pdSam[['readLen','clipReadLen','offset']]=cigars
     pdSam['length']=pdSam.seq.apply(lambda s: len(s))
-    pdSam=pdSam[(pdSam.length>minL)&(pdSam.template!="*")]
+    pdSam=pdSam[(pdSam.length>minL)&(pdSam.template!="*")][1:100]
     return(pdSam)
 
 def loadBC(whitelist):
@@ -129,27 +171,8 @@ def blockDist(seq_query):
     blocks=np.array([seq[i:(i+quL)] for i in range(len(seq)-quL)])
     bDist = vectorBlockDist(blocks)
     mBDist=min(bDist)
-    hitPosList=np.argsort(bDist)[np.sort(bDist)<=(1.10*(nN))]
-
-    out=[]
-    x=0.0
-    n=0.0
+    hitPosList=np.argsort(bDist)[np.sort(bDist)<=(1.20*(nN))]
     print(hitPosList)
-    for i in np.sort(hitPosList):
-        if ((x==0.0)|(np.abs(i-x)==1)):
-            print("i-x:"+str(i-x))
-            n+=1.0
-            x=x+i
-        elif n>0:
-            out=out.append(round(x/n))
-            x=i
-        else:
-            x=i
-        print("i: "+str(i)+"\nx: "+str(x)+"\noutput: "+str(out))
-    if n>0:
-        out=out.append([round(x/n)])
-    print(out)
-
     #compute minimum and position of minimum
     minD=min(bDist.astype(int))
     minPos=np.argmin(bDist.astype(int))
@@ -173,17 +196,22 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
         `input` is tuple containing the following:
             readID=input[0]
             readSeq=input[1]
-            matchseq=input[2]
-            CBCs=input[3]
-            blocks=input[4]
+            matchPos=input[2]
+            matchseq=input[3]
+            CBCs=input[4]
+            blocks=input[5]
+            #f[1], f[9], f[16], f[17], pdCBCs, blocks
     '''
-
     readID=input[0]
     readSeq=input[1]
-    matchseq=input[2]
+    matchPos=input[2]
+    print("matchpos:"+str(matchPos))
     matchseq=input[3]
-    CBCs=input[4]
-    blocks=input[5]
+    print("matchseq:"+str(matchseq))
+    offset=input[4]
+    print("offset:"+str(offset))
+    CBCs=input[5]
+    blocks=input[6]
 
     #Define Levenshtein distance function
     BlockDistance = lambda Block: Levenshtein.distance(Block,matchseq)
@@ -198,17 +226,18 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
     minPos=np.argmin(bDist.astype(int))
     matchblock=blocks[minPos]
 
-    return(CBCs.iloc[minPos][0], minD, minPos, matchblock, matchseq, readID, readSeq)
+    return(CBCs.iloc[minPos][0], minD, minPos, matchPos, offset, matchblock, matchseq, readID, readSeq)
 
 #Pooled cell ID function
 def cellIDPool(pdSam, pdCBCs, nthreads=16):
     blocks=np.array(["CTACACGACGCTCTTCCGATCT"+i+"NNNNNNNNNNTTTCTTATAT" for i in pdCBCs.CBC])
     pdSam=pdSam[pdSam.minD<33]#filter by distance of index sequences cassette to template
     anchOut=pd.DataFrame()
+    print(list(pdSam))
     print(pdSam)
     with Pool(nthreads) as p:
         print("\n2. Identifying Cell Barcodes...")
-        anchOut['CBC'], anchOut['minD'], anchOut['BC_ID'], anchOut['reconQuery'], anchOut['matchseq'], anchOut['read'], anchOut['readSeq'] = zip(*p.map(cellMatch, [(f[1], f[10], f[14], f[15], pdCBCs, blocks) for f in pdSam.itertuples()]))
+        anchOut['CBC'], anchOut['minD'], anchOut['BC_ID'], anchOut['readPos'], anchOut['cigarClip'], anchOut['reconQuery'], anchOut['matchseq'], anchOut['read'], anchOut['readSeq'] = zip(*p.map(cellMatch, [(f[1], f[10], f[17], f[18], f[14], pdCBCs, blocks) for f in pdSam.itertuples()]))
     print(anchOut)
     return(anchOut)
 
