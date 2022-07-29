@@ -102,7 +102,7 @@ def loadSAM(inputData,quL):
                         CreadLen+=cigarLength#skip
                         switch=1
                     elif(cigarType == 4):
-                        if switch==0:
+                        if switch==0:#only count opening soft clipping
                             readLen+=cigarLength#soft clipping
                         switch=1
                     elif(cigarType == 5): pass#hard clipping
@@ -125,7 +125,7 @@ def loadSAM(inputData,quL):
     print(len(cigars))
     pdSam[['readLen','clipReadLen','offset']]=cigars
     pdSam['length']=pdSam.seq.apply(lambda s: len(s))
-    pdSam=pdSam[(pdSam.length>minL)&(pdSam.template!="*")][1:100]
+    pdSam=pdSam[(pdSam.length>minL)&(pdSam.template!="*")]
     return(pdSam)
 
 def loadBC(whitelist):
@@ -134,7 +134,7 @@ def loadBC(whitelist):
         Reads in 10X whitelist.
 
     Arguments:
-        "whitelist" is a string of the path to the input 20x whitelist of cell barcodes.
+        "whitelist" is a string of the path to the input 10x whitelist of cell barcodes.
     '''
 
     with open(whitelist,"r") as IF:
@@ -162,6 +162,8 @@ def blockDist(seq_query):
     #Prepare Query
     quL=len(query)
     minD=quL #set maximum distance to length of query
+    minPos=0
+    matchseq=""
     nN=np.sum([1 for i in query if i=="N"])
     # Build vectorized BlockDistance function
     BlockDistance = lambda Block: Levenshtein.distance(Block,query)
@@ -170,14 +172,16 @@ def blockDist(seq_query):
     # Make blocks of read sequence
     blocks=np.array([seq[i:(i+quL)] for i in range(len(seq)-quL)])
     bDist = vectorBlockDist(blocks)
-    mBDist=min(bDist)
-    hitPosList=np.argsort(bDist)[np.sort(bDist)<=(1.20*(nN))]
-    print(hitPosList)
+    #hitPosList=np.argsort(bDist)[np.sort(bDist)<=(1.20*(nN))]
+    #print(hitPosList)
     #compute minimum and position of minimum
-    minD=min(bDist.astype(int))
-    minPos=np.argmin(bDist.astype(int))
+    try:
+        minD=min(bDist.astype(int))
+        minPos=np.argmin(bDist.astype(int))
+        matchseq=blocks[minPos] #Grab this matched sequence.
+    except:
+        print("No Hit:"+str(seq_query))
 
-    matchseq=blocks[minPos] #Grab this matched sequence.
     return(minD, minPos, matchseq)
 
 def poolBlocks(query,pdSam,nthreads=16):#uses multithreading to compute the matches
@@ -185,7 +189,8 @@ def poolBlocks(query,pdSam,nthreads=16):#uses multithreading to compute the matc
         print("\n1. Computing minimum distance hit position for {} reads.".format(len(pdSam)))
         quL=len(query)
         print("Query: {}".format(query))
-        pdSam['minD'],   pdSam['minPos'],   pdSam['matchseq'] = zip(*p.map(blockDist, [(c.upper(),query.upper()) for c in pdSam.seq]))
+        print( [c[10][(c[14]-100):(c[14]+5)].upper() for c in pdSam.itertuples()] )#ONLY MAP WITHIN 100 bases upstream of the hit site. 
+        pdSam['minD'],   pdSam['minPos'],   pdSam['matchseq'] = zip(*p.map(blockDist, [(c[10][(c[14]-100):(c[14]+5)].upper(),query.upper()) for c in pdSam.itertuples()]))
     return(pdSam)
 
 def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBCs, blocks):
@@ -205,9 +210,9 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
     readID=input[0]
     readSeq=input[1]
     matchPos=input[2]
-    print("matchpos:"+str(matchPos))
+    print("Pos of Index Match:"+str(matchPos))
     matchseq=input[3]
-    print("matchseq:"+str(matchseq))
+    print("Index Match Seq:"+str(matchseq))
     offset=input[4]
     print("offset:"+str(offset))
     CBCs=input[5]
