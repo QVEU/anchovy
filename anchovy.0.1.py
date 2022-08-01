@@ -42,6 +42,7 @@ def Initialize(args):
     #Check for Args
     if len(args)<3:
         print("USAGE: python anchovy.0.1.py pathto/input.sam pathto/whitelist.txt query")
+        print("e.g.  python anchovy.0.1.py ~/lab_share/Sequencing_Data/QVEU_Seq_0010_Minion_ndas10xlib2/no_sample/20220727_2153_MC-113212_FAT27957_6eb71326/fastq_pass/barcode01/merge.sam 3M-february-2018.txt CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT")
         exit()
 
     #Query
@@ -56,6 +57,7 @@ def Initialize(args):
     inputData=sys.argv[1]
     print("\nLoading SAM: {}".format(inputData))
     pdSam=loadSAM(inputData,quL)
+    pdSam=pdSam[pdSam.template!="*"]
     pdCBCs=loadBC(whitelist)
     outfile=inputData.replace(".sam",'_anchovy_v1.csv')
     print("\nOutfile: {}".format(outfile))
@@ -96,7 +98,8 @@ def loadSAM(inputData,quL):
                         readLen+=cigarLength#insertions
                         CreadLen+=cigarLength#insertions
                         switch=1
-                    elif(cigarType == 2): pass #deletion
+                    elif(cigarType == 2): #deletion
+                        switch=1
                     elif(cigarType == 3):
                         readLen+=cigarLength#skip
                         CreadLen+=cigarLength#skip
@@ -120,12 +123,13 @@ def loadSAM(inputData,quL):
     size=len(samInput)
     print("Total Candidate Reads: {}".format(size))
     pdSam=pd.DataFrame(samInput,columns=names)
+    #print(pdSam)
     pdSam=pdSam[pdSam.template!="*"]
-    print(len(pdSam))
-    print(len(cigars))
+    #print(len(pdSam))
+    #print(len(cigars))
     pdSam[['readLen','clipReadLen','offset']]=cigars
     pdSam['length']=pdSam.seq.apply(lambda s: len(s))
-    pdSam=pdSam[(pdSam.length>minL)&(pdSam.template!="*")]
+    pdSam=pdSam[(pdSam.length>minL)][0:20]
     return(pdSam)
 
 def loadBC(whitelist):
@@ -162,7 +166,7 @@ def blockDist(seq_query):
     #Prepare Query
     quL=len(query)
     minD=quL #set maximum distance to length of query
-    minPos=0
+    minPos=-1
     matchseq=""
     nN=np.sum([1 for i in query if i=="N"])
     # Build vectorized BlockDistance function
@@ -170,7 +174,8 @@ def blockDist(seq_query):
     vectorBlockDist = np.vectorize(BlockDistance,otypes=[int])
 
     # Make blocks of read sequence
-    blocks=np.array([seq[i:(i+quL)] for i in range(len(seq)-quL)])
+    blocks=np.array([seq[i:min((len(seq),(i+quL)))] for i in range(max(1,(len(seq)-quL)))])
+    #print(blocks)
     bDist = vectorBlockDist(blocks)
     #hitPosList=np.argsort(bDist)[np.sort(bDist)<=(1.20*(nN))]
     #print(hitPosList)
@@ -180,17 +185,19 @@ def blockDist(seq_query):
         minPos=np.argmin(bDist.astype(int))
         matchseq=blocks[minPos] #Grab this matched sequence.
     except:
-        print("No Hit:"+str(seq_query))
+        print("No Hit:"+str(seq_query)+str([minPos,minD]))
 
     return(minD, minPos, matchseq)
 
 def poolBlocks(query,pdSam,nthreads=16):#uses multithreading to compute the matches
+    #print(pdSam)
     with Pool(nthreads) as p:
         print("\n1. Computing minimum distance hit position for {} reads.".format(len(pdSam)))
         quL=len(query)
         print("Query: {}".format(query))
-        print( [c[10][(c[14]-100):(c[14]+5)].upper() for c in pdSam.itertuples()] )#ONLY MAP WITHIN 100 bases upstream of the hit site. 
-        pdSam['minD'],   pdSam['minPos'],   pdSam['matchseq'] = zip(*p.map(blockDist, [(c[10][(c[14]-100):(c[14]+5)].upper(),query.upper()) for c in pdSam.itertuples()]))
+        print(pdSam.offset)
+        pdSam['minD'],   pdSam['minPos'],   pdSam['matchseq'] = zip(*p.map(blockDist, [(c[10][max(0,(c[14]-100)):c[14]].upper(),query.upper()) for c in pdSam.itertuples()]))
+        print(pdSam[::])
     return(pdSam)
 
 def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBCs, blocks):
@@ -208,41 +215,46 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
             #f[1], f[9], f[16], f[17], pdCBCs, blocks
     '''
     readID=input[0]
-    readSeq=input[1]
+
     matchPos=input[2]
     print("Pos of Index Match:"+str(matchPos))
     matchseq=input[3]
     print("Index Match Seq:"+str(matchseq))
-    offset=input[4]
+
+    readLen=input[4]
+    print("read Length:"+str(readLen))
+    offset=input[5]
     print("offset:"+str(offset))
-    CBCs=input[5]
-    blocks=input[6]
+    readSeq=input[1][offset:readLen]
+    print(readSeq)
+
+    CBCs=input[6]
+    blocks=input[7]
 
     #Define Levenshtein distance function
     BlockDistance = lambda Block: Levenshtein.distance(Block,matchseq)
     #Vectorize the BlockDistance function
     vectorBlockDist = np.vectorize(BlockDistance,otypes=[int])
-
     #Generate Block Distance vector, 'bDist'
     bDist = vectorBlockDist(blocks)
-
     #compute minimum and position of minimum
     minD=min(bDist.astype(int))
     minPos=np.argmin(bDist.astype(int))
     matchblock=blocks[minPos]
 
-    return(CBCs.iloc[minPos][0], minD, minPos, matchPos, offset, matchblock, matchseq, readID, readSeq)
+    return(CBCs.iloc[minPos][0], minD,    minPos,          matchPos,           offset,              matchblock,              matchseq,          readID,           readSeq)
 
 #Pooled cell ID function
 def cellIDPool(pdSam, pdCBCs, nthreads=16):
+    print(len(pdSam))
     blocks=np.array(["CTACACGACGCTCTTCCGATCT"+i+"NNNNNNNNNNTTTCTTATAT" for i in pdCBCs.CBC])
-    pdSam=pdSam[pdSam.minD<33]#filter by distance of index sequences cassette to template
+    pdSam=pdSam[pdSam.minD<40]#filter by distance of index sequences cassette to template
     anchOut=pd.DataFrame()
-    print(list(pdSam))
-    print(pdSam)
+    #print(list(pdSam))
+    #print(pdSam)
     with Pool(nthreads) as p:
         print("\n2. Identifying Cell Barcodes...")
-        anchOut['CBC'], anchOut['minD'], anchOut['BC_ID'], anchOut['readPos'], anchOut['cigarClip'], anchOut['reconQuery'], anchOut['matchseq'], anchOut['read'], anchOut['readSeq'] = zip(*p.map(cellMatch, [(f[1], f[10], f[17], f[18], f[14], pdCBCs, blocks) for f in pdSam.itertuples()]))
+        anchOut['CBC'], anchOut['minD'], anchOut['BC_ID'], anchOut['readPos'], anchOut['clipLength'], anchOut['reconQuery'], anchOut['matchseq'], anchOut['read'], anchOut['mappedSeq'] = zip(*p.map(cellMatch, [(f[1], f[10], f[17], f[18], f[12],f[14], pdCBCs, blocks) for f in pdSam.itertuples()]))
     print(anchOut)
     return(anchOut)
 
@@ -250,8 +262,8 @@ if __name__=="__main__":
     t0=(time.time())
     query, pdCBCs, pdSam, outfileName = Initialize(sys.argv)
     pdSam = poolBlocks(query,pdSam)
-    print("\nMapped hits in {} reads.".format(np.sum([int(i)>0 for i in pdSam.minPos])))
-    anchOut = cellIDPool(pdSam, pdCBCs)
+    print("\nMapped hits in {} reads.".format(np.sum([int(i)>=0 for i in pdSam.minPos])))
+    anchOut = cellIDPool(pdSam[pdSam.matchseq!=""], pdCBCs)
     anchOut.to_csv(outfileName)
     t1=(time.time())
     print("Done in {} minutes.".format((t1-t0)/60))
