@@ -6,7 +6,10 @@ import sys
 def produceFastas(anchout, inputDir):
     print("Mapping cell consensus")
     for j in np.unique(anchout.CBC):
-        if len(anchout.CBC>=5):
+        print(len(anchout.CBC[anchout.CBC==j]))
+        print("--------")
+        print(j)
+        if len(anchout.CBC[anchout.CBC==j])>=5:
             with open(inputDir+"/"+j+".fa",'w') as OF:
                 OF.write("\n".join(["".join([">",str(i[9]),"\n",str(i[10])]) for i in anchout[anchout.CBC==j].itertuples()]))
 

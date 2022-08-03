@@ -224,7 +224,7 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
     offset=input[5]
     #print("offset:"+str(offset))
     readSeq=input[1][offset:readLen]
-    print(readSeq)
+    #print(readSeq)
 
     CBCs=input[6]
     blocks=input[7]
