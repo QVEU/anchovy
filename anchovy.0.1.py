@@ -129,7 +129,7 @@ def loadSAM(inputData,quL):
     #print(len(cigars))
     pdSam[['readLen','clipReadLen','offset']]=cigars
     pdSam['length']=pdSam.seq.apply(lambda s: len(s))
-    pdSam=pdSam[(pdSam.length>minL)][0:20]
+    pdSam=pdSam[(pdSam.length>minL)]
     return(pdSam)
 
 def loadBC(whitelist):
@@ -177,16 +177,14 @@ def blockDist(seq_query):
     blocks=np.array([seq[i:min((len(seq),(i+quL)))] for i in range(max(1,(len(seq)-quL)))])
     #print(blocks)
     bDist = vectorBlockDist(blocks)
-    #hitPosList=np.argsort(bDist)[np.sort(bDist)<=(1.20*(nN))]
-    #print(hitPosList)
-    #compute minimum and position of minimum
+
+    #compute minimum value and position of minimum
     try:
         minD=min(bDist.astype(int))
         minPos=np.argmin(bDist.astype(int))
         matchseq=blocks[minPos] #Grab this matched sequence.
     except:
         print("No Hit:"+str(seq_query)+str([minPos,minD]))
-
     return(minD, minPos, matchseq)
 
 def poolBlocks(query,pdSam,nthreads=16):#uses multithreading to compute the matches
@@ -196,8 +194,8 @@ def poolBlocks(query,pdSam,nthreads=16):#uses multithreading to compute the matc
         quL=len(query)
         print("Query: {}".format(query))
         print(pdSam.offset)
-        pdSam['minD'],   pdSam['minPos'],   pdSam['matchseq'] = zip(*p.map(blockDist, [(c[10][max(0,(c[14]-100)):c[14]].upper(),query.upper()) for c in pdSam.itertuples()]))
-        print(pdSam[::])
+        pdSam['minD'],   pdSam['minPos'],   pdSam['matchseq'] = zip(*p.map(blockDist, [(c[10][max(0,(c[14]-200)):c[14]].upper(),query.upper()) for c in pdSam.itertuples()]))
+        #print(pdSam[::])
     return(pdSam)
 
 def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBCs, blocks):
@@ -217,14 +215,14 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
     readID=input[0]
 
     matchPos=input[2]
-    print("Pos of Index Match:"+str(matchPos))
+    #print("Pos of Index Match:"+str(matchPos))
     matchseq=input[3]
-    print("Index Match Seq:"+str(matchseq))
+    #print("Index Match Seq:"+str(matchseq))
 
     readLen=input[4]
-    print("read Length:"+str(readLen))
+    #print("read Length:"+str(readLen))
     offset=input[5]
-    print("offset:"+str(offset))
+    #print("offset:"+str(offset))
     readSeq=input[1][offset:readLen]
     print(readSeq)
 
@@ -246,9 +244,9 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
 
 #Pooled cell ID function
 def cellIDPool(pdSam, pdCBCs, nthreads=16):
-    print(len(pdSam))
+    #print(len(pdSam))
     blocks=np.array(["CTACACGACGCTCTTCCGATCT"+i+"NNNNNNNNNNTTTCTTATAT" for i in pdCBCs.CBC])
-    pdSam=pdSam[pdSam.minD<40]#filter by distance of index sequences cassette to template
+    pdSam=pdSam[pdSam.minD<39]#filter by distance of index sequences cassette to template
     anchOut=pd.DataFrame()
     #print(list(pdSam))
     #print(pdSam)
