@@ -7,8 +7,12 @@ Patrick T. Dolan
 Unit Chief, Quantitative Virology and Evolution Unit
 7/18/22
 USAGE: python anchovy.0.1.py pathto/input.sam query
-Identify barcodes from nanopore sequencing to map back onto cells .
-v0.1: Identify ligation products in the sequencing.
+
+Identify barcodes from nanopore sequencing to map back onto cells.
+
+Update notes:
+v0.1: Use position of mapped sequence to focus search for to reduce identifying ligation products.
+
 '''
 
 ##### Imports #####
@@ -46,7 +50,7 @@ def Initialize(args):
         exit()
 
     #Query
-    query=args[3]
+    query=args[3].upper()
     #5' query: CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT
     whitelist=args[2]
 

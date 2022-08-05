@@ -10,7 +10,7 @@
 
 module purge
 module load python
-for i in `ls /nethome/dolanpt/lab_share/Sequencing_Data/QVEU_Seq_0008_Minion_10xlib_7-12-2022/no_sample/20220712_2344_MC-113212_FAT05581_3e3d827f/fastq_pass/`
+for i in `ls ${1}`
 do
-python ~/lab_share/anchovy/anchovy.0.0.py /nethome/dolanpt/lab_share/Sequencing_Data/QVEU_Seq_0008_Minion_10xlib_7-12-2022/no_sample/20220712_2344_MC-113212_FAT05581_3e3d827f/fastq_pass/${i}/merge.sam ~/lab_share/anchovy/3M-february-2018.txt CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT
+python ~/lab_share/anchovy/anchovy.0.0.py ${1}/${i}/merge.sam ~/lab_share/anchovy/3M-february-2018.txt CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT
 done

@@ -1,18 +1,19 @@
 #!/bin/bash -e
 #$ -S /bin/bash
-#$ -N threaded16_v1_anchovy
+#$ -N QVEU0008_v1_anchovy
 #$ -M Patrick.Dolan@nih.gov
 #$ -m be
 #$ -l h_vmem=15G
 #$ -cwd
 #$ -o anchOut/
 #$ -pe threaded 16
+module load python/3.7.3
 
 pip install pysam
 pip install pandas
 
 template='/hpcdata/lvd_qve/QVEU_Code/sequencing/template_fastas/cvb3_rna.fa'
-indir='/hpcdata/lvd_qve/Sequencing_Data/QVEU_Seq_0010_Minion_ndas10xlib2/no_sample/20220727_2153_MC-113212_FAT27957_6eb71326/fastq_pass/'
+indir='/hpcdata/lvd_qve/Sequencing_Data/QVEU_Seq_0008_Minion_10xlib_7-12-2022/no_sample/20220712_2344_MC-113212_FAT05581_3e3d827f/fastq_pass'
 
 echo `ls -d ${indir}/*`
 
@@ -21,7 +22,6 @@ do
 
 module purge
 module load foss/2021a
-module load python/3.7.3
 module load Biopython/1.79-foss-2021a
 
 #echo $indir
@@ -50,9 +50,6 @@ module load samtools
 echo "Making cell pileups"
 samtools sort ${i/\.fa/}.bam > ${i/\.fa/}_sort.bam
 samtools mpileup ${i/\.fa/}_sort.bam > ${i/\.fa/}_sort_pile.pile
-module purge
-module load python/3.7.3
-python ~/lab_share/anchovy/consensus.py ${i}
 
 rm ${i/\.fa/}.sam
 rm ${i/\.fa/}.bam
