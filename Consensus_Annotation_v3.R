@@ -255,8 +255,11 @@ readAndAnnotData<-function(refFileName,dataFile,NAME,network=F,plothaps=F){
   return(runGenotypeAnalysis(dataTable,NAME,reference,network,plothaps))
 }
 
-
+#Determined Consensus sequence
 ref71 <- "/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/Kinnex_Orgs_Consensus.txt"
 
+#Filtered Consensus CSV from ConsensusTools. 
 EV71_Kinnex="/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/filtConsensus_Kinnex.csv"
+
+#Run Annotation Script, with network determination.
 EV71_Kinnex_annot=readAndAnnotData(ref71,EV71_Kinnex,"/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/Kinnex_EVA71",network=T)
