@@ -116,13 +116,13 @@ hapNetworkGen <- function(haplocounts, NAME) {
     quote = F,
     row.names = F,
     singleSteps,
-    file = paste("~/Research/", NAME, "_epistaticNetwork.csv", sep = "")
+    file = paste(NAME, "_epistaticNetwork.csv", sep = "")
   )
   write.csv(
     quote = F,
     row.names = F,
     allentries,
-    file = paste("~/Research/", NAME, "_genotypeNetwork.csv", sep = "")
+    file = paste(NAME, "_genotypeNetwork.csv", sep = "")
   )
   return(binaryMatrix)
 }
