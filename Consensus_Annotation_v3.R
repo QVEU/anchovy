@@ -62,11 +62,6 @@ hapNetworkGen <- function(haplocounts, NAME) {
       ifelse(X > 0, 1, 0)
   )
   
-  binCov=cov(binaryMatrix)
-  print(binCov[1:10])
-  
-  print(princomp(binaryMatrix))
-  
   countMatrix = dcast.data.table(haplocounts,#reshape the haplotype counts into 
                                  genotype ~ mutants,
                                  fill = 0,
@@ -264,4 +259,4 @@ readAndAnnotData<-function(refFileName,dataFile,NAME,network=F,plothaps=F){
 ref71 <- "/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/Kinnex_Orgs_Consensus.txt"
 
 EV71_Kinnex="/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/filtConsensus_Kinnex.csv"
-EV71_Kinnex_annot=readAndAnnotData(ref71,EV71_Kinnex,"/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/Kinnex_EVA71")
+EV71_Kinnex_annot=readAndAnnotData(ref71,EV71_Kinnex,"/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/Kinnex_EVA71",network=T)
