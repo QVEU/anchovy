@@ -256,10 +256,10 @@ readAndAnnotData<-function(refFileName,dataFile,NAME,network=F,plothaps=F){
 }
 
 #Determined Consensus sequence
-ref71 <- "/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/Kinnex_Orgs_Consensus.txt"
+ref71 <- "/Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/filtConsensus_DENV_6dpi_consensus.txt"
 
 #Filtered Consensus CSV from ConsensusTools. 
-EV71_Kinnex="/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/filtConsensus_Kinnex.csv"
+EV71_Kinnex="/Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/filtConsensus_DENV_6dpi.csv"
 
 #Run Annotation Script, with network determination.
-EV71_Kinnex_annot=readAndAnnotData(ref71,EV71_Kinnex,"/Volumes/LVD_qve/Projects/Freeman_Collab/Anchovy/Kinnex_EVA71",network=T)
+EV71_Kinnex_annot=readAndAnnotData(ref71,EV71_Kinnex,"/Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/DENV2_6dpi",network=T)
