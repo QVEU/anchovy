@@ -58,10 +58,9 @@ Interactively:
 sh AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
 ```
 
-or on the cluster
-
-```bash
 Job Submission with Slurm:
+```bash
+
 #slurm submission: 
 srun AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
 
