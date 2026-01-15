@@ -2,6 +2,7 @@
 # Consensus_Plots_v3.R
 # This generates the network 
 #
+#BiocManager::install("DECIPHER")
 library(data.table)
 library(Biostrings)
 library(reshape2)
