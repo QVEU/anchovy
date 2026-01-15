@@ -1,4 +1,5 @@
 # Anchovy
+![anchovies](https://github.com/QVEU/anchovy/blob/main/northern-anchovies-rw07-130.webp)
 
 ## Overview
 
