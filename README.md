@@ -38,7 +38,7 @@ To install locally:
 1. Clone the repository:
     ```bash
     gh repo clone QVEU/anchovy
-    git clone https://github.com/yourusername/your-repo-name.git
+    git clone https://github.com/QVEU/anchovy.git
     ```
     
 2. Navigate to the project directory:
