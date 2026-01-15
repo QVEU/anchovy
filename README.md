@@ -20,8 +20,10 @@ Pipeline to generate consensus viral sequences within individual cells in single
 To run anchovy (steps 1-5)
 - Python 3.8+
 - sam2consensus.py - from [https://github.com/edgardomortiz/sam2consensus](https://github.com/edgardomortiz/sam2consensus)
+
 To run `ConsensusTools`
 - ipynb
+
 To run `Consensus_Annotation_v3.R`
 - R 13.1+
 - Rstudio
