@@ -66,6 +66,7 @@ Job Submission with Slurm:
 srun AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
 
 ```
+
 ### Contributing
 
 - Fork the repository.
