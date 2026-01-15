@@ -14,6 +14,8 @@ Pipeline to generate consensus viral sequences within individual cells in single
 6. `ConsensusTools.ipynb` computes a consensus sequence for each collection of reads in the CBC fasta file. python script processes these consensus sequences to extract reads corresponding to the region of interest, usually the viral ORF. This outputs a consensus sequence of all the cells and the `filtConsensus.csv`.
 7. Accessory R script, `Consensus_Annotation_v3.R` is used to convert these consensus sequences into the cell genotypes, and generate the genotype network from the `filtConsensus.csv`
 
+- Steps 1-5 are included in the AnchovyJob.sh scripts in this repository, and instructions below. 
+
 ## Prerequisites
 To run anchovy (steps 1-5)
 - Python 3.8+
@@ -35,6 +37,7 @@ To install locally:
     gh repo clone QVEU/anchovy
     git clone https://github.com/yourusername/your-repo-name.git
     ```
+    
 2. Navigate to the project directory:
     ```bash
     cd anchovy
@@ -53,9 +56,11 @@ Interactively:
 ```bash
 
 sh AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
+```
 
 or on the cluster
 
+```bash
 Job Submission with Slurm:
 #slurm submission: 
 srun AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
