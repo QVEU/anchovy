@@ -1,6 +1,10 @@
-#
 # Consensus_Plots_v3.R
-# This generates the network 
+#  Analysis and annotation of genotypes from `anchovy`.
+# 
+# > Rscript ~/path/to/anchovy/Consensus_Annotation_v3.R /<filtConsensus_reference.txt> <filtConsensus_.csv> /path/to/output/file/<prefix>
+#   for example:
+# > Rscript ~/Documents/GitHub/anchovy/Consensus_Annotation_v3.R ~/reference_consensus.txt> filtConsensus.csv> /path/to/output/file/<prefix>
+  
 #
 #BiocManager::install("DECIPHER")
 library(data.table,quietly = T)
@@ -189,13 +193,13 @@ if(plothaps==T){#if haplotype plotting is selected (plothaps=T in )
   return(haplocountsAnnot)
 }
 
-#readReference: read in reference sequence for comparison to reads
+# readReference: read in reference sequence for comparison to reads
 readReference<-function(fileName){
   reference<-readChar(fileName, file.info(fileName)$size)
   return(reference)
 }
 
-#codon: function to translate codons
+# codon: function to translate codons
 codon <- function(SEQ, pos, base) {
   if(is.na(pos)){
     return(data.table(codon = as.character("WT"), resPos=0, AA="WT"))
@@ -257,15 +261,11 @@ readAndAnnotData<-function(refFileName,dataFile,NAME,network=F,plothaps=F){
   return(runGenotypeAnalysis(dataTable,NAME,reference,network,plothaps))
 }
 
+# Main function
 
-allArgs<-commandArgs(trailingOnly = T)
-print(allArgs)
-
-#Determined Consensus sequence
+## Determined Consensus sequence.
 ref <- allArgs[[1]]
-
-#Filtered Consensus CSV from ConsensusTools. 
+## Filtered Consensus CSV from ConsensusTools. 
 filteredConsensus=allArgs[[2]]
-
-#Run Annotation Script, with network determination.
+## Run Annotation Script, with network determination.
 annot=readAndAnnotData(ref,filteredConsensus,NAME=allArgs[[3]],network=T,plothaps = T)

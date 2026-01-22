@@ -32,7 +32,7 @@ if test -f "${indir}/${infile}"
         echo "${indir}/${infile/\.sam/}_anchovy_v2.csv"
       else
         echo "Running Anchovy v2..."
-        python /hpcdata/lvd_qve/QVEU_Code/anchovy/anchovy.0.2.py ${indir}/${infile} $whitelist CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT
+        python /hpcdata/lvd_qve/QVEU_Code/anchovy/anchovy.py ${indir}/${infile} $whitelist CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT
       fi
       #make fas for each cell with barcodes as headers
       echo "Generating fastas for each cell..."
