@@ -1,19 +1,19 @@
 #!/usr/bin/env python
 '''
-anchovy.0.2.py
+anchovy.py
   ><>  ><>
     ><>
 Patrick T. Dolan
 Unit Chief, Quantitative Virology and Evolution Unit
-7/18/22
-USAGE: python anchovy.0.1.py pathto/input.sam query
+7/18/22,01/22/26
 
-Identify barcodes from nanopore sequencing to map back onto cells. \
+USAGE: python anchovy.py pathto/input.sam pathto/whitelist.txt query")
 
+Identify barcodes from long-read sequencing to map back onto cells. \
 
 Update notes:
 v0.1: Use position of mapped sequence to focus search for to reduce identifying ligation products.
-v0.2: retyurn UMIs and CBCs
+v0.2: return UMIs and CBCs
 '''
 
 ##### Imports #####
@@ -46,8 +46,8 @@ def Initialize(args):
 
     #Check for Args
     if len(args)<3:
-        print("USAGE: python anchovy.0.2.py pathto/input.sam pathto/whitelist.txt query")
-        print("e.g.  python anchovy.0.2.py ~/lab_share/Sequencing_Data/QVEU_Seq_0010_Minion_ndas10xlib2/no_sample/20220727_2153_MC-113212_FAT27957_6eb71326/fastq_pass/barcode01/merge.sam 3M-february-2018.txt CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT")
+        print("USAGE: python anchovy.py pathto/input.sam pathto/whitelist.txt query")
+        print("e.g.  python anchovy.py ~/path/to/merge.sam /path/to/3M-february-2018.txt CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT" )
         exit()
 
     #Query
@@ -64,7 +64,7 @@ def Initialize(args):
     pdSam=loadSAM(inputData,quL)
     pdSam=pdSam[pdSam.template!="*"]
     pdCBCs=loadBC(whitelist)
-    outfile=inputData.replace(".sam",'_anchovy_v2.csv')
+    outfile=inputData.replace(".sam",'_anchovy.csv')
     print("\nOutfile: {}".format(outfile))
 
     return(str(query), pdCBCs, pdSam, outfile)
@@ -245,16 +245,15 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
     minPos=np.argmin(bDist.astype(int))
     matchblock=blocks[minPos]
 
-    return(CBCs.iloc[minPos][0], minD,    minPos,          matchPos,           offset,              matchblock,              matchseq,             readID,         readSeq,              matchseq[38:47])
+    return(CBCs.iloc[minPos][0], minD,    minPos,          matchPos,           offset,              matchblock,              matchseq,             readID,         readSeq,              matchseq[32:(len(matchseq)-10)])
 
 #Pooled cell ID function
-def cellIDPool(pdSam, pdCBCs, nthreads=16):
-    #print(len(pdSam))
-    blocks=np.array(["CTACACGACGCTCTTCCGATCT"+i+"NNNNNNNNNNTTTCTTATAT" for i in pdCBCs.CBC])
-    pdSam=pdSam[pdSam.minD<39]#filter by distance of index sequences cassette to template
+def cellIDPool(pdSam, query, pdCBCs, nthreads=16):
+    print(query)
+    blocks=np.array([query[0:22]+i+"N"*(len(query)-32-len(i))+query[(len(query)-10):len(query)] for i in pdCBCs.CBC])
+    pdSam=pdSam[pdSam.minD<42]
     anchOut=pd.DataFrame()
-    #print(list(pdSam))
-    #print(pdSam)
+
     with Pool(nthreads) as p:
         print("\n2. Identifying Cell Barcodes...")
         anchOut['CBC'], anchOut['minD'], anchOut['BC_ID'], anchOut['readPos'], anchOut['clipLength'], anchOut['reconQuery'], anchOut['matchseq'],  anchOut['read'], anchOut['mappedSeq'], anchOut['UMI'] = zip(*p.map(cellMatch, [(f[1], f[10], f[17], f[18], f[12],f[14], pdCBCs, blocks) for f in pdSam.itertuples()]))
@@ -266,7 +265,7 @@ if __name__=="__main__":
     query, pdCBCs, pdSam, outfileName = Initialize(sys.argv)
     pdSam = poolBlocks(query,pdSam)
     print("\nMapped hits in {} reads.".format(np.sum([int(i)>=0 for i in pdSam.minPos])))
-    anchOut = cellIDPool(pdSam[pdSam.matchseq!=""], pdCBCs)
+    anchOut = cellIDPool(pdSam[pdSam.matchseq!=""], query, pdCBCs)
     anchOut.to_csv(outfileName)
     t1=(time.time())
     print("Done in {} minutes.".format((t1-t0)/60))

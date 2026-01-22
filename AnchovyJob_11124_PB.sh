@@ -1,6 +1,6 @@
 #!/bin/bash
 #$ -S /bin/bash
-#$ -N AnchovyJob_050323
+#$ -N AnchovyJob_01-22-2026
 #$ -M Patrick.Dolan@nih.gov
 #$ -m be
 #$ -l h_vmem=25G
@@ -13,6 +13,7 @@ indir=$2
 outdir=$indir
 template=$3
 infile=$4
+10Xsignature=CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT #
 
 #echo `ls -d ${indir}/*`
 if test -f "${indir}/${infile}"
@@ -25,18 +26,18 @@ if test -f "${indir}/${infile}"
       pip install pysam
       pip install pandas
 
-      #echo $indir
-      if test -f "${indir}/${infile/\.sam/}_anchovy_v2.csv"
+      # Test whether anchovy csv output already produced at this location. 
+      if test -f "${indir}/${infile/\.sam/}_anchovy.csv"
       then
         echo "><> Anchovy already canned. ><>"
-        echo "${indir}/${infile/\.sam/}_anchovy_v2.csv"
-      else
-        echo "Running Anchovy v2..."
-        python /hpcdata/lvd_qve/QVEU_Code/anchovy/anchovy.py ${indir}/${infile} $whitelist CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT
+        echo "${indir}/${infile/\.sam/}_anchovy.csv"
+      else #if not, run anchovy
+        echo "Running anchovy..."
+        python /hpcdata/lvd_qve/QVEU_Code/anchovy/anchovy.py ${indir}/${infile} $whitelist $10Xsignature
       fi
       #make fas for each cell with barcodes as headers
       echo "Generating fastas for each cell..."
-      python /hpcdata/lvd_qve/QVEU_Code/anchovy/CBCtoFasta.py ${indir} ${infile/\.sam/}_anchovy_v2.csv #edited 5/4
+      python /hpcdata/lvd_qve/QVEU_Code/anchovy/CBCtoFasta.py ${indir} ${infile/\.sam/}_anchovy.csv #edited 5/4
       echo "Done."
 
       #Map reads in fastq files  and generate sam file per cell fa file.

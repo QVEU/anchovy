@@ -83,14 +83,14 @@ def main():
     output,consensusSeq=genotypeSummary(filtered)
     
     with open(str.replace(infile,"_allConsensus.fasta","_consensus_reference.txt"), "w") as file:
-        print(consensusSeq)
         file.write(consensusSeq)
         print("... Wrote consensus to file.")
     
     io.write(output,handle=str.replace(infile,"_allConsensus.fasta","_filtConsensus.fasta"),format="fasta")
-    
+    print("Writing tables...")
     infoFrame=pd.DataFrame([[outputs.id,outputs.dbxrefs,"".join(outputs.seq),outputs.description] for outputs in output],columns=["CBC_ID","genotype","sequence","description"])
     infoFrame.to_csv(str.replace(infile,"_allConsensus.fasta","_filtConsensus.csv"))
+    print("Done.")
 
 if __name__ == "__main__":
     main()

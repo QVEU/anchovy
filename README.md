@@ -2,7 +2,7 @@
 
 ```
 anchovy ><>
-><>
+><>`
     ><>
 ```
 
@@ -11,7 +11,7 @@ anchovy ><>
 
 ## Overview
 
-Pipeline to generate consensus viral sequences within individual cells in single-cell experiments. The package was developed for use with longread data (nanopore or PacBio). Scripts were developed to run on the NIH skyline cluster, and the job shell scripts are specific to packages installed there. Much work can be done to improve its portability and reproducibility. 
+Pipeline to generate consensus viral sequences within individual cells in single-cell experiments. The package was developed for use with longread data (nanopore or PacBio). Scripts were developed to run on the NIH skyline cluster, and the job shell scripts are specific to packages installed there. Much work can be done to` improve its portability and reproducibility. 
 
 ## Barcode lists: 
 - Barcode inclusion lists (FKA whitelists) are located in the 10X CellRanger `cellranger` installation directory (go to: `/path/to/cellranger-8.0.1/lib/python/cellranger/barcodes/`), or can be downloaded from various locations.
@@ -38,7 +38,7 @@ To run anchovy (steps 1-5)
 To run `ConsensusTools`
 - ipynb
 
-To run `Consensus_Annotation_v3.R`
+To run `Consensus_Annotation.R`
 - R 13.1+
 - Rstudio
 - ggplot2
@@ -70,7 +70,47 @@ There's two ways to run the `anchovy` code:
       
 - The other is to run each script individually:
 
+### Anchovy Job run
+
+Interactively:
+```bash
+
+sh AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam <platform>
+
+```
+
+Job Submission with Slurm:
+```bash
+
+sbatch AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam <platform>
+
+```
+
+
+
 ### Post-analysis 
+
+#### ConsensusTool
+- Filters the consensus seuences from each cell to cover a specfic region, usually a coding region, ORF. Uses `...allConsensus.fasta` file from `anchovy.py` as input. 
+> python ConsensusTool.py <NAME>_allConsensus.fasta <ORFstartNT> <ORFendNT>
+
+Outputs: 
+- `<NAME>_consensus_reference.txt`
+- `<NAME>_filtConsensus.csv`
+- `<NAME>_filtConsensus.fasta`
+
+### ConsensusTool
+- Filters the consensus seuences from each cell to cover a specfic region, usually a coding region, ORF. Uses `...allConsensus.fasta` file from `anchovy.py` as input. 
+> python ConsensusTool.py <allConsensus.fasta> <ORFstartNT> <ORFendNT>
+
+For example: 
+
+> python ConsensusTool.py /Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/DENV_6dpi_allConsensus.fasta 96 10272
+
+For example: 
+
+> python ConsensusTool.py /Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/DENV_6dpi_allConsensus.fasta 96 10272
+
   #### Analysis with `Consensus_Annotation.R` R script
   - To generate the genotype network, an R script is used.
 ```bash
@@ -81,22 +121,12 @@ For example:
 ```bash
     > Rscript ~/Documents/GitHub/anchovy/Consensus_Annotation_v3.R ~/reference_consensus.txt> filtConsensus.csv> /path/to/output/file/<prefix>
 ```
+Output: 
+- `DENV2_6dpi.pdf`
+- `DENV2_6dpi_annot_v3.csv`
+- `DENV2_6dpi_epistaticNetwork.csv`
+- `DENV2_6dpi_genotypeNetwork.csv`
 
-### Anchovy Job run
-
-Interactively:
-```bash
-
-sh AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
-
-```
-
-Job Submission with Slurm:
-```bash
-
-srun AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
-
-```
 
 ### Contributing
 
