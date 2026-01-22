@@ -250,6 +250,7 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
 #Pooled cell ID function
 def cellIDPool(pdSam, query, pdCBCs, nthreads=16):
     print(query)
+    #rewritten, trying to adapt to different length UMIs
     blocks=np.array([query[0:22]+i+"N"*(len(query)-32-len(i))+query[(len(query)-10):len(query)] for i in pdCBCs.CBC])
     pdSam=pdSam[pdSam.minD<42]
     anchOut=pd.DataFrame()
