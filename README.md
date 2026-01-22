@@ -99,20 +99,13 @@ Outputs:
 - `<NAME>_filtConsensus.csv`
 - `<NAME>_filtConsensus.fasta`
 
-### ConsensusTool
-- Filters the consensus seuences from each cell to cover a specfic region, usually a coding region, ORF. Uses `...allConsensus.fasta` file from `anchovy.py` as input. 
-> python ConsensusTool.py <allConsensus.fasta> <ORFstartNT> <ORFendNT>
-
-For example: 
-
-> python ConsensusTool.py /Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/DENV_6dpi_allConsensus.fasta 96 10272
-
 For example: 
 
 > python ConsensusTool.py /Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/DENV_6dpi_allConsensus.fasta 96 10272
 
   #### Analysis with `Consensus_Annotation.R` R script
-  - To generate the genotype network, an R script is used.
+  
+  - Translation and interpretation of mutations, generation of genotype network. 
 ```bash
     > Rscript ~/path/to/anchovy/Consensus_Annotation_v3.R /<filtConsensus_reference.txt> <filtConsensus_.csv> /path/to/output/file/<prefix>
 ```
