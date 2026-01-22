@@ -1,12 +1,14 @@
 # `anchovy` 
 
-![anchovies](https://github.com/QVEU/anchovy/blob/main/northern-anchovies-rw07-130.webp)
-
 ```
 anchovy ><>
 ><>
     ><>
 ```
+
+![anchovies](https://github.com/QVEU/anchovy/blob/main/northern-anchovies-rw07-130.webp)
+
+
 ## Overview
 
 Pipeline to generate consensus viral sequences within individual cells in single-cell experiments. The package was developed for use with longread data (nanopore or PacBio). Scripts were developed to run on the NIH skyline cluster, and the job shell scripts are specific to packages installed there. Much work can be done to improve its portability and reproducibility. 
