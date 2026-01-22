@@ -48,10 +48,26 @@ To install locally:
     
 ## Usage
 
-There's two ways to run this code: 
+### Running Anchovy
 
-- One is to run an edited version of the `AnchovyJob.sh` file. There are two examples in the repository, one for pacbio "PB" and one for Nanopore "NP", PB is most common. This will yield the consensus 
-- The other is to run each script individually, providing the input files. 
+There's two ways to run the `anchovy` code: 
+
+- One is to run an edited version of the `AnchovyJob.sh` file. There are two examples in the repository, one for pacbio "PB" and one for Nanopore "NP", PB is most common.
+- This will output several files, including:
+      
+- The other is to run each script individually:
+
+### Post-analysis 
+  #### Analysis with R script
+  - To generate the genotype network, an R script is used.
+```bash
+    > Rscript ~/path/to/anchovy/Consensus_Annotation_v3.R /<filtConsensus_reference.txt> <filtConsensus_.csv> /path/to/output/file/<prefix>
+```
+
+For example:
+```bash
+    > Rscript ~/Documents/GitHub/anchovy/Consensus_Annotation_v3.R ~/reference_consensus.txt> filtConsensus.csv> /path/to/output/file/<prefix>
+```
 
 ### Anchovy Job run
 
@@ -59,12 +75,12 @@ Interactively:
 ```bash
 
 sh AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
+
 ```
 
 Job Submission with Slurm:
 ```bash
 
-#slurm submission: 
 srun AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam
 
 ```
