@@ -56,7 +56,7 @@ def genotypeSummary(filtered,reference=""):
             #s.translation="_".join([str(i)+s.seq[i] for i in variantSites if s.seq[i]!=maxChars[i]])
             #print(s.dbxrefs)
             output=output+[s]
-        return(output)
+        return(output,consensusSeq)
     else:
         clists=[[c for c in s.seq] for s in filtered]#for column in filtered alignment...
         tclists=np.transpose(clists)#transpose columns 
@@ -68,7 +68,7 @@ def genotypeSummary(filtered,reference=""):
             #s.translation="_".join([str(i)+s.seq[i] for i in variantSites if s.seq[i]!=maxChars[i]])
             #print(s.dbxrefs)
             output=output+[s]
-        return ([output, consensusSeq])
+        return (output, consensusSeq)
 
 def main():
     #Arg inputs
@@ -79,15 +79,18 @@ def main():
     # Arg inputs
     elements,length,depth = readSeqs(infile)
     filtered = selectSeqs(start,end,elements,length,depth,depthMin=10,lengthMin=1)
-    GS=genotypeSummary(filtered)
-    output=GS[0]
-    consensusSeq=GS[1]
+    
+    output,consensusSeq=genotypeSummary(filtered)
+    
     with open(str.replace(infile,"_allConsensus.fasta","_consensus_reference.txt"), "w") as file:
+        print(consensusSeq)
         file.write(consensusSeq)
         print("... Wrote consensus to file.")
+    
     io.write(output,handle=str.replace(infile,"_allConsensus.fasta","_filtConsensus.fasta"),format="fasta")
+    
     infoFrame=pd.DataFrame([[outputs.id,outputs.dbxrefs,"".join(outputs.seq),outputs.description] for outputs in output],columns=["CBC_ID","genotype","sequence","description"])
-    infoFrame.to_csv(str.replace(infile,"_allConsensus.fasta","_filtConsensus.fasta"))
+    infoFrame.to_csv(str.replace(infile,"_allConsensus.fasta","_filtConsensus.csv"))
 
 if __name__ == "__main__":
     main()
