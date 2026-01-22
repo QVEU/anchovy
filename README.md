@@ -90,9 +90,10 @@ sbatch AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/t
 
 ### Post-analysis 
 
-#### ConsensusTool
-- Filters the consensus seuences from each cell to cover a specfic region, usually a coding region, ORF. Uses `...allConsensus.fasta` file from `anchovy.py` as input. 
-> python ConsensusTool.py <NAME>_allConsensus.fasta <ORFstartNT> <ORFendNT>
+#### `ConsensusTool.py`
+- Filters the consensus seuences from each cell to cover a specfic region, usually a coding region, ORF. Uses `...allConsensus.fasta` file from `anchovy.py` as input.
+
+```python ConsensusTool.py <NAME>_allConsensus.fasta <ORFstartNT> <ORFendNT>```
 
 Outputs: 
 - `<NAME>_consensus_reference.txt`
@@ -100,19 +101,20 @@ Outputs:
 - `<NAME>_filtConsensus.fasta`
 
 For example: 
+```
+python ConsensusTool.py /Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/DENV_6dpi_allConsensus.fasta 96 10272
+```
 
-> python ConsensusTool.py /Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/DENV_6dpi_allConsensus.fasta 96 10272
-
-  #### Analysis with `Consensus_Annotation.R` R script
+#### Analysis with `Consensus_Annotation.R` R script
   
   - Translation and interpretation of mutations, generation of genotype network. 
 ```bash
-    > Rscript ~/path/to/anchovy/Consensus_Annotation_v3.R /<filtConsensus_reference.txt> <filtConsensus_.csv> /path/to/output/file/<prefix>
+    Rscript ~/path/to/anchovy/Consensus_Annotation_v3.R /<filtConsensus_reference.txt> <filtConsensus_.csv> /path/to/output/file/<prefix>
 ```
 
 For example:
 ```bash
-    > Rscript ~/Documents/GitHub/anchovy/Consensus_Annotation_v3.R ~/reference_consensus.txt> filtConsensus.csv> /path/to/output/file/<prefix>
+    Rscript ~/Documents/GitHub/anchovy/Consensus_Annotation_v3.R ~/reference_consensus.txt> filtConsensus.csv> /path/to/output/file/<prefix>
 ```
 Output: 
 - `DENV2_6dpi.pdf`
