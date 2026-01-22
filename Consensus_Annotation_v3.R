@@ -3,14 +3,14 @@
 # This generates the network 
 #
 #BiocManager::install("DECIPHER")
-library(data.table)
-library(Biostrings)
-library(reshape2)
-library(ggplot2)
-library(DECIPHER)
-library(cowplot)
-library(purrr)
-library(ggrepel)
+library(data.table,quietly = T)
+library(Biostrings,quietly = T)
+library(reshape2,quietly = T)
+library(ggplot2,quietly = T)
+library(DECIPHER,quietly = T)
+library(cowplot,quietly = T)
+library(purrr,quietly = T)
+library(ggrepel,quietly = T)
 #FUNCTIONS
 
 haploanalysis <- function(cons) {
@@ -106,9 +106,10 @@ hapNetworkGen <- function(haplocounts, NAME) {
                            ((mutNumTarget == overlap) & (mutNumSource == (overlap + 1)))]
   
   selfSteps = allentries[genotype == target]
+  
   referenceEdges <- selfSteps[(`genotype` == `target`) &
                                 mutNumTarget == 1]
-  referenceEdges$target <- "Consensus"
+  referenceEdges$target <- "reference"
   referenceEdges$mutNumTarget <- 0
   #print(referenceEdges)
   singleSteps <- rbindlist(list(singleSteps, selfSteps, referenceEdges))
@@ -256,11 +257,15 @@ readAndAnnotData<-function(refFileName,dataFile,NAME,network=F,plothaps=F){
   return(runGenotypeAnalysis(dataTable,NAME,reference,network,plothaps))
 }
 
+
+allArgs<-commandArgs(trailingOnly = T)
+print(allArgs)
+
 #Determined Consensus sequence
-ref71 <- "/Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/filtConsensus_DENV_6dpi_consensus.txt"
+ref <- allArgs[[1]]
 
 #Filtered Consensus CSV from ConsensusTools. 
-EV71_Kinnex="/Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/filtConsensus_DENV_6dpi.csv"
+filteredConsensus=allArgs[[2]]
 
 #Run Annotation Script, with network determination.
-EV71_Kinnex_annot=readAndAnnotData(ref71,EV71_Kinnex,"/Volumes/LVD_qve/Projects/DENV_SEARCHLIGHT/Anchovy_2/DENV2_6dpi",network=T)
+annot=readAndAnnotData(ref,filteredConsensus,NAME=allArgs[[3]],network=T,plothaps = T)
