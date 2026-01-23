@@ -11,7 +11,7 @@ anchovy ><>
 
 ## Overview
 
-Pipeline to generate consensus viral sequences within individual cells in single-cell experiments. The package was developed for use with longread data (nanopore or PacBio). Scripts were developed to run on the NIH skyline cluster, and the job shell scripts are specific to packages installed there. Much work can be done to` improve its portability and reproducibility. 
+Pipeline to generate consensus viral sequences within individual cells in single-cell experiments. The package was developed for use with long-read data (nanopore or PacBio) with amplified cDNA from 10X experiments. Scripts were developed to run on the NIH skyline cluster, and the job shell scripts are specific to packages installed there. Much work can be done to` improve its portability and reproducibility. 
 
 ## Barcode lists: 
 - Barcode inclusion lists (FKA whitelists) are located in the 10X CellRanger `cellranger` installation directory (go to: `/path/to/cellranger-8.0.1/lib/python/cellranger/barcodes/`), or can be downloaded from various locations.
@@ -121,7 +121,10 @@ Output:
 - `<prefix>_epistaticNetwork.csv`
 - `<prefix>_genotypeNetwork.csv`
 
-
+### Credit: 
+Please cite: 
+```N. Dábilla, P. T. Dolan, Structure and dynamics of enterovirus genotype networks. Sci Adv 10, eado1693 (2024).```
+  
 
 ### Contributing
 
