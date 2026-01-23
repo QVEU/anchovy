@@ -245,13 +245,13 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
     minPos=np.argmin(bDist.astype(int))
     matchblock=blocks[minPos]
 
-    return(CBCs.iloc[minPos][0], minD,    minPos,          matchPos,           offset,              matchblock,              matchseq,             readID,         readSeq,              matchseq[32:(len(matchseq)-10)])
+    return(CBCs.iloc[minPos][0], minD,    minPos,          matchPos,           offset,              matchblock,              matchseq,             readID,         readSeq,              matchseq[38:(len(matchseq)-10)])
 
 #Pooled cell ID function
 def cellIDPool(pdSam, query, pdCBCs, nthreads=16):
     print(query)
     #rewritten, trying to adapt to different length UMIs
-    blocks=np.array([query[0:22]+i+"N"*(len(query)-32-len(i))+query[(len(query)-10):len(query)] for i in pdCBCs.CBC])
+    blocks=np.array([query[0:22]+i+"N"*(len(query)-48)+query[(len(query)-10):len(query)] for i in pdCBCs.CBC])
     pdSam=pdSam[pdSam.minD<42]
     anchOut=pd.DataFrame()
 
