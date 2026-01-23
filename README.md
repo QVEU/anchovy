@@ -121,7 +121,8 @@ Output:
 - `<prefix>_epistaticNetwork.csv`
 - `<prefix>_genotypeNetwork.csv`
 
-### Credit: 
+### Credit and Citation
+
 Please cite: 
 ```N. Dábilla, P. T. Dolan, Structure and dynamics of enterovirus genotype networks. Sci Adv 10, eado1693 (2024).```
   
