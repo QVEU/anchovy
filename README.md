@@ -26,7 +26,7 @@ For example:
 4. `Sam2Consensus.py` is a little script used to generate the consensus per cell from the CBC-specific SAM files.
 5. The fastas are combined using `cat` to yield the `allConsensus.fasta`
 6. `ConsensusTool.py` (https://github.com/QVEU/anchovy/edit/main/README.md#consensustoolpy) computes a consensus sequence for each collection of reads in the CBC fasta file. python script processes these consensus sequences to extract reads corresponding to the region of interest, usually the viral ORF. This outputs a consensus sequence of all the cells and the `filtConsensus.csv`.
-7. Accessory R script, `Consensus_Annotation_v3.R` is used to convert these consensus sequences into the cell genotypes, and generate the genotype network from the `filtConsensus.csv`
+7. Accessory R script, `Consensus_Annotation.R` is used to convert these consensus sequences into the cell genotypes, and generate the genotype network from the `filtConsensus.csv`
 
 - Steps 1-5 are included in the AnchovyJob.sh scripts in this repository, and instructions below. 
 
