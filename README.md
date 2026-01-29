@@ -102,7 +102,7 @@ This R script translates consensus sequences, annotates mutations, and generates
 
 Usage:
 ```bash
-Rscript /path/to/anchovy/Consensus_Annotation_v3.R /path/to/<filtConsensus_reference.txt> /path/to/<filtConsensus.csv> /path/to/output_prefix
+Rscript /path/to/anchovy/Consensus_Annotation.R /path/to/<filtConsensus_reference.txt> /path/to/<filtConsensus.csv> /path/to/output_prefix
 ```
 
 Example:
