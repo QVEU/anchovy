@@ -73,6 +73,6 @@ if test -f "${indir}/${infile}"
     echo "Consensus files merged."
 
   else
-    echo "${indir}/merge.sam does not exist."
+    echo "${indir}/${infile} does not exist."
 fi
 module purge
