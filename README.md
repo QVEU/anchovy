@@ -135,5 +135,5 @@ N. Dábilla, P. T. Dolan, Structure and dynamics of enterovirus genotype network
 - Open a pull request
 
 ## License & Contact
-- License: (add project license here — e.g., MIT, BSD). If none exists, consider adding one.
+- License: MIT License, Copyright (c) 2026 Patrick Dolan
 - Contact / Maintainers: @ptdolan Patrick Dolan, NIAID/NIH
