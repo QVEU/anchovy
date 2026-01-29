@@ -13,7 +13,7 @@ indir=$2
 outdir=$indir
 template=$3
 infile=$4
-10Xsignature=CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT #
+tenXsignature=CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT #
 
 #echo `ls -d ${indir}/*`
 if test -f "${indir}/${infile}"
@@ -33,7 +33,7 @@ if test -f "${indir}/${infile}"
         echo "${indir}/${infile/\.sam/}_anchovy.csv"
       else #if not, run anchovy
         echo "Running anchovy..."
-        python /hpcdata/lvd_qve/QVEU_Code/anchovy/anchovy.py ${indir}/${infile} $whitelist $10Xsignature
+        python /hpcdata/lvd_qve/QVEU_Code/anchovy/anchovy.py ${indir}/${infile} $whitelist $tenXsignature
       fi
       #make fas for each cell with barcodes as headers
       echo "Generating fastas for each cell..."
