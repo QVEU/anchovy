@@ -74,14 +74,14 @@ There's two ways to run the `anchovy` code:
 Interactively:
 ```bash
 
-sh AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam <platform>
+sh AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta inputfilename.sam
 
 ```
 
 Job Submission with Slurm:
 ```bash
 
-sbatch AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta path/to/inputfilename.sam <platform>
+sbatch AnchovyJob_script.sh path/to/whitelist_file path/to/inputdirectory path/to/template.fasta inputfilename.sam
 
 ```
 
