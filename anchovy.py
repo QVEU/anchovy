@@ -267,7 +267,7 @@ if __name__=="__main__":
     pdSam = poolBlocks(query,pdSam)
     print("\nMapped hits in {} reads.".format(np.sum([int(i)>=0 for i in pdSam.minPos])))
     anchOut = cellIDPool(pdSam[pdSam.matchseq!=""], query, pdCBCs)
-    anchOut.to_csv(outfileName)
+    anchOut.to_csv(outfileName,chunk_size=50000) #made change to avoid OOM 
     t1=(time.time())
     print("Done in {} minutes.".format((t1-t0)/60))
     print("Wrote {}.".format(outfileName))
