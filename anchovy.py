@@ -193,7 +193,7 @@ def blockDist(seq_query):
     return(minD, minPos, matchseq)
 
 def poolBlocks(query,pdSam,nthreads=16):#uses multithreading to compute the matches
-    #print(pdSam)
+    print("in poolBlocks()")
     with Pool(nthreads) as p:
         print("\n1. Computing minimum distance hit position for {} reads.".format(len(pdSam)))
         quL=len(query)
@@ -264,6 +264,7 @@ def cellIDPool(pdSam, query, pdCBCs, nthreads=16):
 if __name__=="__main__":
     t0=(time.time())
     query, pdCBCs, pdSam, outfileName = Initialize(sys.argv)
+    print("initialized")
     pdSam = poolBlocks(query,pdSam)
     print("\nMapped hits in {} reads.".format(np.sum([int(i)>=0 for i in pdSam.minPos])))
     anchOut = cellIDPool(pdSam[pdSam.matchseq!=""], query, pdCBCs)
