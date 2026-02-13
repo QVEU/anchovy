@@ -34,11 +34,11 @@ if test -f "${indir}/${infile}"
         echo "${indir}/${infile/\.sam/}_anchovy.csv"
       else #if not, run anchovy
         echo "Running anchovy..."
-        python /hpcdata/lvd_qve/QVEU_Code/anchovy/anchovy.py ${indir}/${infile} $whitelist $tenXsignature
+        python /data/lvd_qve/QVEU_Code/anchovy/anchovy.py ${indir}/${infile} $whitelist $tenXsignature
       fi
       #make fas for each cell with barcodes as headers
       echo "Generating fastas for each cell..."
-      python /hpcdata/lvd_qve/QVEU_Code/anchovy/CBCtoFasta.py ${indir} ${infile/\.sam/}_anchovy.csv #edited 5/4
+      python /data/lvd_qve/QVEU_Code/anchovy/CBCtoFasta.py ${indir} ${infile/\.sam/}_anchovy.csv #edited 5/4
       echo "Done."
 
       #Map reads in fastq files  and generate sam file per cell fa file.
@@ -61,7 +61,7 @@ if test -f "${indir}/${infile}"
         echo "Making cell pileups"
         samtools sort ${i/\.fa/}_BC.bam > ${i/\.fa/}_BC_sort.bam
 
-        python /hpcdata/lvd_qve/QVEU_Code/sam2consensus/sam2consensus.py -c .5 -m 5 --outfolder $outdir -i ${i/\.fa/}_BC.sam #changed
+        python /data/lvd_qve/QVEU_Code/sam2consensus/sam2consensus.py -c .5 -m 5 --outfolder $outdir -i ${i/\.fa/}_BC.sam #changed
         samtools depth -d 100000 ${i/\.fa/}_BC_sort.bam > ${i/\.fa/}_BC_sort.depth
         #Clean up all the files (there are so many files.)
         rm ${i/\.fa/}_BC.bam
