@@ -19,12 +19,13 @@ tenXsignature=CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT #
 if test -f "${indir}/${infile}"
   then
       echo "${indir}/${infile} exists, running anchovy..."
-      module load python/3.9.5-GCCcore-10.3.0
-      module load foss/2021a
-      module load Biopython/1.79-foss-2021a
-      pip install Levenshtein
+      module load python/3.8.18-drgjyhq
+      module load py-biopython/1.81-lmv2htm
+      module load py-pip/23.1.2-rkyoeed
+      module load py-numpy/1.26.1-eonrbte
+      module load py-pandas/2.0.3-n3llkc6
+      module load py-python-levenshtein/0.12.0-xl5duwb
       pip install pysam
-      pip install pandas
 
       # Test whether anchovy csv output already produced at this location. 
       if test -f "${indir}/${infile/\.sam/}_anchovy.csv"
