@@ -12,7 +12,7 @@ anchovy is a small pipeline to generate consensus viral sequences for individual
 
 ## Repository contents
 - `anchovy.py` — main script that processes mapped SAM files and extracts reads per cell
-- `UMItoFasta.py` — converts `anchovy.csv` into per-cell FASTA files (one FASTA per CBC)
+- `CBCtoFasta.py` — converts `anchovy.csv` into per-cell FASTA files (one FASTA per CBC)
 - `sam2consensus.py` — small script to generate a consensus for CBC-specific SAM files (requires external dependency)
 - `ConsensusTool.py` — filters and compiles consensus sequences across cells for a target ORF/region
 - `Consensus_Annotation.R` — accessory R script to translate and annotate consensus sequences and generate genotype networks
