@@ -1,0 +1,70 @@
+# pyproject.toml
+# This single file replaces setup.py, setup.cfg, and requirements.txt.
+# It has three jobs: (1) declare how the package is built, (2) describe the
+# package and its dependencies, (3) configure dev tools like pytest.
+
+# --- (1) Build system -------------------------------------------------------
+# Tells pip/build WHICH tool turns your source into an installable artifact.
+# setuptools is the default, most-compatible choice. This section is why you
+# can run `pip install .` at all.
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# --- (2) Project metadata ---------------------------------------------------
+# This is what shows up on PyPI and what `pip` reads to resolve dependencies.
+[project]
+name = "anchovy"
+version = "0.3.0"                     # Single source of truth for the version.
+description = "Single-cell viral consensus and genotype-network pipeline"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Patrick Dolan", email = "Patrick.Dolan@nih.gov" },
+]
+keywords = ["bioinformatics", "single-cell", "virology", "consensus", "10x"]
+
+# Runtime dependencies. Only the PYTHON ones go here. Note what's absent:
+# samtools and minimap2 are external binaries, NOT pip packages -- they live
+# in environment.yml (conda) instead. This split is a core bioinformatics
+# packaging lesson: pip handles Python libs, conda handles compiled tools.
+dependencies = [
+    "numpy>=1.22",
+    "pandas>=2.0",
+    "pysam>=0.22",
+    "python-Levenshtein>=0.12",
+    "biopython>=1.81",
+]
+
+# Optional dependency groups. Installed with `pip install -e ".[dev]"`.
+# Keeping test/lint tools out of the default install keeps the package lean
+# for end users while giving contributors everything they need.
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff",          # fast linter + formatter, the current common default
+]
+
+# --- (3) Console entry points ----------------------------------------------
+# THIS is the magic that turns your module into a command. After install,
+# typing `anchovy` in the terminal runs the `main` function in src/anchovy/cli.py.
+# No more `python /long/path/to/anchovy.py`.
+[project.scripts]
+anchovy = "anchovy.cli:main"
+
+# --- Tell setuptools where the code lives (the src/ layout) ------------------
+# where = ["src"] is what makes the src/ layout work: setuptools looks inside
+# src/ for packages, so `import anchovy` resolves to src/anchovy/.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# --- Tool configuration (optional but conventional) -------------------------
+# Co-locating tool config here keeps the repo root uncluttered.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+[tool.ruff]
+line-length = 100

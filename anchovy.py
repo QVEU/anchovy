@@ -245,7 +245,7 @@ def cellMatch(input): #TUPLE including (readID, readSeq, matchSeq, matchseq, CBC
     minPos=np.argmin(bDist.astype(int))
     matchblock=blocks[minPos]
 
-    return(CBCs.iloc[minPos][0], minD,    minPos,          matchPos,           offset,              matchblock,              matchseq,             readID,         readSeq,              matchseq[38:(len(matchseq)-10)])
+    return(CBCs.iloc[minPos].iloc[0], minD,    minPos,          matchPos,           offset,              matchblock,              matchseq,             readID,         readSeq,              matchseq[38:(len(matchseq)-10)])
 
 #Pooled cell ID function
 def cellIDPool(pdSam, query, pdCBCs, nthreads=16):

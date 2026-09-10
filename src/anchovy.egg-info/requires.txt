@@ -1,0 +1,10 @@
+numpy>=1.22
+pandas>=2.0
+pysam>=0.22
+python-Levenshtein>=0.12
+biopython>=1.81
+
+[dev]
+pytest>=8.0
+pytest-cov
+ruff
