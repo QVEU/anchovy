@@ -2,7 +2,12 @@ LICENSE
 README.md
 pyproject.toml
 src/anchovy/__init__.py
-src/anchovy/cli-stub.py
+src/anchovy/barcodes.py
+src/anchovy/cli.py
+src/anchovy/config.py
+src/anchovy/extract.py
+src/anchovy/fasta.py
+src/anchovy/io.py
 src/anchovy/schema.py
 src/anchovy.egg-info/PKG-INFO
 src/anchovy.egg-info/SOURCES.txt
@@ -10,3 +15,5 @@ src/anchovy.egg-info/dependency_links.txt
 src/anchovy.egg-info/entry_points.txt
 src/anchovy.egg-info/requires.txt
 src/anchovy.egg-info/top_level.txt
+tests/test_golden.py
+tests/test_io.py
