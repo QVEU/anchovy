@@ -1,4 +1,5 @@
-# Consensus_Plots_v3.R
+# Consensus_Plots_v4.R
+# July 2026 - sections updated: package loading modules and hapNetworkGen calculation section
 # Analysis and annotation of genotypes from `anchovy`.
 #
 # This script analyzes consensus genotypes derived from single-cell viral sequencing.
@@ -23,14 +24,48 @@
 
 # Load libraries required for sequence handling, data manipulation, and plotting.
 # DECIPHER is used for translation (codon->AA).
-library(data.table,quietly = T)
-library(Biostrings,quietly = T)
-library(reshape2,quietly = T)
-library(ggplot2,quietly = T)
-library(DECIPHER,quietly = T)
-library(cowplot,quietly = T)
-library(purrr,quietly = T)
-library(ggrepel,quietly = T)
+loc_lib <- "/path/to/your/library"
+if(!dir.exists(loc_lib)) dir.create(loc_lib, recursive = TRUE)
+
+.libPaths(c(loc_lib, .libPaths()))
+
+ensure_version <- function(pkg, min_ver) {
+  if (!requireNamespace(pkg, quietly = TRUE) || packageVersion(pkg) < min_ver) {
+      message(sprintf("Installing/Updating %s to version >= %s...", pkg, min_ver))
+      install.packages(pkg, lib = loc_lib, repos = "https://cloud.r-project.org/")
+      if (pkg %in% loadedNamespaces()) {
+          unloadNamespace(pkg)
+      }
+  }
+}
+
+ensure_version("rlang", "1.1.6")
+ensure_version("gtable", "0.3.6")
+ensure_version("scales", "1.4.0")
+ensure_version("ggplot2", "3.5.2")
+
+cran_packages <- c("data.table", "reshape2", "cowplot", "purrr", "ggrepel")
+bioc_packages <- c("Biostrings", "DECIPHER")
+
+missing_cran <- cran_packages[!(cran_packages %in% installed.packages()[,"Package"])]
+if(length(missing_cran) > 0) {
+    message("Installing missing CRAN packages: ", paste(missing_cran, collapse=", "))
+    install.packages(missing_cran, lib = loc_lib, repos = "https://cloud.r-project.org/")
+}
+
+missing_bioc <- bioc_packages[!(bioc_packages %in% installed.packages()[,"Package"])]
+if(length(missing_bioc) > 0) {
+    if (!requireNamespace("BiocManager", quietly = TRUE)) {
+        install.packages("BiocManager", lib = loc_lib, repos = "https://cloud.r-project.org/")
+    }
+    BiocManager::install(missing_bioc, lib = loc_lib, update = FALSE, ask = FALSE)
+}
+
+all_packages <- c("rlang", "gtable", "scales", "ggplot2", cran_packages, bioc_packages)
+sapply(all_packages, library, character.only = TRUE)
+
+
+allArgs <- commandArgs(trailingOnly = TRUE)
 
 # FUNCTIONS
 
@@ -104,8 +139,7 @@ hapNetworkGen <- function(haplocounts, NAME) {
     genotype ~ mutants,
     fill = 0,
     value.var = "freq",
-    fun.aggregate = function(X)
-      ifelse(X > 0, 1, 0)
+    fun.aggregate = function(X) as.integer(any(X > 0))
   )
   
   # Create a count matrix: how many cells (count) in each genotype contain each mutation

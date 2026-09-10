@@ -50,7 +50,7 @@ The scripts are also available on the QVEU shared space at:
 Typical flow (high level):
 1. Map raw reads to a viral reference with minimap2 to produce a SAM file.
 2. Run `anchovy.py` on the SAM file to extract the 10X barcode signature and produce `anchovy.csv`.
-3. Convert `anchovy.csv` to per-cell FASTAs using `UMItoFasta.py`.
+3. Convert `anchovy.csv` to per-cell FASTAs using `CBCtoFasta.py`.
 4. Re-map per-cell FASTAs to the reference (minimap2) to produce per-cell SAM files.
 5. Generate consensus sequences per cell using `Sam2Consensus.py` / `sam2consensus.py`.
 6. Concatenate per-cell consensus sequences into an `allConsensus.fasta`.
