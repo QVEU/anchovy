@@ -1,14 +1,21 @@
 """
 cli.py -- command-line entry point for the anchovy pipeline.
 
-This is wired to pyproject.toml's [project.scripts] as `anchovy = "anchovy.cli:main"`,
-so after `pip install -e .` the shell command `anchovy` calls main() here.
+Wired to pyproject.toml's [project.scripts] as `anchovy = "anchovy.cli:main"`,
+so after `pip install -e .` the shell command `anchovy` dispatches here.
 
-Right now the subcommands are stubs that just report they were reached. That's
-deliberate: we stand up an installable, runnable skeleton FIRST, confirm the
-plumbing works end to end, then replace each stub body with real logic (importing
-from extract.py, fasta.py, consensus.py). Building the skeleton before the flesh
-means every later change is verified against something that already runs.
+Each subcommand is a thin adapter: parse args -> build the relevant config from
+any overrides -> call the stage's run() -> report what was produced. All the real
+logic lives in extract.py / fasta.py / consensus.py; this file only translates
+between the command line and those functions.
+
+DESIGN
+------
+- Every tunable exposed as an optional flag defaults to the config's default, so
+  running with no flags reproduces the original behavior exactly. Flags only
+  override when explicitly given.
+- Commands return an int exit code (0 = success) so the shell and any wrapping
+  workflow (Snakemake, later) can detect failure.
 """
 
 from __future__ import annotations
@@ -17,36 +24,83 @@ import argparse
 import sys
 
 from anchovy import __version__
+from anchovy.config import ExtractConfig, FastaConfig, ConsensusConfig
 
 
+# --------------------------------------------------------------------------- #
+# extract
+# --------------------------------------------------------------------------- #
 def _cmd_extract(args: argparse.Namespace) -> int:
-    # Will call extract.py (the former anchovy.py core).
-    print(f"[anchovy extract] sam={args.sam} whitelist={args.whitelist}")
-    print("  (not implemented yet -- skeleton stub)")
+    from anchovy import extract
+
+    # Build config from overrides; unspecified flags keep config defaults.
+    defaults = ExtractConfig()
+    config = ExtractConfig(
+        signature=args.signature or defaults.signature,
+        nthreads=args.threads if args.threads is not None else defaults.nthreads,
+        min_distance_cutoff=(args.max_distance if args.max_distance is not None
+                             else defaults.min_distance_cutoff),
+    )
+
+    df = extract.run(sam=args.sam, whitelist=args.whitelist,
+                     signature=config.signature, config=config)
+
+    from anchovy.io import write_anchovy_csv
+    out = args.out or args.sam.replace(".sam", "_anchovy.csv").replace(".bam", "_anchovy.csv")
+    write_anchovy_csv(df, out)
+    print(f"Wrote {out} ({len(df)} reads assigned).")
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# fasta
+# --------------------------------------------------------------------------- #
 def _cmd_fasta(args: argparse.Namespace) -> int:
-    # Will call fasta.py (the former CBCtoFasta.py).
-    print(f"[anchovy fasta] indir={args.indir} csv={args.csv}")
-    print("  (not implemented yet -- skeleton stub)")
+    from anchovy import fasta
+
+    defaults = FastaConfig()
+    config = FastaConfig(
+        min_reads_per_cbc=(args.min_reads if args.min_reads is not None
+                           else defaults.min_reads_per_cbc),
+    )
+
+    written = fasta.run(csv=args.csv, out_dir=args.outdir, config=config)
+    print(f"Wrote {len(written)} per-cell FASTA(s) to {args.outdir}.")
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# consensus
+# --------------------------------------------------------------------------- #
 def _cmd_consensus(args: argparse.Namespace) -> int:
-    # Will call consensus.py (the former ConsensusTool.py).
-    print(f"[anchovy consensus] fasta={args.fasta} start={args.start} end={args.end}")
-    print("  (not implemented yet -- skeleton stub)")
+    from anchovy import consensus
+
+    defaults = ConsensusConfig()
+    config = ConsensusConfig(
+        depth_min=args.depth_min if args.depth_min is not None else defaults.depth_min,
+        max_gaps_in_region=(args.max_gaps if args.max_gaps is not None
+                            else defaults.max_gaps_in_region),
+    )
+
+    reference = None
+    if args.reference:
+        reference = open(args.reference).read().strip()
+
+    result = consensus.run(
+        fasta=args.fasta, start=args.start, end=args.end,
+        reference=reference, config=config, out_prefix=args.out_prefix,
+    )
+    written = result["written"]
+    print(f"Kept {len(result['records'])} sequences.")
+    print(f"Wrote {written['reference']}")
+    print(f"Wrote {written['csv']}")
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# parser
+# --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
-    """Construct the top-level parser and its subcommands.
-
-    Keeping parser construction in its own function (rather than inline in main)
-    makes it testable: a test can build the parser and assert on how it parses
-    example argument lists, without actually running any command.
-    """
     parser = argparse.ArgumentParser(
         prog="anchovy",
         description="Single-cell viral consensus and genotype-network pipeline.",
@@ -57,37 +111,46 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True,
                                 metavar="{extract,fasta,consensus}")
 
-    # anchovy extract: SAM -> per-read CBC/UMI table
-    p_extract = sub.add_parser("extract",
-                               help="Extract cell barcodes/UMIs from a mapped SAM.")
-    p_extract.add_argument("sam", help="Path to input mapped SAM file.")
+    # --- extract ---
+    p_extract = sub.add_parser(
+        "extract", help="Extract cell barcodes/UMIs from a mapped SAM/BAM.")
+    p_extract.add_argument("sam", help="Path to input mapped SAM/BAM file.")
     p_extract.add_argument("whitelist", help="Path to 10X barcode whitelist.")
+    p_extract.add_argument("-o", "--out", help="Output CSV path (default: alongside input).")
+    p_extract.add_argument("--signature", help="10X signature (default: v2/v3 3').")
+    p_extract.add_argument("--threads", type=int, help="Worker processes (default: 16).")
+    p_extract.add_argument("--max-distance", type=int, dest="max_distance",
+                           help="Max Levenshtein distance to keep a read (default: 42).")
     p_extract.set_defaults(func=_cmd_extract)
 
-    # anchovy fasta: per-read table -> per-cell FASTAs
-    p_fasta = sub.add_parser("fasta",
-                             help="Write one FASTA per cell barcode from anchovy CSV.")
-    p_fasta.add_argument("indir", help="Directory containing the anchovy CSV / for output.")
-    p_fasta.add_argument("csv", help="anchovy output CSV filename.")
+    # --- fasta ---
+    p_fasta = sub.add_parser(
+        "fasta", help="Write one FASTA per cell barcode from an anchovy CSV.")
+    p_fasta.add_argument("csv", help="anchovy output CSV (from `anchovy extract`).")
+    p_fasta.add_argument("outdir", help="Directory to write per-cell FASTAs into.")
+    p_fasta.add_argument("--min-reads", type=int, dest="min_reads",
+                         help="Minimum reads per cell to emit a FASTA (default: 5).")
     p_fasta.set_defaults(func=_cmd_fasta)
 
-    # anchovy consensus: filter + genotype summary
-    p_cons = sub.add_parser("consensus",
-                            help="Filter consensus sequences and summarize genotypes.")
+    # --- consensus ---
+    p_cons = sub.add_parser(
+        "consensus", help="Filter consensus sequences and summarize genotypes.")
     p_cons.add_argument("fasta", help="Path to <NAME>_allConsensus.fasta.")
     p_cons.add_argument("start", type=int, help="ORF/region start (nt).")
     p_cons.add_argument("end", type=int, help="ORF/region end (nt).")
+    p_cons.add_argument("--reference", help="Reference sequence file (default: compute consensus).")
+    p_cons.add_argument("--out-prefix", dest="out_prefix",
+                        help="Output path prefix (default: derived from input).")
+    p_cons.add_argument("--depth-min", type=int, dest="depth_min",
+                        help="Minimum coverage to keep a sequence (default: 10).")
+    p_cons.add_argument("--max-gaps", type=int, dest="max_gaps",
+                        help="Max gaps allowed in region (default: 3).")
     p_cons.set_defaults(func=_cmd_consensus)
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point. Returns an exit code so it's testable and shell-friendly.
-
-    argv defaults to None so argparse reads sys.argv; passing a list lets tests
-    drive it directly, e.g. main(["extract", "in.sam", "wl.txt"]).
-    """
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

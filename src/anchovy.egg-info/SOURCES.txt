@@ -5,6 +5,7 @@ src/anchovy/__init__.py
 src/anchovy/barcodes.py
 src/anchovy/cli.py
 src/anchovy/config.py
+src/anchovy/consensus.py
 src/anchovy/extract.py
 src/anchovy/fasta.py
 src/anchovy/io.py
@@ -15,5 +16,6 @@ src/anchovy.egg-info/dependency_links.txt
 src/anchovy.egg-info/entry_points.txt
 src/anchovy.egg-info/requires.txt
 src/anchovy.egg-info/top_level.txt
+tests/test_fasta.py
 tests/test_golden.py
 tests/test_io.py
