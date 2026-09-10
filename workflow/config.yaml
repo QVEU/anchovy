@@ -1,0 +1,24 @@
+# workflow/config.yaml
+#
+# Run-specific settings for the anchovy Snakemake workflow. Edit this file (not
+# the Snakefile) to point the pipeline at different data or tweak parameters --
+# the workflow-level equivalent of the package's config.py.
+#
+# Currently pointed at the test fixtures for development against known data.
+
+# Base name of the sample. Input is expected at {data_dir}/{sample}.sam and
+# outputs are named {data_dir}/{sample}_*.
+sample: "test"
+
+# Directory holding inputs and receiving package-stage outputs.
+data_dir: "tests/data"
+
+# Path to the 10X barcode whitelist.
+whitelist: "tests/data/whitelist.txt"
+
+# The 10X signature to search for (v2/v3 3' chemistry default).
+signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
+
+# Reference/template FASTA that minimap2 maps each per-cell FASTA against.
+# (This was the $3 argument to AnchovyJob.sh.)
+template: "tests/data/template.fasta"

@@ -1,0 +1,92 @@
+# workflow/Snakefile
+#
+# Snakemake workflow for the anchovy pipeline. Replaces AnchovyJob.sh.
+#
+# Rules declare: OUTPUT files produced from INPUT files by a SHELL command.
+# Snakemake works backwards from a requested target to build and run the DAG,
+# doing only what's needed, in parallel where possible.
+#
+# Run from the repo root:
+#   snakemake -s workflow/Snakefile --cores 4 -n     # dry run (show plan)
+#   snakemake -s workflow/Snakefile --cores 4        # real run
+
+configfile: "workflow/config.yaml"
+
+SAMPLE    = config["sample"]
+DATA_DIR  = config["data_dir"]
+WHITELIST = config["whitelist"]
+SIGNATURE = config["signature"]
+
+# Per-sample results directory keeps intermediates contained.
+RESULTS   = "results/" + SAMPLE
+CELLS_DIR = RESULTS + "/cells"
+
+
+# --------------------------------------------------------------------------- #
+# Aggregation: turn the checkpoint's discovered cells into a list of targets
+# --------------------------------------------------------------------------- #
+# Runs AFTER the fasta checkpoint completes. checkpoints.fasta.get() forces the
+# checkpoint to finish and hands back its output dir; glob_wildcards then scans
+# for the .fa files that actually appeared and extracts the cell names, from
+# which we build the per-cell SAM targets.
+def aggregate_cell_sams(wildcards):
+    checkpoint_output = checkpoints.fasta.get(**wildcards).output.cells
+    cells = glob_wildcards(checkpoint_output + "/{cell}.fa").cell
+    return expand(CELLS_DIR + "/{cell}_BC.sam", cell=cells)
+
+
+# --------------------------------------------------------------------------- #
+# Default target
+# --------------------------------------------------------------------------- #
+# Asking for "all per-cell SAMs" forces the fasta checkpoint to run, then fans
+# out map_cell over whatever cells appeared.
+rule all:
+    input:
+        aggregate_cell_sams,
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1: extract  (SAM -> per-read CBC/UMI table)
+# --------------------------------------------------------------------------- #
+rule extract:
+    input:
+        sam=DATA_DIR + "/" + SAMPLE + ".sam",
+        whitelist=WHITELIST,
+    output:
+        DATA_DIR + "/" + SAMPLE + "_anchovy.csv",
+    params:
+        sig=SIGNATURE,
+    shell:
+        "anchovy extract {input.sam} {input.whitelist} "
+        "--signature {params.sig} -o {output}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 2: fasta  (anchovy CSV -> per-cell FASTAs)  -- THE CHECKPOINT
+# --------------------------------------------------------------------------- #
+# A checkpoint, not a rule: its output filenames aren't known until it runs (one
+# FASTA per surviving cell barcode). Output is declared as a directory(); on
+# completion Snakemake re-evaluates the DAG so downstream rules can consume the
+# discovered files.
+checkpoint fasta:
+    input:
+        csv=DATA_DIR + "/" + SAMPLE + "_anchovy.csv",
+    output:
+        cells=directory(CELLS_DIR),
+    shell:
+        "anchovy fasta {input.csv} {output.cells}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3: map_cell  (one per-cell FASTA -> one per-cell SAM, via minimap2)
+# --------------------------------------------------------------------------- #
+# A wildcard rule: {cell} is filled with each barcode, so one definition becomes
+# N parallel jobs. Replaces the serial `for i in *.fa` loop in AnchovyJob.sh.
+rule map_cell:
+    input:
+        fa=CELLS_DIR + "/{cell}.fa",
+        template=config["template"],
+    output:
+        sam=CELLS_DIR + "/{cell}_BC.sam",
+    shell:
+        "minimap2 -ax map-hifi {input.template} {input.fa} > {output.sam}"

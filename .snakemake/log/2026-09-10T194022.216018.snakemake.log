@@ -1,0 +1,3 @@
+NameError in file "/Users/dolanpt/Documents/GitHub/anchovy/workflow/Snakefile", line 58:
+name 'aggregate_cell_sams' is not defined
+  File "/Users/dolanpt/Documents/GitHub/anchovy/workflow/Snakefile", line 58, in <module>

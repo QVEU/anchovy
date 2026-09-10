@@ -1,0 +1,46 @@
+Assuming unrestricted shared filesystem usage.
+
+SNAKEMAKE
+=========
+  Date: 2026-09-10 19:36:48
+  Workflow ID: 9f6a2876-e2c9-4c26-af7a-18630803b824
+  Platform: macOS-14.8.5-arm64-arm-64bit-Mach-O
+  Host: L02308744.niaid.nih.gov
+  User: dolanpt
+  Snakemake version: 9.26.1
+  Python version: 3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:04:32) [Clang 20.1.8 ]
+  Command: /Users/dolanpt/opt/anaconda3/envs/anchovy_env/bin/snakemake -s workflow/Snakefile --cores 4
+  Snakefile: /Users/dolanpt/Documents/GitHub/anchovy/workflow/Snakefile
+  Base directory: /Users/dolanpt/Documents/GitHub/anchovy/workflow
+  Run directory: /Users/dolanpt/Documents/GitHub/anchovy
+  Working directory: /Users/dolanpt/Documents/GitHub/anchovy
+  Config file(s): ['workflow/config.yaml']
+  Config MD5: 73a9c4322a657be58c4919c4de4a5363
+
+Building DAG of jobs...
+Using shell: /bin/bash
+Provided cores: 4
+Rules claiming more threads will be scaled down.
+Job stats:
+job      count
+-----  -------
+fasta        1
+all          1
+total        2
+
+Select jobs to execute...
+Execute 1 jobs...
+[Thu Sep 10 19:36:49 2026]
+localcheckpoint fasta:
+    input: tests/data/test_anchovy.csv
+    output: results/test/cells
+    jobid: 1
+    reason: Missing output files: results/test/cells
+    resources: tmpdir=/var/folders/kk/1fzwcqps6dd_3dt2hsjct0tr_85vzj/T
+DAG of jobs will be updated after completion.
+[Thu Sep 10 19:36:49 2026]
+Finished jobid: 1 (Rule: fasta)
+1 of 2 steps (50%) done
+Updating checkpoint dependencies.
+Complete log(s): /Users/dolanpt/Documents/GitHub/anchovy/.snakemake/log/2026-09-10T193648.860777.snakemake.log
+Elapsed time: 0:00:00.807150
