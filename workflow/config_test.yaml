@@ -1,0 +1,37 @@
+# workflow/config_test.yaml
+#
+# Example config that runs the mapping-onward stages against a PRE-EXISTING set
+# of per-cell FASTAs, bypassing barcode extraction. This demonstrates two things:
+#
+#   1. How to point the workflow at your own data by copying and editing a config
+#      (you never edit the Snakefile itself).
+#   2. The `cells_dir` feature: starting from per-cell FASTAs you already have,
+#      instead of producing them from a SAM via the extract+fasta stages.
+#
+# Run it with:
+#   snakemake -s workflow/Snakefile --configfile workflow/config_test.yaml --cores 4
+#
+# This is also the test harness for the map -> cell_consensus stages, run on the
+# mapping fixture whose reads actually align to the template (unlike the barcode
+# fixture used for the front-half golden tests).
+
+# Setting cells_dir tells the workflow the per-cell FASTAs ALREADY EXIST here,
+# so the fasta checkpoint is bypassed and these files are used directly.
+cells_dir: "tests/data/mapping"
+
+# The reference to map against and its sequence name (must match the FASTA header
+# after ">"). sam2consensus prefixes output filenames with this name.
+template: "tests/data/mapping/template.fasta"
+reference_name: "testref"
+
+# sam2consensus parameters.
+cons_threshold: 0.5
+cons_min_depth: 5
+
+# --- Fields still required by the Snakefile even though the front-half stages
+# --- aren't exercised in this config. They point at the barcode fixture so the
+# --- file parses; extract/fasta simply won't run because nothing requests them.
+sample: "test"
+data_dir: "tests/data"
+whitelist: "tests/data/whitelist.txt"
+signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"

@@ -1,0 +1,22 @@
+Assuming unrestricted shared filesystem usage.
+
+SNAKEMAKE
+=========
+  Date: 2026-09-10 20:01:15
+  Workflow ID: 44427c3c-1df2-49a9-9a7d-1e67e9a5d2dd
+  Platform: macOS-14.8.5-arm64-arm-64bit-Mach-O
+  Host: L02308744.niaid.nih.gov
+  User: dolanpt
+  Snakemake version: 9.26.1
+  Python version: 3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:04:32) [Clang 20.1.8 ]
+  Command: /Users/dolanpt/opt/anaconda3/envs/anchovy_env/bin/snakemake -s workflow/Snakefile --cores 4
+  Snakefile: /Users/dolanpt/Documents/GitHub/anchovy/workflow/Snakefile
+  Base directory: /Users/dolanpt/Documents/GitHub/anchovy/workflow
+  Run directory: /Users/dolanpt/Documents/GitHub/anchovy
+  Working directory: /Users/dolanpt/Documents/GitHub/anchovy
+  Config file(s): ['workflow/config.yaml']
+  Config MD5: 479bd51e946e1b8c669d589c17a713a4
+
+Building DAG of jobs...
+Updating checkpoint dependencies.
+Nothing to be done (all requested files are present and up to date).

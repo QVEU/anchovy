@@ -2,13 +2,14 @@
 #
 # Snakemake workflow for the anchovy pipeline. Replaces AnchovyJob.sh.
 #
-# Rules declare: OUTPUT files produced from INPUT files by a SHELL command.
-# Snakemake works backwards from a requested target to build and run the DAG,
-# doing only what's needed, in parallel where possible.
+# USAGE (the config file IS the interface -- you don't edit this file to run on
+# your own data; you copy a config, edit its paths, and run):
+#   snakemake -s workflow/Snakefile --configfile config.yaml --cores 4 -n
+#   snakemake -s workflow/Snakefile --configfile config.yaml --cores 4
 #
-# Run from the repo root:
-#   snakemake -s workflow/Snakefile --cores 4 -n     # dry run (show plan)
-#   snakemake -s workflow/Snakefile --cores 4        # real run
+# See workflow/README.md for the config-swap pattern and examples.
+
+import os
 
 configfile: "workflow/config.yaml"
 
@@ -16,33 +17,54 @@ SAMPLE    = config["sample"]
 DATA_DIR  = config["data_dir"]
 WHITELIST = config["whitelist"]
 SIGNATURE = config["signature"]
+REFNAME   = config["reference_name"]
 
-# Per-sample results directory keeps intermediates contained.
 RESULTS   = "results/" + SAMPLE
-CELLS_DIR = RESULTS + "/cells"
+
+# --------------------------------------------------------------------------- #
+# Input/output location separation (clean data flow)
+# --------------------------------------------------------------------------- #
+# CELLS_IN  = where per-cell FASTAs are READ from.
+#   - default: produced by the `fasta` checkpoint into RESULTS/cells
+#   - override: set `cells_dir` in config to read PRE-EXISTING cells (for testing
+#     the mapping-onward stages, or resuming from per-cell FASTAs you already have)
+#
+# WORK = where the workflow WRITES generated artifacts (per-cell SAMs and consensus
+#   FASTAs). Always under results/, owned by the workflow, safe to delete. Never
+#   writes into the input/source location, so source data stays pristine.
+CELLS_IN        = config.get("cells_dir", RESULTS + "/cells")
+CELLS_FROM_CKPT = "cells_dir" not in config       # True => produced by checkpoint
+WORK            = RESULTS + "/work"
 
 
 # --------------------------------------------------------------------------- #
-# Aggregation: turn the checkpoint's discovered cells into a list of targets
+# Aggregation: discover cells and build downstream target lists.
 # --------------------------------------------------------------------------- #
-# Runs AFTER the fasta checkpoint completes. checkpoints.fasta.get() forces the
-# checkpoint to finish and hands back its output dir; glob_wildcards then scans
-# for the .fa files that actually appeared and extracts the cell names, from
-# which we build the per-cell SAM targets.
-def aggregate_cell_sams(wildcards):
-    checkpoint_output = checkpoints.fasta.get(**wildcards).output.cells
-    cells = glob_wildcards(checkpoint_output + "/{cell}.fa").cell
-    return expand(CELLS_DIR + "/{cell}_BC.sam", cell=cells)
+def _discover_cells(wildcards):
+    """Return the list of cell names, from checkpoint or pre-existing dir."""
+    if CELLS_FROM_CKPT:
+        cells_out = checkpoints.fasta.get(**wildcards).output.cells
+    else:
+        cells_out = CELLS_IN
+    return glob_wildcards(os.path.join(cells_out, "{cell}.fa")).cell
+
+
+def aggregate_cell_consensuses(wildcards):
+    """Final per-cell consensus FASTAs (in WORK), one per discovered cell.
+
+    sam2consensus output name convention (empirical):
+    "{reference}__{prefix}.fasta", prefix = input SAM minus ".sam".
+    """
+    cells = _discover_cells(wildcards)
+    return expand(WORK + "/" + REFNAME + "__{cell}_BC.fasta", cell=cells)
 
 
 # --------------------------------------------------------------------------- #
 # Default target
 # --------------------------------------------------------------------------- #
-# Asking for "all per-cell SAMs" forces the fasta checkpoint to run, then fans
-# out map_cell over whatever cells appeared.
 rule all:
     input:
-        aggregate_cell_sams,
+        aggregate_cell_consensuses,
 
 
 # --------------------------------------------------------------------------- #
@@ -64,29 +86,47 @@ rule extract:
 # --------------------------------------------------------------------------- #
 # Stage 2: fasta  (anchovy CSV -> per-cell FASTAs)  -- THE CHECKPOINT
 # --------------------------------------------------------------------------- #
-# A checkpoint, not a rule: its output filenames aren't known until it runs (one
-# FASTA per surviving cell barcode). Output is declared as a directory(); on
-# completion Snakemake re-evaluates the DAG so downstream rules can consume the
-# discovered files.
 checkpoint fasta:
     input:
         csv=DATA_DIR + "/" + SAMPLE + "_anchovy.csv",
     output:
-        cells=directory(CELLS_DIR),
+        cells=directory(RESULTS + "/cells"),
     shell:
         "anchovy fasta {input.csv} {output.cells}"
 
 
 # --------------------------------------------------------------------------- #
-# Stage 3: map_cell  (one per-cell FASTA -> one per-cell SAM, via minimap2)
+# Stage 3: map_cell  (read one per-cell FASTA -> write one per-cell SAM to WORK)
 # --------------------------------------------------------------------------- #
-# A wildcard rule: {cell} is filled with each barcode, so one definition becomes
-# N parallel jobs. Replaces the serial `for i in *.fa` loop in AnchovyJob.sh.
+# Reads from CELLS_IN, writes to WORK -- input and output locations are distinct,
+# so the source cells directory is never written to.
 rule map_cell:
     input:
-        fa=CELLS_DIR + "/{cell}.fa",
+        fa=CELLS_IN + "/{cell}.fa",
         template=config["template"],
     output:
-        sam=CELLS_DIR + "/{cell}_BC.sam",
+        sam=WORK + "/{cell}_BC.sam",
     shell:
         "minimap2 -ax map-hifi {input.template} {input.fa} > {output.sam}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 4: cell_consensus  (read per-cell SAM from WORK -> write consensus to WORK)
+# --------------------------------------------------------------------------- #
+# Runs vendored, Python-3-converted sam2consensus.py.
+# OUTPUT NAMING (empirical): "{reference}__{prefix}.fasta", prefix = SAM minus .sam.
+# LIMITATION (conscious): reference name hardcoded from config -> assumes a SINGLE
+# reference. Multi-segment references would emit multiple files per cell.
+rule cell_consensus:
+    input:
+        sam=WORK + "/{cell}_BC.sam",
+        script="workflow/scripts/sam2consensus.py",
+    output:
+        fasta=WORK + "/" + REFNAME + "__{cell}_BC.fasta",
+    params:
+        cons_threshold=config.get("cons_threshold", 0.5),
+        min_depth=config.get("cons_min_depth", 5),
+        outfolder=WORK,
+    shell:
+        "python {input.script} -c {params.cons_threshold} -m {params.min_depth} "
+        "--outfolder {params.outfolder} -i {input.sam}"
