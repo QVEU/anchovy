@@ -1,4 +1,5 @@
 # anchovy
+![tests](https://github.com/USER/anchovy/actions/workflows/tests.yml/badge.svg)
 ![anchovies](assets/northern-anchovies-rw07-130.webp)
 anchovy is an analysis pipeline designed for use with barcoded single-cell sequencing data to reconstruct viral haplotypes from individual cells.
 
