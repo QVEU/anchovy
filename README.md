@@ -35,7 +35,9 @@ have conda, install
 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) first.
 
 Setup is two commands. The first creates a self-contained environment with all
-the required programs; the second installs anchovy itself into it:
+the required programs; the second installs anchovy itself into it. 
+
+Navigate to your `anchovy/` directory, where `environment.yml` lives and run:
 
 ```bash
 # 1. create the environment (this may take a few minutes)
