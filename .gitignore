@@ -1,9 +1,0 @@
-# Node modules
-node_modules/
-# Python cache
-__pycache__/
-# Distribution files
-dist/
-3M-february-2018.txt
-737K-august-2016.txt
-.DS_Store
