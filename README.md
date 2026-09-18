@@ -1,5 +1,5 @@
 # anchovy
-[anchovies](assets/northern-anchovies-rw07-130.webp)
+![anchovies](assets/northern-anchovies-rw07-130.webp)
 anchovy is an analysis pipeline designed for use with barcoded single-cell sequencing data to reconstruct viral haplotypes from individual cells.
 
 You provide sequencing reads that have already been mapped to a reference genome (in the form of SAM or BAM), anchovy:
