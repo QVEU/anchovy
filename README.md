@@ -55,6 +55,12 @@ anchovy --version
 snakemake --version
 ```
 
+If you have pytest installed you can also run: 
+```bash
+pytest -v
+```
+to test the install. 
+
 (Two steps rather than one: the first command installs the ready-made external programs, and the second installs anchovy's own code in a
 way that lets you edit it.)
 
