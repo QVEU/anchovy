@@ -1,16 +1,11 @@
 # anchovy
 
-anchovy takes single-cell viral sequencing data and works out, for each
-individual cell, what the virus's genome looked like in that cell — then compares
-those genomes across cells to find mutations and how they relate to each other.
+anchovy is an analysis pipeline designed for use with barcoded single-cell sequencing data to reconstruct viral haplotypes from individual cells. It then creates a network file describing the relationship of all of the mutations in the population.
 
-You give it sequencing reads that have already been mapped to a reference genome.
-anchovy sorts the reads by which cell they came from, builds a consensus genome
-for each cell, and produces tables describing the mutations it found and how the
+You provide sequencing reads that have already been mapped to a reference genome (in the form of SAM or BAM), anchovy sorts the reads by which cell they came from, builds a consensus genome for each cell, and produces tables describing the mutations it found and how the
 different genotypes are related.
 
-You can run the whole thing as one automated pipeline (recommended), or run each
-step by hand.
+You can run the whole thing as one automated pipeline (recommended), or run each step by hand.
 
 ## What the pipeline does, step by step
 
@@ -55,10 +50,8 @@ anchovy --version
 snakemake --version
 ```
 
-(If you're curious why it's two steps rather than one: the first command installs
-the ready-made external programs, and the second installs anchovy's own code in a
-way that lets you edit it. They're handled differently, so they're separate
-commands. You don't need to understand the details to use it.)
+(Two steps rather than one: the first command installs the ready-made external programs, and the second installs anchovy's own code in a
+way that lets you edit it.)
 
 ## Running the whole pipeline
 
