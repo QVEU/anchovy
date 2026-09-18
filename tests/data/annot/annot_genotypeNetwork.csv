@@ -1,0 +1,7 @@
+genotype,count,target,overlap,mutNumSource,mutNumTarget
+13A,2,13A,1,1,1
+13A,2,13A_8T,1,1,2
+13A_8T,1,13A_8T,2,2,2
+19T,1,19T,1,1,1
+6G,1,6G,1,1,1
+reference,2,reference,1,1,1

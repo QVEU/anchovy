@@ -1,0 +1,79 @@
+{
+  "reference": "ATGAAAGATTTTCGTGGGCATACTTGGGAA",
+  "protein": "MKDFRGHTWE",
+  "depth": 7,
+  "annotations": {
+    "13A": {
+      "refCodon": "CGT",
+      "mutCodon": "AGT",
+      "subName": "R5S",
+      "subClass": "Non-Syn"
+    },
+    "8T": {
+      "refCodon": "GAT",
+      "mutCodon": "GTT",
+      "subName": "D3V",
+      "subClass": "Non-Syn"
+    },
+    "6G": {
+      "refCodon": "AAA",
+      "mutCodon": "AAG",
+      "subName": "K2K",
+      "subClass": "Syn"
+    },
+    "19T": {
+      "refCodon": "CAT",
+      "mutCodon": "TAT",
+      "subName": "H7Y",
+      "subClass": "Non-Syn"
+    }
+  },
+  "mutation_freq": {
+    "13A": {
+      "count": 3,
+      "freq": 0.42857142857142855
+    },
+    "8T": {
+      "count": 1,
+      "freq": 0.14285714285714285
+    },
+    "6G": {
+      "count": 1,
+      "freq": 0.14285714285714285
+    },
+    "19T": {
+      "count": 1,
+      "freq": 0.14285714285714285
+    }
+  },
+  "genotypes": {
+    "": {
+      "name": "reference",
+      "haploFreq": 0.2857142857142857
+    },
+    "13A": {
+      "name": "R5S",
+      "haploFreq": 0.2857142857142857
+    },
+    "13A_8T": {
+      "name": "R5S_D3V",
+      "haploFreq": 0.14285714285714285
+    },
+    "6G": {
+      "name": "K2K",
+      "haploFreq": 0.14285714285714285
+    },
+    "19T": {
+      "name": "H7Y",
+      "haploFreq": 0.14285714285714285
+    }
+  },
+  "network": {
+    "single_step_edge": "13A -> 13A_8T (overlap 1, differ by adding 8T)",
+    "reference_edges": [
+      "13A -> reference",
+      "6G -> reference",
+      "19T -> reference"
+    ]
+  }
+}

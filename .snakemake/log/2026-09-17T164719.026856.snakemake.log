@@ -1,0 +1,57 @@
+Config file workflow/config.yaml is extended by additional config specified via the command line.
+Assuming unrestricted shared filesystem usage.
+
+SNAKEMAKE
+=========
+  Date: 2026-09-17 16:47:19
+  Workflow ID: 69553d57-ed79-4c3a-8927-096296ffb96e
+  Platform: macOS-14.8.5-arm64-arm-64bit-Mach-O
+  Host: L02308744.niaid.nih.gov
+  User: dolanpt
+  Snakemake version: 9.26.1
+  Python version: 3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:04:32) [Clang 20.1.8 ]
+  Command: /Users/dolanpt/opt/anaconda3/envs/anchovy_env/bin/snakemake -s workflow/Snakefile --configfile workflow/config_test.yaml --cores 4 results/test/test_filtConsensus.csv
+  Snakefile: /Users/dolanpt/Documents/GitHub/anchovy/workflow/Snakefile
+  Base directory: /Users/dolanpt/Documents/GitHub/anchovy/workflow
+  Run directory: /Users/dolanpt/Documents/GitHub/anchovy
+  Working directory: /Users/dolanpt/Documents/GitHub/anchovy
+  Config file(s): [PosixPath('/Users/dolanpt/Documents/GitHub/anchovy/workflow/config_test.yaml'), 'workflow/config.yaml']
+  Config MD5: 8b238e8943b5c5faf6c82fb17537852f
+
+Building DAG of jobs...
+Using shell: /bin/bash
+Provided cores: 4
+Rules claiming more threads will be scaled down.
+Job stats:
+job          count
+---------  -------
+consensus        1
+total            1
+
+Select jobs to execute...
+Execute 1 jobs...
+[Thu Sep 17 16:47:19 2026]
+localrule consensus:
+    input: results/test/test_allConsensus.fasta
+    output: results/test/test_filtConsensus.csv, results/test/test_consensus_reference.txt
+    jobid: 0
+    reason: Missing output files: results/test/test_filtConsensus.csv
+    resources: tmpdir=/var/folders/kk/1fzwcqps6dd_3dt2hsjct0tr_85vzj/T
+RuleException:
+CalledProcessError in file "/Users/dolanpt/Documents/GitHub/anchovy/workflow/Snakefile", line 175:
+Command 'set -euo pipefail;  anchovy consensus results/test/test_allConsensus.fasta 100 500 --depth-min 1 --out-prefix results/test/test' returned non-zero exit status 127.
+[Thu Sep 17 16:47:19 2026]
+Error in rule consensus:
+    message: None
+    jobid: 0
+    input: results/test/test_allConsensus.fasta
+    output: results/test/test_filtConsensus.csv, results/test/test_consensus_reference.txt
+    shell:
+        anchovy consensus results/test/test_allConsensus.fasta 100 500 --depth-min 1 --out-prefix results/test/test
+        (command exited with non-zero exit code)
+Shutting down, this might take some time.
+Exiting because a job execution failed. Look above for error messages
+Complete log(s): /Users/dolanpt/Documents/GitHub/anchovy/.snakemake/log/2026-09-17T164719.026856.snakemake.log
+Elapsed time: 0:00:00.477593
+WorkflowError:
+At least one job did not complete successfully.

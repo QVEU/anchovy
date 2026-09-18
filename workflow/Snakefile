@@ -21,6 +21,8 @@ REFNAME   = config["reference_name"]
 
 RESULTS   = "results/" + SAMPLE
 
+ALL_CONSENSUS = RESULTS + "/" + SAMPLE + "_allConsensus.fasta"
+
 # --------------------------------------------------------------------------- #
 # Input/output location separation (clean data flow)
 # --------------------------------------------------------------------------- #
@@ -62,9 +64,10 @@ def aggregate_cell_consensuses(wildcards):
 # --------------------------------------------------------------------------- #
 # Default target
 # --------------------------------------------------------------------------- #
+# The pipeline now builds through the filtered consensus genotype table.
 rule all:
     input:
-        aggregate_cell_consensuses,
+        RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
 
 
 # --------------------------------------------------------------------------- #
@@ -130,3 +133,43 @@ rule cell_consensus:
     shell:
         "python {input.script} -c {params.cons_threshold} -m {params.min_depth} "
         "--outfolder {params.outfolder} -i {input.sam}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 5: merge_consensus  (gather all per-cell consensuses -> one FASTA)
+# --------------------------------------------------------------------------- #
+# The "gather" counterpart to map_cell's "scatter". Its input is the aggregation
+# function, so Snakemake won't run it until EVERY discovered cell's consensus
+# exists. Concatenates them into the _allConsensus.fasta that `anchovy consensus`
+# consumes. This replaces the `cat ${indir}/*.fasta > ..._allConsensus.fasta`
+# line at the end of AnchovyJob.sh -- but tracked and dependency-correct.
+rule merge_consensus:
+    input:
+        aggregate_cell_consensuses,
+    output:
+        ALL_CONSENSUS,
+    shell:
+        "cat {input} > {output}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 6: consensus  (allConsensus.fasta -> filtered genotype table + reference)
+# --------------------------------------------------------------------------- #
+# One-in-one-out rule calling the `anchovy consensus` CLI. Filters/trims the
+# merged consensuses to the ORF region and calls per-cell genotypes.
+# Produces two outputs (the CLI derives their names from the input via
+# --out-prefix): the filtered genotype CSV and the reference sequence.
+rule consensus:
+    input:
+        fasta=ALL_CONSENSUS,
+    output:
+        csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
+        reference=RESULTS + "/" + SAMPLE + "_consensus_reference.txt",
+    params:
+        start=config["orf_start"],
+        end=config["orf_end"],
+        depth_min=config.get("depth_min", 10),
+        out_prefix=RESULTS + "/" + SAMPLE,
+    shell:
+        "anchovy consensus {input.fasta} {params.start} {params.end} "
+        "--depth-min {params.depth_min} --out-prefix {params.out_prefix}"

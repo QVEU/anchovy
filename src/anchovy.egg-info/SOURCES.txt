@@ -16,6 +16,7 @@ src/anchovy.egg-info/dependency_links.txt
 src/anchovy.egg-info/entry_points.txt
 src/anchovy.egg-info/requires.txt
 src/anchovy.egg-info/top_level.txt
+tests/test_consensus.py
 tests/test_fasta.py
 tests/test_golden.py
 tests/test_io.py

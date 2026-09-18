@@ -1,0 +1,8 @@
+CBC_ID,genotype,sequence,description
+cell01,,ATGAAAGATTTTCGTGGGCATACTTGGGAA,cell01 ref coverage:20 length:30
+cell02,,ATGAAAGATTTTCGTGGGCATACTTGGGAA,cell02 ref coverage:20 length:30
+cell03,13A,ATGAAAGATTTTCGTGGGCATACTTGGGAA,cell03 ref coverage:20 length:30
+cell04,13A,ATGAAAGATTTTCGTGGGCATACTTGGGAA,cell04 ref coverage:20 length:30
+cell05,13A_8T,ATGAAAGATTTTCGTGGGCATACTTGGGAA,cell05 ref coverage:20 length:30
+cell06,6G,ATGAAAGATTTTCGTGGGCATACTTGGGAA,cell06 ref coverage:20 length:30
+cell07,19T,ATGAAAGATTTTCGTGGGCATACTTGGGAA,cell07 ref coverage:20 length:30
