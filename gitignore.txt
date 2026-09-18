@@ -1,0 +1,33 @@
+# --- Pipeline output (generated; never commit) ---
+results/              # per-sample workflow outputs
+.snakemake/           # Snakemake's working/metadata directory
+*_anchovy.csv         # extract output written next to inputs
+*_allConsensus.fasta  # merged consensus written next to inputs
+
+# --- Python packaging / build artifacts ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# --- Test / coverage artifacts ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Environments ---
+.venv/
+venv/
+env/
+
+# --- Editor / OS cruft ---
+.DS_Store
+.idea/
+.vscode/
+
+# --- Test fixture outputs that get regenerated ---
+# (Keep the committed golden references and input fixtures under tests/data/;
+#  ignore only transient outputs a run might drop there.)
+/tmp/
