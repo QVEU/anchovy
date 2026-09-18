@@ -1,0 +1,56 @@
+# .github/workflows/tests.yml
+#
+# Continuous Integration: runs the test suite automatically on every push and
+# pull request, on a fresh machine. This proves the tests pass somewhere other
+# than a developer's laptop (catching missing/undeclared dependencies) and keeps
+# the suite protecting the code over time -- a broken change shows a red X here.
+#
+# The suite needs the conda environment (pysam, biopython, numpy have compiled
+# parts conda manages), so CI mirrors the local two-step setup: build the env
+# from environment.yml, then editable-install the package, then run pytest.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: pytest (conda)
+    runs-on: ubuntu-latest
+
+    # CRITICAL for conda: every step that uses the environment must run under a
+    # login shell so the conda activation from setup-miniconda persists into it.
+    # Omitting this is the most common reason conda CI "can't find" packages.
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up conda environment from environment.yml
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          activate-environment: anchovy   # must match the name: in environment.yml
+          miniforge-version: latest        # provides mamba, a much faster solver
+          use-mamba: true
+          auto-activate-base: false
+
+      - name: Show environment (for debugging failed runs)
+        run: |
+          conda info
+          conda list
+
+      - name: Install the anchovy package (editable)
+        run: pip install -e . --no-deps
+        # --no-deps: all runtime deps already came from conda via environment.yml;
+        # this installs only the package itself, avoiding pip re-resolving them.
+
+      - name: Run the test suite
+        run: pytest -v
