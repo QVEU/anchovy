@@ -97,6 +97,20 @@ def _cmd_consensus(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_annotate(args: argparse.Namespace) -> int:
+    from anchovy import annotate
+
+    result = annotate.run(
+        filt_consensus_csv=args.csv,
+        reference_file=args.reference,
+        out_prefix=args.out_prefix,
+        network=not args.no_network,
+    )
+    for label, path in result["written"].items():
+        print(f"Wrote {path}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
@@ -146,6 +160,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_cons.add_argument("--max-gaps", type=int, dest="max_gaps",
                         help="Max gaps allowed in region (default: 3).")
     p_cons.set_defaults(func=_cmd_consensus)
+
+    # --- annotate ---
+    p_annot = sub.add_parser(
+        "annotate", help="Annotate mutations and build genotype networks.")
+    p_annot.add_argument("csv", help="filtConsensus.csv (from `anchovy consensus`).")
+    p_annot.add_argument("reference", help="Reference sequence file.")
+    p_annot.add_argument("out_prefix", help="Output path prefix.")
+    p_annot.add_argument("--no-network", action="store_true",
+                         help="Skip generating the network CSVs.")
+    p_annot.set_defaults(func=_cmd_annotate)
 
     return parser
 

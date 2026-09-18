@@ -2,6 +2,7 @@ LICENSE
 README.md
 pyproject.toml
 src/anchovy/__init__.py
+src/anchovy/annotate.py
 src/anchovy/barcodes.py
 src/anchovy/cli.py
 src/anchovy/config.py
@@ -16,6 +17,7 @@ src/anchovy.egg-info/dependency_links.txt
 src/anchovy.egg-info/entry_points.txt
 src/anchovy.egg-info/requires.txt
 src/anchovy.egg-info/top_level.txt
+tests/test_annotate.py
 tests/test_consensus.py
 tests/test_fasta.py
 tests/test_golden.py

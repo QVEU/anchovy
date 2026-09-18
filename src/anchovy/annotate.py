@@ -230,6 +230,14 @@ def hap_network_gen(haplocounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
     ref_edges["mutNumTarget"] = 0
 
     single_steps = pd.concat([ss, self_steps, ref_edges], ignore_index=True)
+
+    # Rename the source-node column from "genotype" to "source" so Cytoscape
+    # auto-detects the source/target roles on import (no manual column mapping).
+    # This intentionally diverges from the R output's "genotype" header -- a
+    # deliberate downstream-usability change, scoped to the network CSVs only
+    # (the annotation table keeps "genotype", where that name is correct).
+    single_steps = single_steps.rename(columns={"genotype": "source"})
+    all_entries = all_entries.rename(columns={"genotype": "source"})
     return single_steps, all_entries
 
 

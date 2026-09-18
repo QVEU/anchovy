@@ -120,11 +120,12 @@ def test_network_matches_r_golden(tmp_path):
 
     # Compare numerically (not as text) so int/float rendering can't cause a
     # spurious mismatch; sort rows so ordering differences don't either -- the
-    # SET of edges and their values is what matters.
+    # SET of edges and their values is what matters. Note the source-node column
+    # is "source" (renamed from the R's "genotype" for Cytoscape auto-detection).
     got = pd.read_csv(f"{out_prefix}_epistaticNetwork.csv")
     exp = pd.read_csv(epi_golden)
 
-    sort_cols = ["genotype", "target", "overlap", "mutNumSource", "mutNumTarget"]
+    sort_cols = ["source", "target", "overlap", "mutNumSource", "mutNumTarget"]
     got_s = got.sort_values(sort_cols).reset_index(drop=True)
     exp_s = exp.sort_values(sort_cols).reset_index(drop=True)
 

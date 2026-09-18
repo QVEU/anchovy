@@ -67,7 +67,7 @@ def aggregate_cell_consensuses(wildcards):
 # The pipeline now builds through the filtered consensus genotype table.
 rule all:
     input:
-        RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
+        RESULTS + "/" + SAMPLE + "_annot_v3.csv",
 
 
 # --------------------------------------------------------------------------- #
@@ -173,3 +173,24 @@ rule consensus:
     shell:
         "anchovy consensus {input.fasta} {params.start} {params.end} "
         "--depth-min {params.depth_min} --out-prefix {params.out_prefix}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 7: annotate  (filtConsensus.csv + reference -> annotated table + networks)
+# --------------------------------------------------------------------------- #
+# The final analysis stage: the Python port of the R annotation. Produces the
+# annotated genotype table and the genotype/epistatic network CSVs. Plotting was
+# deliberately dropped (see annotate.py). This is a one-in-two-out rule (three
+# outputs when networks are on).
+rule annotate:
+    input:
+        csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
+        reference=RESULTS + "/" + SAMPLE + "_consensus_reference.txt",
+    output:
+        annot=RESULTS + "/" + SAMPLE + "_annot_v3.csv",
+        epistatic=RESULTS + "/" + SAMPLE + "_epistaticNetwork.csv",
+        genotype=RESULTS + "/" + SAMPLE + "_genotypeNetwork.csv",
+    params:
+        out_prefix=RESULTS + "/" + SAMPLE,
+    shell:
+        "anchovy annotate {input.csv} {input.reference} {params.out_prefix}"
