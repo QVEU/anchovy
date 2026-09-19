@@ -26,6 +26,8 @@ import numpy as np
 import pandas as pd
 from Bio.Seq import Seq
 
+from anchovy import regions as regionmod
+
 
 # --------------------------------------------------------------------------- #
 # Codon / translation
@@ -98,8 +100,53 @@ def annotate_mutation(variant: str, seq: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Haplotype analysis
+# Region-aware annotation (GFF3-driven) -- the generalized path
 # --------------------------------------------------------------------------- #
+def _region_annotations_for_variants(variants: list[str], reference: str,
+                                     regions: list) -> tuple[pd.DataFrame, dict]:
+    """Build the long-format region-annotation table for a set of variant tokens.
+
+    Args:
+        variants: mutation tokens like "13A" (1-based genome pos + mutant base).
+        reference: full reference sequence.
+        regions: list of Region objects (GFF order preserved).
+
+    Returns:
+        (region_table, primary) where region_table is the long-format DataFrame
+        (one row per mutation x containing region) and primary maps each variant
+        token to its PRIMARY-region annotation (first containing region in GFF
+        order), used to fill the existing _annot_v3.csv columns.
+    """
+    long_rows = []
+    primary: dict[str, dict] = {}
+    for tok in variants:
+        mut_base = tok[-1].upper()
+        pos = int(tok[:-1])
+        wt_base = reference[pos - 1].upper() if 0 <= pos - 1 < len(reference) else "N"
+        rows = regionmod.annotate_mutation(regions, pos, wt_base, mut_base, reference)
+        for r in rows:
+            r = dict(r)
+            r["mutants"] = tok           # tie back to the genotype token
+            long_rows.append(r)
+        # primary = first containing region (GFF order); annotate_mutation
+        # returns rows in classify() order, which preserves GFF order.
+        primary[tok] = rows[0]
+    return pd.DataFrame(long_rows), primary
+
+
+def _primary_subname(ann: dict) -> tuple[str, str]:
+    """Reconstruct the legacy (subName, subClass) from a primary-region row.
+
+    Coding -> "{wtAA}{residue}{mutAA}" / Syn|Non-Syn (matches the old frame-1
+    columns exactly when the primary region is a single CDS). Non-coding ->
+    a nucleotide-level name and a "non-coding" class, so the column is populated
+    sensibly for UTR/intergenic variants (which the old code couldn't annotate).
+    """
+    if ann["region_type"] == "coding" and ann["wt_aa"] is not None:
+        return (f"{ann['wt_aa']}{ann['residue']}{ann['mut_aa']}",
+                ann["sub_class"])
+    # non-coding / non-translatable: name by nucleotide change, class label
+    return (f"{ann['wt_base']}{ann['genome_pos']}{ann['mut_base']}", "non-coding")
 def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
     """Unroll genotype strings into per-mutation records with counts/frequencies.
 
@@ -245,12 +292,22 @@ def hap_network_gen(haplocounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
 # Orchestration
 # --------------------------------------------------------------------------- #
 def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
-        network: bool = True) -> dict:
+        network: bool = True, gff: str | None = None) -> dict:
     """Read genotype table + reference, annotate, optionally build network, write CSVs.
 
-    Outputs (matching the R naming):
+    Two annotation modes:
+      - gff is None (legacy): frame-1 amino-acid annotation against the single
+        reference, exactly as before. Preserves existing behavior/goldens.
+      - gff provided (region-aware): annotation flows through regions.py. Writes
+        an additional long-format {out_prefix}_regionAnnotations.csv (one row per
+        mutation x containing region), and fills the legacy _annot_v3.csv
+        annotation columns from each mutation's PRIMARY region (first in GFF
+        order). Network and frequency logic are unchanged in both modes.
+
+    Outputs:
       {out_prefix}_annot_v3.csv
       {out_prefix}_epistaticNetwork.csv, {out_prefix}_genotypeNetwork.csv (if network)
+      {out_prefix}_regionAnnotations.csv (if gff)
     """
     reference = Path(reference_file).read_text().strip().upper()
     cons = pd.read_csv(filt_consensus_csv)
@@ -258,31 +315,60 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
 
     haplocounts = haplo_analysis(cons)
 
-    # annotate each distinct variant token (excluding the reference sentinel)
     variants = sorted({t for g in haplocounts["genotype"].unique()
                        for t in str(g).split("_")} - {"reference", ""})
-    annos = [annotate_mutation(v, reference) for v in variants]
-    anno_rows = [{
-        "pos": a["pos"], "base": a["base"],
-        "ref.codon": a["ref"]["codon"] if a["ref"] else None,
-        "ref.resPos": a["ref"]["resPos"] if a["ref"] else None,
-        "ref.AA": a["ref"]["AA"] if a["ref"] else None,
-        "mut.codon": a["mut"]["codon"] if a["mut"] else None,
-        "mut.resPos": a["mut"]["resPos"] if a["mut"] else None,
-        "mut.AA": a["mut"]["AA"] if a["mut"] else None,
-        "subName": a["subName"], "subClass": a["subClass"],
-    } for a in annos]
-    anno = pd.DataFrame(anno_rows)
+
+    written = {}
+
+    if gff is not None:
+        # --- region-aware path ------------------------------------------------
+        regions = regionmod.parse_gff3(gff)
+        for w in regionmod.validate_regions(regions):
+            print(f"WARNING: {w}")
+
+        region_table, primary = _region_annotations_for_variants(
+            variants, reference, regions)
+
+        # Write the full long-format region annotation table.
+        region_csv = f"{out_prefix}_regionAnnotations.csv"
+        region_table.to_csv(region_csv, index=False)
+        written["regions"] = region_csv
+
+        # Fill the legacy annotation columns from the primary region so
+        # _annot_v3.csv keeps its schema (now frame-correct).
+        anno_rows = []
+        for tok in variants:
+            p = primary[tok]
+            sub_name, sub_class = _primary_subname(p)
+            anno_rows.append({
+                "pos": p["genome_pos"], "base": p["mut_base"],
+                "ref.codon": p["codon_wt"], "ref.AA": p["wt_aa"],
+                "mut.codon": p["codon_mut"], "mut.AA": p["mut_aa"],
+                "mut.resPos": p["residue"],
+                "subName": sub_name, "subClass": sub_class,
+            })
+        anno = pd.DataFrame(anno_rows)
+    else:
+        # --- legacy frame-1 path (unchanged) ---------------------------------
+        annos = [annotate_mutation(v, reference) for v in variants]
+        anno = pd.DataFrame([{
+            "pos": a["pos"], "base": a["base"],
+            "ref.codon": a["ref"]["codon"] if a["ref"] else None,
+            "ref.resPos": a["ref"]["resPos"] if a["ref"] else None,
+            "ref.AA": a["ref"]["AA"] if a["ref"] else None,
+            "mut.codon": a["mut"]["codon"] if a["mut"] else None,
+            "mut.resPos": a["mut"]["resPos"] if a["mut"] else None,
+            "mut.AA": a["mut"]["AA"] if a["mut"] else None,
+            "subName": a["subName"], "subClass": a["subClass"],
+        } for a in annos])
 
     merged = haplocounts.merge(anno, how="left", on=["pos", "base"])
 
-    # genotypeName = "_".join(unique subName) per genotype; geno/haplo freqs
     merged["genotypeName"] = merged.groupby("genotype")["subName"].transform(
         lambda s: "_".join(pd.unique(s.dropna())))
     merged["genoFreq"] = merged.groupby("genotypeName")["CBC_ID"].transform("nunique") / merged["total"]
     merged["haploFreq"] = merged.groupby("genotype")["CBC_ID"].transform("nunique") / merged["total"]
 
-    written = {}
     merged.to_csv(f"{out_prefix}_annot_v3.csv", index=False)
     written["annot"] = f"{out_prefix}_annot_v3.csv"
 

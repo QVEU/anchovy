@@ -130,3 +130,73 @@ def test_network_matches_r_golden(tmp_path):
     exp_s = exp.sort_values(sort_cols).reset_index(drop=True)
 
     pd.testing.assert_frame_equal(got_s, exp_s, check_dtype=False)
+
+
+# --------------------------------------------------------------------------- #
+# Region-aware path: single-CDS GFF reproduces the legacy annotation calls,
+# and additionally writes the long-format region table.
+# --------------------------------------------------------------------------- #
+def test_region_aware_single_cds_matches_legacy_calls(tmp_path):
+    """With a single CDS at position 1, the region-aware path fills the legacy
+    annotation columns with the same subName/subClass the frame-1 path produced."""
+    import pathlib
+    data = pathlib.Path(__file__).parent / "data" / "annot"
+    fixture_csv = data / "filtConsensus.csv"
+    ref = data / "reference.txt"
+    for p in (fixture_csv, ref):
+        if not p.exists():
+            pytest.skip(f"missing {p.name}")
+
+    # Single-CDS GFF spanning the whole 30 nt reference, frame from position 1.
+    gff = tmp_path / "single_cds.gff3"
+    gff.write_text("ref\ttest\tCDS\t1\t30\t.\t+\t0\tID=cds;Name=cds\n")
+
+    out_prefix = str(tmp_path / "py")
+    result = run(str(fixture_csv), str(ref), out_prefix, network=False, gff=str(gff))
+
+    # The legacy annotation columns must match the hand-verified calls.
+    got = result["annot"]
+    def calls(df):
+        d = df[df["mutants"].notna() & (df["mutants"] != "")]
+        return {r["mutants"]: (r["subName"], r["subClass"]) for _, r in d.iterrows()}
+    c = calls(got)
+    assert c["6G"] == ("K2K", "Syn")
+    assert c["13A"] == ("R5S", "Non-Syn")
+    assert c["8T"] == ("D3V", "Non-Syn")
+    assert c["19T"] == ("H7Y", "Non-Syn")
+
+    # The long-format region table was written and has a row per variant.
+    region_csv = pathlib.Path(result["written"]["regions"])
+    assert region_csv.exists()
+    rt = pd.read_csv(region_csv)
+    assert set(rt["mutants"]) == {"6G", "8T", "13A", "19T"}
+    # every row is annotated against the one CDS region
+    assert set(rt["region"]) == {"cds"}
+
+
+def test_region_aware_noncoding_annotation(tmp_path):
+    """A mutation outside the CDS gets a non-coding region row (no amino acid)."""
+    import pathlib
+    data = pathlib.Path(__file__).parent / "data" / "annot"
+    fixture_csv = data / "filtConsensus.csv"
+    ref = data / "reference.txt"
+    for p in (fixture_csv, ref):
+        if not p.exists():
+            pytest.skip(f"missing {p.name}")
+
+    # CDS covers 1-12; declare a 3' UTR over 13-30 so mutation 19T lands in it.
+    gff = tmp_path / "two_region.gff3"
+    gff.write_text(
+        "ref\tt\tCDS\t1\t12\t.\t+\t0\tID=cds;Name=cds\n"
+        "ref\tt\tthree_prime_UTR\t13\t30\t.\t+\t.\tID=3utr;Name=3UTR\n"
+    )
+    out_prefix = str(tmp_path / "py")
+    result = run(str(fixture_csv), str(ref), out_prefix, network=False, gff=str(gff))
+
+    rt = pd.read_csv(pathlib.Path(result["written"]["regions"]))
+    # 19T (genome pos 19) is in the 3' UTR -> non-coding, no amino acid.
+    utr = rt[(rt["mutants"] == "19T") & (rt["region"] == "3UTR")]
+    assert len(utr) == 1
+    assert utr.iloc[0]["region_type"] == "non-coding"
+    assert pd.isna(utr.iloc[0]["wt_aa"])
+    assert utr.iloc[0]["mutation_id"] == "3UTR:C19T"
