@@ -22,3 +22,4 @@ tests/test_consensus.py
 tests/test_fasta.py
 tests/test_golden.py
 tests/test_io.py
+tests/test_regions.py
