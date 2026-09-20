@@ -10,6 +10,7 @@ src/anchovy/consensus.py
 src/anchovy/extract.py
 src/anchovy/fasta.py
 src/anchovy/io.py
+src/anchovy/regions.py
 src/anchovy/schema.py
 src/anchovy.egg-info/PKG-INFO
 src/anchovy.egg-info/SOURCES.txt

@@ -102,28 +102,32 @@ def parse_consensus_fasta(path: str | Path) -> list[ConsensusRecord]:
     return records
 
 
-def select_sequences(records: list[ConsensusRecord], start: int, end: int,
+def select_sequences(records: list[ConsensusRecord],
+                     start: int | None = None, end: int | None = None,
                      config: ConsensusConfig | None = None) -> list[ConsensusRecord]:
-    """Filter and trim records to the target region (pure). (was: selectSeqs)
+    """Filter records by coverage and gap count (pure). (was: selectSeqs)
 
     Keeps a record if coverage > depth_min AND it has fewer than max_gaps '-'
-    characters within [start, end); surviving records are trimmed to [start:end].
-    Reproduces selectSeqs, with thresholds from config instead of literals.
+    characters within the analysis window. Sequences are NOT trimmed -- they are
+    kept full-length so variant positions stay genome-relative (required for
+    region annotation). The window only bounds the GAP CHECK (and later, which
+    positions get called), never renumbers coordinates.
+
+    Args:
+        start, end: optional 0-based analysis window [start, end). If both None,
+            the whole sequence is the window (whole-reference analysis).
     """
     config = config or ConsensusConfig()
     kept: list[ConsensusRecord] = []
     for r in records:
         depth = r.coverage if r.coverage is not None else 0
-        gaps_in_region = sum(1 for i in range(start, end) if r.seq[i] == "-")
+        lo = 0 if start is None else start
+        hi = len(r.seq) if end is None else end
+        gaps_in_region = sum(1 for i in range(lo, min(hi, len(r.seq)))
+                             if r.seq[i] == "-")
         if depth > config.depth_min and gaps_in_region < config.max_gaps_in_region:
-            trimmed = ConsensusRecord(
-                cbc_id=r.cbc_id,
-                seq=r.seq[start:end],
-                description=r.description,
-                coverage=r.coverage,
-                length=r.length,
-            )
-            kept.append(trimmed)
+            # keep full-length; no trimming
+            kept.append(r)
     return kept
 
 
@@ -142,67 +146,84 @@ def _column_consensus(sequences: list[str]) -> str:
     return "".join(out)
 
 
-def genotype_summary(sequences: list[str], reference: str | None = None
+def genotype_summary(sequences: list[str], reference: str | None = None,
+                     window: tuple[int, int] | None = None
                      ) -> tuple[list[str], str]:
     """Call per-sequence genotypes against a reference (PURE, the core).
 
-    This is the unified replacement for the original's if/else. When `reference`
-    is None, the reference is the computed per-column consensus (the original's
-    working if-branch); otherwise the supplied reference is used (the new,
-    previously-broken else-branch, now functional).
+    Sequences are full-length (untrimmed); variant positions are reported as
+    1-based GENOME coordinates, so downstream region annotation can place each
+    variant in its region(s).
 
     Args:
-        sequences: equal-length aligned sequences (already trimmed to the region).
-        reference: optional reference sequence of the same length. If None, the
-            per-column consensus of `sequences` is computed and used.
+        sequences: equal-length aligned full-length sequences.
+        reference: optional reference of the same length. If None, the per-column
+            consensus is computed and used.
+        window: optional (start, end) 0-based half-open range restricting WHICH
+            columns are eligible to be called (to exclude ragged/low-coverage
+            flanks). Positions are still numbered genome-relative regardless.
+            If None, the whole sequence is eligible.
 
     Returns:
-        (genotypes, reference_used) where genotypes[i] is the "_"-joined mutation
-        token string for sequences[i], and reference_used is the reference the
-        genotypes were called against.
-
-    Variant sites are columns where more than one character appears across
-    `sequences`; a token is emitted for a sequence at a variant site only where
-    it differs from the reference. Positions are 1-based within the region.
+        (genotypes, reference_used). genotypes[i] is the "_"-joined token string
+        for sequences[i]; tokens are "{genomePos}{base}" with genomePos 1-based.
     """
     if not sequences:
         return [], reference or ""
 
     columns = np.transpose([list(s) for s in sequences])
-    variant_sites = [i for i in range(len(columns))
+    n_cols = len(columns)
+
+    lo = 0 if window is None else max(0, window[0])
+    hi = n_cols if window is None else min(n_cols, window[1])
+
+    # variant sites: columns (within the eligible window) where >1 char appears
+    variant_sites = [i for i in range(lo, hi)
                      if len(np.unique(columns[i])) > 1]
 
     ref = reference if reference is not None else _column_consensus(sequences)
 
     genotypes = []
     for seq in sequences:
+        # position i (0-based column) -> 1-based genome coordinate (i+1)
         tokens = [f"{i + 1}{seq[i]}" for i in variant_sites if seq[i] != ref[i]]
         genotypes.append("_".join(tokens))
     return genotypes, ref
 
 
-def run(fasta: str, start: int, end: int, reference: str | None = None,
+def run(fasta: str, start: int | None = None, end: int | None = None,
+        reference: str | None = None,
         config: ConsensusConfig | None = None,
         out_prefix: str | None = None) -> dict:
-    """Full consensus stage: read, filter/trim, genotype, and write outputs.
+    """Full consensus stage: read, filter, genotype (genome-relative), write.
 
     Args:
         fasta: path to *_allConsensus.fasta.
-        start, end: region of interest (nt).
-        reference: optional reference; None computes the consensus (original path).
+        start, end: OPTIONAL analysis window (1-based inclusive, as a user would
+            specify). Restricts which positions are called (to exclude ragged
+            flanks) but does NOT trim sequences or renumber coordinates -- variant
+            positions are always 1-based genome coordinates. If both None, the
+            whole reference is analyzed (so non-coding variants surface).
+        reference: optional reference; None computes the consensus.
         config: ConsensusConfig; defaults to ConsensusConfig().
-        out_prefix: base path for outputs; defaults to the fasta path with
-            '_allConsensus.fasta' stripped (matching the original's naming).
+        out_prefix: base path for outputs.
 
-    Returns:
-        dict with 'reference', 'records' (list of dicts with CBC_ID/genotype/
-        sequence/description), and the paths written.
+    Returns dict with 'reference', 'records', and written paths.
     """
     config = config or ConsensusConfig()
     records = parse_consensus_fasta(fasta)
-    kept = select_sequences(records, start, end, config)
 
-    genotypes, ref_used = genotype_summary([r.seq for r in kept], reference)
+    # Convert optional 1-based inclusive window to 0-based half-open for internals.
+    win0 = None
+    if start is not None and end is not None:
+        win0 = (start - 1, end)
+
+    slice_start = None if win0 is None else win0[0]
+    slice_end = None if win0 is None else win0[1]
+    kept = select_sequences(records, slice_start, slice_end, config)
+
+    genotypes, ref_used = genotype_summary(
+        [r.seq for r in kept], reference, window=win0)
 
     rows = [{
         ConsensusColumns.CBC_ID: r.cbc_id,

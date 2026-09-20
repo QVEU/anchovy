@@ -120,18 +120,21 @@ def test_select_drops_too_many_gaps():
     assert [r.cbc_id for r in kept] == ["clean"]
 
 
-def test_select_trims_to_region():
+def test_select_keeps_full_length_no_trim():
+    # Sequences are NOT trimmed anymore -- kept full-length so positions stay
+    # genome-relative. The window only bounds the gap check, not the sequence.
     recs = [_rec("x", "AACCGGTT", 50)]
     kept = select_sequences(recs, start=2, end=6)
-    assert kept[0].seq == "CCGG"
+    assert kept[0].seq == "AACCGGTT"      # full-length, untrimmed
 
 
 def test_select_gap_count_only_within_region():
-    # Gaps OUTSIDE the region don't count toward the filter.
+    # Gaps OUTSIDE the window don't count toward the filter, but the sequence is
+    # kept full-length (not trimmed to the window).
     recs = [_rec("edge", "---AAAA---", 50)]   # gaps at edges, none in [3,7)
     kept = select_sequences(recs, start=3, end=7)
     assert [r.cbc_id for r in kept] == ["edge"]
-    assert kept[0].seq == "AAAA"
+    assert kept[0].seq == "---AAAA---"    # full-length, untrimmed
 
 
 # --------------------------------------------------------------------------- #
@@ -153,29 +156,52 @@ def test_parse_fasta_reads_records_and_metadata(tmp_path):
 # --------------------------------------------------------------------------- #
 # GOLDEN: reference=None path reproduces the frozen, hand-verified output
 # --------------------------------------------------------------------------- #
-def test_consensus_matches_golden(data_dir, golden_dir, tmp_run_dir):
-    """run() with reference=None reproduces the original ConsensusTool output."""
+def test_consensus_whole_reference_genome_coords(data_dir, golden_dir, tmp_run_dir):
+    """run() with no window analyzes the WHOLE reference and reports variants at
+    genome-relative (1-based) positions.
+
+    Verified expected values (hand-computed against the fixture): the consensus
+    is the full 30 nt reference, and genotypes are the same physical variants the
+    old trimmed run found, now at genome coordinates:
+        old 3T/8A/18T  ->  genome 6T / 11A / 21G
+    """
     fixture = data_dir / "consensus_test_allConsensus.fasta"
-    ref_golden = golden_dir / "consensus_reference.txt"
-    csv_golden = golden_dir / "consensus_genotypes.csv"
-    for p in (fixture, ref_golden, csv_golden):
-        if not p.exists():
-            pytest.skip(f"missing {p.name}; run the fixture/golden generators first.")
+    if not fixture.exists():
+        pytest.skip("missing consensus fixture; run make_consensus_fixtures.py first.")
 
-    # Run into a temp prefix so we don't clobber anything.
     out_prefix = str(tmp_run_dir / "consensus_test")
-    result = run(fasta=str(fixture), start=3, end=27, reference=None,
-                 out_prefix=out_prefix)
+    # No start/end -> whole-reference analysis (the new default).
+    result = run(fasta=str(fixture), reference=None, out_prefix=out_prefix)
 
-    # 1. Reference matches the frozen consensus.
-    expected_ref = ref_golden.read_text().strip()
-    assert result["reference"] == expected_ref
+    # Consensus is the full 30 nt reference (not the old 24 nt trimmed region).
+    assert len(result["reference"]) == 30
 
-    # 2. Per-CBC genotypes match the frozen table.
-    expected = {}
-    with open(csv_golden) as fh:
-        for row in csv.DictReader(fh):
-            expected[row["CBC_ID"]] = row["genotype"] or ""
-
+    # Genotypes are genome-relative and match the hand-verified expectation.
     got = {r["CBC_ID"]: r["genotype"] for r in result["records"]}
+    expected = {
+        "AAACCCAAGAAACACT": "",
+        "AAACCCAAGAAACCAT": "6T",
+        "AAACCCAAGAAACCCA": "11A",
+        "AAACCCAAGAAACCTG": "6T_21G",
+        "AAACCCAAGAAACGGG": "",
+    }
     assert got == expected
+
+
+def test_consensus_window_restricts_calls_but_keeps_genome_coords(data_dir, tmp_run_dir):
+    """An optional window restricts WHICH positions are called (excluding flanks)
+    but positions remain genome-relative and sequences are not trimmed."""
+    fixture = data_dir / "consensus_test_allConsensus.fasta"
+    if not fixture.exists():
+        pytest.skip("missing consensus fixture.")
+
+    out_prefix = str(tmp_run_dir / "consensus_win")
+    # Window 1-based inclusive [10, 30]: should EXCLUDE the variant at genome 6,
+    # keep those at 11 and 21 -- still numbered genome-relative.
+    result = run(fasta=str(fixture), start=10, end=30, reference=None,
+                 out_prefix=out_prefix)
+    got = {r["CBC_ID"]: r["genotype"] for r in result["records"]}
+    # variant 6T is now outside the window -> dropped; 11A and 21G remain.
+    assert got["AAACCCAAGAAACCAT"] == ""          # only had 6T, now excluded
+    assert got["AAACCCAAGAAACCCA"] == "11A"       # inside window, genome coord
+    assert got["AAACCCAAGAAACCTG"] == "21G"       # 6T excluded, 21G kept
