@@ -50,7 +50,15 @@ def codon(seq: str, pos: int) -> dict:
 
     # Translate full sequence with the standard genetic code. Biopython's
     # translate matches R's Biostrings translate for the standard table.
-    protein = str(Seq(seq).translate())
+    #
+    # Gap characters are mapped to 'N' first. Biopython RAISES on a codon like
+    # '--A', so without this a reference carrying gaps crashes the whole stage --
+    # which is reachable now that the consensus stage can keep the whole
+    # reference, whose uncovered flanks sam2consensus gap-fills. 'N' translates
+    # to 'X' ("not translatable"), which is the honest answer for a position with
+    # no coverage. On a gap-free reference this substitution does nothing, so
+    # every frozen golden is untouched.
+    protein = str(Seq(seq.replace("-", "N")).translate())
 
     res = _residue_of(pos)
     os_ = pos % 3
