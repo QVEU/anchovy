@@ -116,6 +116,7 @@ def _cmd_annotate(args: argparse.Namespace) -> int:
         out_prefix=args.out_prefix,
         network=not args.no_network,
         gff=args.gff,
+        self_edges=args.self_edges,
     )
     for label, path in result["written"].items():
         print(f"Wrote {path}")
@@ -192,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_annot.add_argument("out_prefix", help="Output path prefix.")
     p_annot.add_argument("--no-network", action="store_true",
                          help="Skip generating the network CSVs.")
+    p_annot.add_argument("--self-edges", dest="self_edges", action="store_true",
+                         help="Keep each genotype's edge to itself in the "
+                              "epistatic network. Off by default: Cytoscape "
+                              "draws them as a loop on every node and no node "
+                              "is lost by removing them. Use this to reproduce "
+                              "the original R output exactly.")
     p_annot.add_argument("--gff",
                          help="GFF3 of genome regions. Enables region-aware "
                               "annotation: mutation positions are treated as "

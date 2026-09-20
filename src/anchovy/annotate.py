@@ -168,17 +168,47 @@ def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 # Network generation
 # --------------------------------------------------------------------------- #
-def hap_network_gen(haplocounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def hap_network_gen(haplocounts: pd.DataFrame,
+                    self_edges: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Genotype-overlap network. Port of R hapNetworkGen().
 
     Returns (single_steps, all_entries) as DataFrames matching the columns of
     the R _epistaticNetwork.csv and _genotypeNetwork.csv respectively.
 
-    QUIRKS reproduced faithfully from the R (not bugs to fix here):
-      - the `count` column is rowSums(countMatrix)/rowSums(binaryMatrix) with the
-        count-matrix aggregation defaulting to occurrence counts (the R dcast
-        'fun.aggregate defaulting to length()' warning), so it is a ratio, not a
-        simple cell count.
+    Args:
+        haplocounts: the long table from haplo_analysis().
+        self_edges: whether to keep edges from a genotype to ITSELF in the
+            single-step (epistatic) network. Default False, since Cytoscape
+            draws each one as a loop on the node and they carry no information
+            there. Pass True for output byte-comparable with the R.
+
+    SELF-EDGES, and why only the epistatic network drops them
+    ---------------------------------------------------------
+    The pairwise traversal compares every genotype with itself, so each one
+    gets an i == j row. In the epistatic network those are pure decoration:
+    every genotype is also reachable by a step edge or by the reference edge
+    below, so dropping them loses no node. Measured on the annotation fixture:
+    6 of 10 rows are self-edges and removing them loses nothing.
+
+    In all_entries they are LOAD-BEARING and are therefore always kept. A
+    genotype sharing no mutation with any other appears there ONLY as its own
+    self-edge, so dropping them deletes it from the graph outright -- on the
+    same fixture that is 3 of 5 genotypes, including the reference. If you want
+    a self-edge-free genotype network, take the node list from
+    {prefix}_genotypeNodes.csv, which is complete either way, and filter the
+    edges yourself knowing what it costs.
+
+    THE `count` COLUMN is the number of cells carrying that genotype, despite
+    being computed the R's roundabout way as
+    rowSums(countMatrix)/rowSums(binaryMatrix) -- the count matrix aggregation
+    defaults to occurrence counts (the R dcast 'fun.aggregate defaulting to
+    length()' warning). It reduces exactly: every cell with genotype g
+    contributes one row per mutation in g, so for n cells and k distinct
+    mutations it is (n*k)/k = n. An earlier version of this docstring called it
+    "a ratio, not a simple cell count", which was wrong. It is pinned against
+    the node table's nCells in tests/test_network_nodes.py.
+
+    QUIRK still reproduced faithfully from the R (not a bug to fix here):
       - reference genotypes get a duplicated self/edge row with mutNumTarget=0.
     """
     # binary presence matrix: genotype x mutants, 1 if freq>0 for that pair.
@@ -248,6 +278,15 @@ def hap_network_gen(haplocounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
     ref_edges["mutNumTarget"] = 0
 
     single_steps = pd.concat([ss, self_steps, ref_edges], ignore_index=True)
+    if not self_edges:
+        # Filter the RESULT, not its inputs. Self-loops arrive by two routes:
+        # self_steps, and the reference's own ref_edges row (the R quirk noted
+        # above re-points a 1-mutation self-step at "reference", which for the
+        # reference genotype is itself). Omitting self_steps from the concat
+        # would leave that second one behind.
+        single_steps = single_steps[
+            single_steps["genotype"] != single_steps["target"]
+        ].reset_index(drop=True)
 
     # Rename the source-node column from "genotype" to "source" so Cytoscape
     # auto-detects the source/target roles on import (no manual column mapping).
@@ -431,7 +470,8 @@ def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
 # Orchestration
 # --------------------------------------------------------------------------- #
 def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
-        network: bool = True, gff: str | None = None) -> dict:
+        network: bool = True, gff: str | None = None,
+        self_edges: bool = False) -> dict:
     """Read genotype table + reference, annotate, optionally build network, write CSVs.
 
     Outputs (matching the R naming):
@@ -521,7 +561,8 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
 
     nodes = None
     if network:
-        single_steps, all_entries = hap_network_gen(haplocounts)
+        single_steps, all_entries = hap_network_gen(haplocounts,
+                                                    self_edges=self_edges)
         single_steps.to_csv(f"{out_prefix}_epistaticNetwork.csv", index=False)
         all_entries.to_csv(f"{out_prefix}_genotypeNetwork.csv", index=False)
         written["epistatic"] = f"{out_prefix}_epistaticNetwork.csv"
