@@ -53,8 +53,18 @@ SAMPLE="${SAMPLE:-$SRR}"
 DATA_DIR="${DATA_DIR:-examples/eva71_sra/data}"
 THREADS="${THREADS:-4}"
 
-# Optional: cap the number of reads, to try the example without pulling the full
-# run. Empty means all reads. e.g. MAX_READS=200000
+# TWO WAYS TO WORK ON LESS DATA. They are not interchangeable:
+#
+#   MAX_SPOTS  limits the DOWNLOAD. Only this many spots are transferred, so
+#              this is the one that makes the example quick to iterate on.
+#              Needs fastq-dump (ships with sra-tools alongside fasterq-dump).
+#
+#   MAX_READS  trims an ALREADY-DOWNLOADED FASTQ before mapping. It saves
+#              mapping time only -- the whole run has already come down the
+#              wire by then, so it does nothing for the slow part.
+#
+# Start with MAX_SPOTS. e.g. MAX_SPOTS=50000 bash examples/eva71_sra/fetch.sh
+MAX_SPOTS="${MAX_SPOTS:-}"
 MAX_READS="${MAX_READS:-}"
 
 # --------------------------------------------------------------------------- #
@@ -160,16 +170,47 @@ fi
 say "4/6  Reads  ($SRR)"
 if [ -s "$FASTQ" ]; then
     echo "    $FASTQ exists, skipping."
+elif [ -n "$MAX_SPOTS" ]; then
+    # fastq-dump -X stops the transfer after N spots, so this is genuinely a
+    # partial download rather than a full one that is then trimmed.
+    #
+    # fasterq-dump has no supported equivalent. It does carry --row-limit, but
+    # its own source says "do not advertize row-limit" and the limit applies
+    # PER THREAD, so the count you get back depends on --threads. Not something
+    # to build a documented option on.
+    command -v fastq-dump >/dev/null 2>&1 \
+        || die "MAX_SPOTS needs fastq-dump, which ships with sra-tools next to
+  fasterq-dump. Either install it, or unset MAX_SPOTS to download the full run."
+    echo "    downloading the first $MAX_SPOTS spots only"
+    fastq-dump -X "$MAX_SPOTS" --stdout "$SRR" > "$FASTQ.part" \
+        || die "fastq-dump failed. If it rejected -X, your sra-tools is unusual;
+  unset MAX_SPOTS to fall back to a full fasterq-dump download."
+    mv "$FASTQ.part" "$FASTQ"
 else
-    echo "    This is a real sequencing run; expect a long download."
+    echo "    downloading the FULL run; expect this to take a while."
+    echo "    (set MAX_SPOTS=50000 to pull a small slice instead)"
     fasterq-dump "$SRR" --concatenate-reads --threads "$THREADS" \
                  --outdir "$DATA_DIR" --outfile "$(basename "$FASTQ")" --progress
-    [ -s "$FASTQ" ] || die "fasterq-dump produced no reads for $SRR."
 fi
-echo "    $(( $(wc -l < "$FASTQ") / 4 )) reads"
+
+[ -s "$FASTQ" ] || die "no reads were downloaded for $SRR."
+head -c1 "$FASTQ" | grep -q '@' \
+    || die "downloaded reads are not FASTQ -- first line:
+  $(head -1 "$FASTQ")"
+
+FASTQ_READS=$(( $(wc -l < "$FASTQ") / 4 ))
+echo "    $FASTQ_READS reads"
+
+# If a spot limit was asked for, say whether it was honoured. A tool that
+# ignored -X would otherwise just look like a slow download.
+if [ -n "$MAX_SPOTS" ] && [ "$FASTQ_READS" -gt "$(( MAX_SPOTS * 2 ))" ]; then
+    echo "    note: asked for $MAX_SPOTS spots but got $FASTQ_READS reads."
+    echo "          More than one read per spot is normal; far more than that"
+    echo "          suggests the spot limit was not applied."
+fi
 
 # --------------------------------------------------------------------------- #
-say "5/6  Optional subsample"
+say "5/6  Optional subsample (mapping only -- see MAX_SPOTS for the download)"
 MAP_INPUT="$FASTQ"
 if [ -n "$MAX_READS" ]; then
     SUB="$DATA_DIR/${SRR}.subsample.fastq"

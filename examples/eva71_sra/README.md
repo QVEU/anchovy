@@ -85,13 +85,33 @@ and if that looks right, do it:
 snakemake -s workflow/Snakefile --configfile examples/eva71_sra/config.yaml --cores 8
 ```
 
-This is a real sequencing run, so step 1 takes a while — the reads dominate;
-the whitelist is 12 MB and the reference is trivial. To try the example on a
-slice of it first:
+### Start small
+
+The reads dominate step 1 — the whitelist is 12 MB and the reference is
+trivial, but the sequencing run is a real one and downloading all of it takes a
+long time. For a first pass, pull a slice instead:
+
+```bash
+MAX_SPOTS=50000 bash examples/eva71_sra/fetch.sh
+```
+
+`MAX_SPOTS` limits the **download**: only that many spots come down the wire.
+That's the knob that makes this quick to iterate on. Fifty thousand is enough to
+see cells, genotypes and annotations appear; drop to a few thousand if you just
+want to watch the pipeline run end to end.
+
+There's a second, different knob:
 
 ```bash
 MAX_READS=200000 bash examples/eva71_sra/fetch.sh
 ```
+
+`MAX_READS` trims a FASTQ you've **already downloaded** before mapping. It saves
+mapping time only — by the time it applies, the whole run has come down. Use it
+when you have the full data and want a faster mapping pass, not to shorten the
+download.
+
+When you want the real thing, delete the FASTQ and re-run with neither set.
 
 `fetch.sh` prints the reference name it found when it finishes. It should match
 `reference_name` in `config.yaml`; the version suffix on an accession can change
