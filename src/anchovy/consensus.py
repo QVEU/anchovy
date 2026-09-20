@@ -35,6 +35,14 @@ Reproduces genotypeSummary's if-branch exactly:
     sequence differs from the per-column consensus, 1-based within the trimmed region
 Filtering reproduces selectSeqs: keep depth > depth_min AND (< max_gaps '-' in the
 trimmed region), then trim to [start:end].
+
+3. WHOLE-REFERENCE MODE (run(trim=False)) -- added for region-aware annotation.
+   The legacy path trims to the ORF and renumbers positions from 1 within it,
+   which throws away the genome coordinates the GFF3-driven annotate stage needs.
+   With trim=False the full reference length is kept, so genotype token positions
+   ARE genome coordinates, and start/end degrade from a cut to an optional
+   analysis window. Legacy remains the default, so every frozen golden still
+   passes unchanged.
 """
 
 from __future__ import annotations
@@ -102,28 +110,52 @@ def parse_consensus_fasta(path: str | Path) -> list[ConsensusRecord]:
     return records
 
 
-def select_sequences(records: list[ConsensusRecord], start: int, end: int,
-                     config: ConsensusConfig | None = None) -> list[ConsensusRecord]:
-    """Filter and trim records to the target region (pure). (was: selectSeqs)
+def select_sequences(records: list[ConsensusRecord], start: int | None = None,
+                     end: int | None = None,
+                     config: ConsensusConfig | None = None,
+                     trim: bool = True) -> list[ConsensusRecord]:
+    """Filter (and in legacy mode trim) records to the target region (pure).
 
-    Keeps a record if coverage > depth_min AND it has fewer than max_gaps '-'
-    characters within [start, end); surviving records are trimmed to [start:end].
-    Reproduces selectSeqs, with thresholds from config instead of literals.
+    (was: selectSeqs)
+
+    Two modes, selected by `trim`:
+
+    trim=True (DEFAULT, the legacy path)
+        Reproduces selectSeqs exactly: keep a record if coverage > depth_min AND
+        it has fewer than max_gaps '-' characters within [start, end), then cut
+        the sequence down to [start:end]. Downstream positions are therefore
+        numbered from 1 WITHIN the trimmed region.
+
+    trim=False (whole-reference mode)
+        The sequence is kept at full reference length, so downstream positions
+        are genome coordinates that never renumber. `start`/`end` become an
+        optional ANALYSIS WINDOW rather than a cut.
+
+    THE GAP FILTER IS WINDOW-CONDITIONAL, and that is load-bearing. sam2consensus
+    emits a full-reference-length consensus and gap-fills every position that had
+    no read coverage, so a whole-genome gap count is dominated by the ragged
+    uncovered flanks. Applying max_gaps to that count filters out every cell. The
+    filter is therefore applied only when a window is actually given -- which is
+    the point of having a window: it names the covered core to judge cells on.
     """
     config = config or ConsensusConfig()
+    has_window = start is not None and end is not None
     kept: list[ConsensusRecord] = []
     for r in records:
         depth = r.coverage if r.coverage is not None else 0
-        gaps_in_region = sum(1 for i in range(start, end) if r.seq[i] == "-")
-        if depth > config.depth_min and gaps_in_region < config.max_gaps_in_region:
-            trimmed = ConsensusRecord(
-                cbc_id=r.cbc_id,
-                seq=r.seq[start:end],
-                description=r.description,
-                coverage=r.coverage,
-                length=r.length,
-            )
-            kept.append(trimmed)
+        if depth <= config.depth_min:
+            continue
+        if has_window:
+            gaps_in_region = sum(1 for i in range(start, end) if r.seq[i] == "-")
+            if gaps_in_region >= config.max_gaps_in_region:
+                continue
+        kept.append(ConsensusRecord(
+            cbc_id=r.cbc_id,
+            seq=r.seq[start:end] if trim else r.seq,
+            description=r.description,
+            coverage=r.coverage,
+            length=r.length,
+        ))
     return kept
 
 
@@ -142,8 +174,9 @@ def _column_consensus(sequences: list[str]) -> str:
     return "".join(out)
 
 
-def genotype_summary(sequences: list[str], reference: str | None = None
-                     ) -> tuple[list[str], str]:
+def genotype_summary(sequences: list[str], reference: str | None = None,
+                     window: tuple[int, int] | None = None,
+                     skip_gaps: bool = False) -> tuple[list[str], str]:
     """Call per-sequence genotypes against a reference (PURE, the core).
 
     This is the unified replacement for the original's if/else. When `reference`
@@ -152,9 +185,17 @@ def genotype_summary(sequences: list[str], reference: str | None = None
     previously-broken else-branch, now functional).
 
     Args:
-        sequences: equal-length aligned sequences (already trimmed to the region).
+        sequences: equal-length aligned sequences. In the legacy path these are
+            already trimmed to the region; in whole-reference mode they are full
+            reference length, so token positions ARE genome coordinates.
         reference: optional reference sequence of the same length. If None, the
             per-column consensus of `sequences` is computed and used.
+        window: optional (lo, hi) 0-based half-open ANALYSIS WINDOW. Only columns
+            inside it may become variant sites. It restricts WHICH columns are
+            called, never how they are NUMBERED -- positions stay 1-based over
+            the sequences as given, so a window never renumbers anything.
+        skip_gaps: when True, never emit a token at a column where either the
+            sequence or the reference holds a '-'. See the note below.
 
     Returns:
         (genotypes, reference_used) where genotypes[i] is the "_"-joined mutation
@@ -163,46 +204,83 @@ def genotype_summary(sequences: list[str], reference: str | None = None
 
     Variant sites are columns where more than one character appears across
     `sequences`; a token is emitted for a sequence at a variant site only where
-    it differs from the reference. Positions are 1-based within the region.
+    it differs from the reference. Positions are 1-based over the input columns.
+
+    WHY skip_gaps EXISTS (whole-reference mode only, hence default False)
+    --------------------------------------------------------------------
+    sam2consensus gap-fills positions with no read coverage. Once the reference
+    is kept whole, those '-' columns vary across cells purely because cells were
+    sequenced over different spans. Calling "201-" (cell has a gap) or "201A"
+    against a '-' reference (reference has the gap) reports a coverage
+    difference as a substitution, which it is not. A substitution call requires
+    a real base on both sides, so both directions are skipped. The legacy
+    trimmed path keeps its original behavior untouched.
     """
     if not sequences:
         return [], reference or ""
 
     columns = np.transpose([list(s) for s in sequences])
-    variant_sites = [i for i in range(len(columns))
+    ncols = len(columns)
+    lo, hi = (0, ncols) if window is None else (max(0, window[0]), min(ncols, window[1]))
+    variant_sites = [i for i in range(lo, hi)
                      if len(np.unique(columns[i])) > 1]
 
     ref = reference if reference is not None else _column_consensus(sequences)
 
     genotypes = []
     for seq in sequences:
-        tokens = [f"{i + 1}{seq[i]}" for i in variant_sites if seq[i] != ref[i]]
+        tokens = []
+        for i in variant_sites:
+            if seq[i] == ref[i]:
+                continue
+            if skip_gaps and (seq[i] == "-" or ref[i] == "-"):
+                continue
+            tokens.append(f"{i + 1}{seq[i]}")
         genotypes.append("_".join(tokens))
     return genotypes, ref
 
 
-def run(fasta: str, start: int, end: int, reference: str | None = None,
+def run(fasta: str, start: int | None = None, end: int | None = None,
+        reference: str | None = None,
         config: ConsensusConfig | None = None,
-        out_prefix: str | None = None) -> dict:
-    """Full consensus stage: read, filter/trim, genotype, and write outputs.
+        out_prefix: str | None = None,
+        trim: bool = True) -> dict:
+    """Full consensus stage: read, filter (trim), genotype, and write outputs.
 
     Args:
         fasta: path to *_allConsensus.fasta.
-        start, end: region of interest (nt).
+        start, end: region of interest (nt, 0-based half-open). Their meaning
+            depends on `trim` -- see below.
         reference: optional reference; None computes the consensus (original path).
         config: ConsensusConfig; defaults to ConsensusConfig().
         out_prefix: base path for outputs; defaults to the fasta path with
             '_allConsensus.fasta' stripped (matching the original's naming).
+        trim: True (default) keeps the legacy behavior exactly -- cut every
+            sequence to [start:end] and number genotype tokens from 1 within that
+            region. False selects WHOLE-REFERENCE MODE: sequences stay full
+            length, token positions are genome coordinates that never renumber,
+            and start/end (if given) act only as an analysis window that excludes
+            ragged flanks from variant calling.
 
     Returns:
         dict with 'reference', 'records' (list of dicts with CBC_ID/genotype/
         sequence/description), and the paths written.
+
+    WHOLE-REFERENCE MODE is what makes region-aware annotation possible: the
+    annotate stage needs genome coordinates to look mutations up in a GFF3, and
+    the legacy trimmed path renumbers positions relative to the ORF, destroying
+    exactly that information.
     """
     config = config or ConsensusConfig()
     records = parse_consensus_fasta(fasta)
-    kept = select_sequences(records, start, end, config)
+    kept = select_sequences(records, start, end, config, trim=trim)
 
-    genotypes, ref_used = genotype_summary([r.seq for r in kept], reference)
+    if trim:
+        genotypes, ref_used = genotype_summary([r.seq for r in kept], reference)
+    else:
+        window = (start, end) if start is not None and end is not None else None
+        genotypes, ref_used = genotype_summary(
+            [r.seq for r in kept], reference, window=window, skip_gaps=True)
 
     rows = [{
         ConsensusColumns.CBC_ID: r.cbc_id,
