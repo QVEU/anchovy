@@ -55,8 +55,29 @@ TEMPLATE_LEN = 600
 CORE_START = 50
 CORE_END = 550
 READS_PER_CELL = 6
-VARIANT_ABS_POS = 200            # absolute template coordinate of planted variant
+VARIANT_ABS_POS = 200            # 0-based template index of the planted variant
 NT = "ACGT"
+
+# --- Region model for the fixture (regions.gff3) --------------------------- #
+# 1-based inclusive genome coordinates, GFF3 convention. Deliberately chosen so
+# the fixture exercises the thing the legacy annotator got WRONG: the CDS does
+# NOT start at genome position 1, so correct residue numbering is only possible
+# if the annotator reads the frame from the GFF instead of assuming frame 1.
+#
+#   5'UTR   1-149     non-coding
+#   CDS   150-500     coding, + strand, phase 0  -> 351 nt = 117 codons
+#   3'UTR 501-600     non-coding
+#
+# The planted variant sits at genome 201 (VARIANT_ABS_POS + 1), which is inside
+# the CDS at codon frame position 201-150+1 = 52 -> residue 18, first base of
+# its codon. Hand-verified before this fixture was written.
+CDS_START = 150
+CDS_END = 500
+REGION_ROWS = [
+    ("five_prime_UTR", 1,         CDS_START - 1, ".", "ID=5UTR;Name=5UTR"),
+    ("CDS",            CDS_START, CDS_END,       "0", "ID=poly;Name=polyprotein"),
+    ("three_prime_UTR", CDS_END + 1, TEMPLATE_LEN, ".", "ID=3UTR;Name=3UTR"),
+]
 
 
 def build():
@@ -101,6 +122,14 @@ def build():
     cellA_consensus = lead + core + tail
     cellB_consensus = lead + "".join(cb) + tail
 
+    # --- Region annotations (regions.gff3) ---------------------------------- #
+    gff_lines = ["##gff-version 3"]
+    for ftype, gstart, gend, phase, attrs in REGION_ROWS:
+        gff_lines.append(
+            "\t".join(["testref", "anchovy", ftype, str(gstart), str(gend),
+                        ".", "+", phase, attrs]))
+    (DATA / "regions.gff3").write_text("\n".join(gff_lines) + "\n")
+
     expected = {
         "template_ref_name": "testref",
         "template_len": TEMPLATE_LEN,
@@ -114,11 +143,21 @@ def build():
             "cellA": cellA_consensus,
             "cellB": cellB_consensus,
         },
+        # Region model + the region-aware call for the planted variant, so the
+        # annotation tests assert against a prediction rather than whatever the
+        # code happens to emit. Hand-verified: genome 201 is CDS frame position
+        # 52 -> residue 18, codon TGT -> AGT, C -> S, non-synonymous.
+        "cds_start": CDS_START,
+        "cds_end": CDS_END,
+        "variant_genome_pos": VARIANT_ABS_POS + 1,
+        "variant_region": "polyprotein",
+        "variant_residue": 18,
     }
     (DATA / "mapping_expected.json").write_text(json.dumps(expected, indent=2))
 
     print(f"wrote {DATA}/template.fasta ({TEMPLATE_LEN} nt)")
     print(f"wrote {DATA}/cellA.fa, {DATA}/cellB.fa ({READS_PER_CELL} reads each)")
+    print(f"wrote {DATA}/regions.gff3 ({len(REGION_ROWS)} regions)")
     print(f"wrote {DATA}/mapping_expected.json (full-length gap-filled predictions)")
     print(f"planted variant: {ref_base}->{variant_base} at template pos {VARIANT_ABS_POS}")
     print("consensus length: {} ({} lead gaps + {} core + {} tail gaps)".format(

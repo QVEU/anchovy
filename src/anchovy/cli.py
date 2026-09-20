@@ -86,9 +86,16 @@ def _cmd_consensus(args: argparse.Namespace) -> int:
     if args.reference:
         reference = open(args.reference).read().strip()
 
+    trim = not args.whole_reference
+    if trim and (args.start is None or args.end is None):
+        print("error: start and end are required unless --whole-reference is given.",
+              file=sys.stderr)
+        return 2
+
     result = consensus.run(
         fasta=args.fasta, start=args.start, end=args.end,
         reference=reference, config=config, out_prefix=args.out_prefix,
+        trim=trim,
     )
     written = result["written"]
     print(f"Kept {len(result['records'])} sequences.")
@@ -105,6 +112,7 @@ def _cmd_annotate(args: argparse.Namespace) -> int:
         reference_file=args.reference,
         out_prefix=args.out_prefix,
         network=not args.no_network,
+        gff=args.gff,
     )
     for label, path in result["written"].items():
         print(f"Wrote {path}")
@@ -150,8 +158,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_cons = sub.add_parser(
         "consensus", help="Filter consensus sequences and summarize genotypes.")
     p_cons.add_argument("fasta", help="Path to <NAME>_allConsensus.fasta.")
-    p_cons.add_argument("start", type=int, help="ORF/region start (nt).")
-    p_cons.add_argument("end", type=int, help="ORF/region end (nt).")
+    p_cons.add_argument("start", type=int, nargs="?", default=None,
+                        help="ORF/region start (nt). With --whole-reference this "
+                             "is the analysis window start instead, and optional.")
+    p_cons.add_argument("end", type=int, nargs="?", default=None,
+                        help="ORF/region end (nt). With --whole-reference this is "
+                             "the analysis window end instead, and optional.")
+    p_cons.add_argument("--whole-reference", dest="whole_reference",
+                        action="store_true",
+                        help="Keep the full reference instead of trimming to "
+                             "start/end, so genotype positions are genome "
+                             "coordinates. Required for region-aware annotation "
+                             "(`anchovy annotate --gff`).")
     p_cons.add_argument("--reference", help="Reference sequence file (default: compute consensus).")
     p_cons.add_argument("--out-prefix", dest="out_prefix",
                         help="Output path prefix (default: derived from input).")
@@ -169,6 +187,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_annot.add_argument("out_prefix", help="Output path prefix.")
     p_annot.add_argument("--no-network", action="store_true",
                          help="Skip generating the network CSVs.")
+    p_annot.add_argument("--gff",
+                         help="GFF3 of genome regions. Enables region-aware "
+                              "annotation: mutation positions are treated as "
+                              "genome coordinates and annotated against every "
+                              "containing region, written to "
+                              "<out_prefix>_regionAnnotations.csv. Requires the "
+                              "consensus stage to have run --whole-reference.")
     p_annot.set_defaults(func=_cmd_annotate)
 
     return parser

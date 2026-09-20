@@ -40,6 +40,35 @@ WORK            = RESULTS + "/work"
 
 
 # --------------------------------------------------------------------------- #
+# Region-aware annotation (optional)
+# --------------------------------------------------------------------------- #
+# Set `gff` in the config to annotate mutations against genome regions (coding
+# AND non-coding) instead of assuming one ORF read in frame 1. Doing so requires
+# genome coordinates, which only survive the consensus stage in whole-reference
+# mode -- so `gff` implies `whole_reference`, and we derive it rather than making
+# the user set two keys consistently.
+#
+# In whole-reference mode orf_start/orf_end stop being a cut and become an
+# optional ANALYSIS WINDOW: the covered core to call variants over, excluding
+# ragged flanks. Positions are never renumbered either way.
+GFF        = config.get("gff")
+WHOLE_REF  = bool(config.get("whole_reference", False)) or GFF is not None
+ORF_START  = config.get("orf_start")
+ORF_END    = config.get("orf_end")
+
+if not WHOLE_REF and (ORF_START is None or ORF_END is None):
+    raise WorkflowError(
+        "config needs orf_start and orf_end, or whole_reference: true / a gff.")
+
+# Positional window args for the CLI; empty when whole-reference with no window.
+WINDOW_ARGS     = "" if ORF_START is None or ORF_END is None else f"{ORF_START} {ORF_END}"
+CONSENSUS_FLAGS = "--whole-reference" if WHOLE_REF else ""
+ANNOTATE_FLAGS  = f"--gff {GFF}" if GFF else ""
+
+REGION_ANNOTATIONS = RESULTS + "/" + SAMPLE + "_regionAnnotations.csv"
+
+
+# --------------------------------------------------------------------------- #
 # Aggregation: discover cells and build downstream target lists.
 # --------------------------------------------------------------------------- #
 def _discover_cells(wildcards):
@@ -68,6 +97,9 @@ def aggregate_cell_consensuses(wildcards):
 rule all:
     input:
         RESULTS + "/" + SAMPLE + "_annot_v3.csv",
+        # Region annotations are only produced (and only requested) when the
+        # config supplies a GFF3.
+        *([REGION_ANNOTATIONS] if GFF else []),
 
 
 # --------------------------------------------------------------------------- #
@@ -155,8 +187,10 @@ rule merge_consensus:
 # --------------------------------------------------------------------------- #
 # Stage 6: consensus  (allConsensus.fasta -> filtered genotype table + reference)
 # --------------------------------------------------------------------------- #
-# One-in-one-out rule calling the `anchovy consensus` CLI. Filters/trims the
-# merged consensuses to the ORF region and calls per-cell genotypes.
+# One-in-one-out rule calling the `anchovy consensus` CLI. Filters the merged
+# consensuses and calls per-cell genotypes -- trimming to the ORF region in the
+# default mode, or keeping the whole reference (genome coordinates) when a GFF is
+# configured. See the region-aware block near the top of this file.
 # Produces two outputs (the CLI derives their names from the input via
 # --out-prefix): the filtered genotype CSV and the reference sequence.
 rule consensus:
@@ -166,12 +200,12 @@ rule consensus:
         csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
         reference=RESULTS + "/" + SAMPLE + "_consensus_reference.txt",
     params:
-        start=config["orf_start"],
-        end=config["orf_end"],
+        window=WINDOW_ARGS,
+        flags=CONSENSUS_FLAGS,
         depth_min=config.get("depth_min", 10),
         out_prefix=RESULTS + "/" + SAMPLE,
     shell:
-        "anchovy consensus {input.fasta} {params.start} {params.end} "
+        "anchovy consensus {input.fasta} {params.window} {params.flags} "
         "--depth-min {params.depth_min} --out-prefix {params.out_prefix}"
 
 
@@ -190,7 +224,12 @@ rule annotate:
         annot=RESULTS + "/" + SAMPLE + "_annot_v3.csv",
         epistatic=RESULTS + "/" + SAMPLE + "_epistaticNetwork.csv",
         genotype=RESULTS + "/" + SAMPLE + "_genotypeNetwork.csv",
+        # The long-format per-region table exists only in region-aware mode, so
+        # it is declared as an output only when a GFF3 is configured.
+        **({"regions": REGION_ANNOTATIONS} if GFF else {}),
     params:
         out_prefix=RESULTS + "/" + SAMPLE,
+        flags=ANNOTATE_FLAGS,
     shell:
-        "anchovy annotate {input.csv} {input.reference} {params.out_prefix}"
+        "anchovy annotate {input.csv} {input.reference} {params.out_prefix} "
+        "{params.flags}"

@@ -17,9 +17,11 @@ The entire thing can be run as one automated pipeline (recommended), or run each
 3. **map** — lines up each cell's reads against the reference genome
 4. **cell consensus** — builds one consensus genome per cell from its reads
 5. **merge** — collects all the per-cell genomes into one file
-6. **consensus** — trims to the region you care about and lists each cell's mutations
+6. **consensus** — narrows to the region you care about and lists each cell's mutations
 7. **annotate** — works out which mutations change the protein, and builds tables
-   showing how genotypes relate
+   showing how genotypes relate. Given a GFF3 file describing your genome's
+   regions, it can also annotate non-coding parts and number amino acids
+   correctly per region (see below)
 
 The final results are spreadsheet-style files (CSV) you can open in Excel or load
 into other analysis tools. Two of them describe the **genotype network** — how
@@ -125,6 +127,58 @@ cells_dir: "path/to/your/per-cell-files"
 The included `workflow/config_test.yaml` is a working example of this, set up to
 run against the small test dataset that ships with anchovy.
 
+### Annotating by genome region
+
+By default, anchovy assumes your genome is one long protein-coding stretch that
+starts at the very first base. That works for a single trimmed ORF, but it gets
+two things wrong on a real viral genome: mutations in non-coding parts (like the
+UTRs at either end) are treated as though they coded for protein, and amino acid
+numbering starts from the wrong place whenever the coding region doesn't begin at
+position 1.
+
+You can fix both by describing your genome's regions in a **GFF3 file** — a
+standard, widely used format for listing the features of a genome. Point at it
+from your settings file:
+
+```yaml
+gff: "path/to/regions.gff3"
+```
+
+A small one looks like this (columns are separated by tabs):
+
+```
+##gff-version 3
+dengue	.	five_prime_UTR	1	96	.	+	.	Name=5UTR
+dengue	.	CDS	97	10272	.	+	0	Name=polyprotein
+dengue	.	mature_protein_region	7570	10269	.	+	0	Name=NS5
+dengue	.	three_prime_UTR	10273	10727	.	+	.	Name=3UTR
+```
+
+With that in place you get an extra results file,
+`{sample}_regionAnnotations.csv`, with one row per mutation **per region it falls
+in**. So a mutation inside NS5, which also sits inside the polyprotein, gets two
+rows — numbered correctly in each one (residue 2 of NS5 is also residue 2493 of
+the polyprotein). Mutations in the UTRs get rows too, simply with the amino acid
+columns left empty, and anything outside every listed region is labelled
+`intergenic`.
+
+Positions in this file are always counted from the start of the whole genome, so
+they mean the same thing no matter which region a row is about.
+
+A few things worth knowing:
+
+- Adding `gff` also keeps the **whole** reference genome through the pipeline
+  instead of trimming it, because region lookup needs real genome positions. When
+  you do that, `orf_start` and `orf_end` stop trimming anything and instead just
+  mark the stretch that's well covered by your reads, so ragged ends don't get
+  called as mutations.
+- Your existing results files are still produced exactly as before, so anything
+  you already do with them keeps working.
+- Both strands are handled. Which strand a region is on, and its reading frame,
+  are taken from the GFF3 file itself, so anchovy never has to guess.
+- If you want genome positions but don't have a GFF3, use `whole_reference: true`
+  on its own.
+
 ## Running one step at a time
 
 If you'd rather run steps individually instead of the full pipeline, each is its
@@ -135,6 +189,13 @@ anchovy extract   reads.sam whitelist.txt -o out_anchovy.csv
 anchovy fasta     out_anchovy.csv cells/
 anchovy consensus allConsensus.fasta 96 10272 --out-prefix results/sample
 anchovy annotate  filtConsensus.csv reference.txt results/sample
+```
+
+To annotate by genome region (see above), the last two steps become:
+
+```bash
+anchovy consensus allConsensus.fasta 96 10272 --whole-reference --out-prefix results/sample
+anchovy annotate  filtConsensus.csv reference.txt results/sample --gff regions.gff3
 ```
 
 Add `--help` to any command (e.g. `anchovy extract --help`) to see its options.

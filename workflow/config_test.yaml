@@ -36,11 +36,27 @@ cons_min_depth: 5
 # lives ONLY in the test config; real runs keep the meaningful default.
 depth_min: 1
 
-# ORF/region of interest for the consensus stage. The mapping fixture's reads
-# cover template positions 50-550; we analyze a window well inside that covered
-# core so every sequence has data there.
+# Analysis window for the consensus stage. The mapping fixture's reads cover
+# template positions 50-550; we analyze a window well inside that covered core so
+# every sequence has data there.
+#
+# Because `gff` is set below, the workflow runs the consensus stage in
+# WHOLE-REFERENCE mode. That changes what these two numbers mean: they no longer
+# cut the sequences down, they only say which columns to call variants over.
+# Positions stay genome coordinates, which is exactly what the GFF3 lookup needs.
 orf_start: 100
 orf_end: 500
+
+# Region model for region-aware annotation. Setting this turns on whole-reference
+# mode automatically and adds {sample}_regionAnnotations.csv to the outputs: one
+# row per (mutation x containing region), with coding rows carrying frame-correct
+# residue numbers and non-coding rows carrying none.
+#
+# The fixture's GFF3 puts a 5'UTR at 1-149, the CDS at 150-500 and a 3'UTR at
+# 501-600. The CDS deliberately does NOT start at position 1, so this config
+# exercises the frame correctness the old single-ORF annotator lacked: the
+# planted variant at genome 201 is residue 18 of the polyprotein, not residue 67.
+gff: "tests/data/mapping/regions.gff3"
 
 # --- Fields still required by the Snakefile even though the front-half stages
 # --- aren't exercised in this config. They point at the barcode fixture so the

@@ -1,0 +1,4 @@
+##gff-version 3
+testref	anchovy	five_prime_UTR	1	149	.	+	.	ID=5UTR;Name=5UTR
+testref	anchovy	CDS	150	500	.	+	0	ID=poly;Name=polyprotein
+testref	anchovy	three_prime_UTR	501	600	.	+	.	ID=3UTR;Name=3UTR
