@@ -56,6 +56,16 @@ orf_end: 500
 # 501-600. The CDS deliberately does NOT start at position 1, so this config
 # exercises the frame correctness the old single-ORF annotator lacked: the
 # planted variant at genome 201 is residue 18 of the polyprotein, not residue 67.
+#
+# The fixture plants a second variant, at genome 121, inside the 5'UTR. Running
+# this config therefore produces one row of each kind in
+# results/test/test_regionAnnotations.csv:
+#
+#   5UTR:A121C          5UTR         non-coding   (no residue, no amino acids)
+#   polyprotein:T201A   polyprotein  coding       residue 18, C->S, Non-Syn
+#
+# The non-coding row is the one the old annotator could not produce at all --
+# it would have translated the UTR as though it were part of the reading frame.
 gff: "tests/data/mapping/regions.gff3"
 
 # --- Fields still required by the Snakefile even though the front-half stages

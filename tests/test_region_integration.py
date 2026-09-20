@@ -232,6 +232,12 @@ def test_region_annotations_csv_is_written_only_with_a_gff(tmp_path):
 def test_end_to_end_region_aware_on_mapping_fixture(data_dir, tmp_run_dir):
     """Whole-reference consensus -> region-aware annotate, against the prediction.
 
+    The fixture plants TWO variants in different cells, so one pass exercises both
+    halves of the region model:
+      cellB  genome 201, inside the CDS   -> coding, frame-correct residue
+      cellC  genome 121, inside the 5'UTR -> non-coding, NO amino-acid columns
+    cellA matches the template and must come out clean.
+
     Starts from the sam2consensus output recorded in mapping_expected.json (itself
     verified against the real tool), so this runs without minimap2 installed while
     still exercising the real consensus and annotate code paths.
@@ -254,47 +260,72 @@ def test_end_to_end_region_aware_on_mapping_fixture(data_dir, tmp_run_dir):
         config=ConsensusConfig(depth_min=1),
         out_prefix=out_prefix)
 
-    # The gap filter did not eat every cell, and the reference stayed whole.
-    assert len(cons_result["records"]) == 2
+    # The gap filter did not eat any cell, and the reference stayed whole.
+    assert len(cons_result["records"]) == 3
     assert len(cons_result["reference"]) == expected["template_len"]
 
-    # Exactly one variant, at the planted GENOME position (not renumbered).
-    genotypes = [r["genotype"] for r in cons_result["records"] if r["genotype"]]
-    assert len(genotypes) == 1
-    assert int(genotypes[0][:-1]) == expected["variant_genome_pos"]
+    # Each variant is called in its own cell, at its planted GENOME position --
+    # not renumbered relative to the window or the ORF. With three cells the
+    # majority at each column is the template base, so the computed reference
+    # agrees with the template and the calls point the right way round.
+    by_cell = {r["CBC_ID"].split("_")[0]: r["genotype"]
+               for r in cons_result["records"]}
+    assert by_cell["cellA"] == ""
+    assert by_cell["cellB"] == (f"{expected['variant_genome_pos']}"
+                                f"{expected['variant_alt_base']}")
+    assert by_cell["cellC"] == (f"{expected['utr_variant_genome_pos']}"
+                                f"{expected['utr_variant_alt_base']}")
 
     annot_result = annotate.run(
         filt_consensus_csv=f"{out_prefix}_filtConsensus.csv",
         reference_file=f"{out_prefix}_consensus_reference.txt",
         out_prefix=out_prefix, network=False, gff=str(gff))
 
-    regions_tbl = annot_result["regions"]
-    assert len(regions_tbl) == 1
-    row = regions_tbl.iloc[0]
-    assert row["region"] == expected["variant_region"]
-    assert row["region_type"] == "coding"
-    assert row["genome_pos"] == expected["variant_genome_pos"]
+    regions_tbl = annot_result["regions"].set_index("mutation_id")
+    assert len(regions_tbl) == 2
+
+    # --- the CODING variant ------------------------------------------------- #
+    coding_id = (f"{expected['variant_region']}:{expected['variant_ref_base']}"
+                 f"{expected['variant_genome_pos']}{expected['variant_alt_base']}")
+    coding = regions_tbl.loc[coding_id]
+    assert coding["region_type"] == "coding"
+    assert coding["genome_pos"] == expected["variant_genome_pos"]
     # THE POINT: residue numbered from the CDS start (150), not from genome 1.
-    assert row["residue"] == expected["variant_residue"]
-    assert row["sub_class"] == "Non-Syn"
+    assert coding["residue"] == expected["variant_residue"]
+    assert coding["sub_class"] == "Non-Syn"
 
-    # Which cell reads as "mutant" is arbitrary here and deliberately not asserted:
-    # the fixture has two cells splitting 50/50 at this column, so the computed
-    # consensus reference breaks the tie alphabetically. The residue number, the
-    # region, and the substitution class are invariant either way -- those are the
-    # claims this test is making.
+    # --- the NON-CODING variant --------------------------------------------- #
+    # The behavior this half of the fixture exists for: a UTR mutation is
+    # REPORTED (it is a real change, and the old annotator could not describe it
+    # at all) but carries no amino-acid interpretation, rather than being
+    # silently translated as though the UTR were coding.
+    utr_id = (f"{expected['utr_variant_region']}:{expected['utr_variant_ref_base']}"
+              f"{expected['utr_variant_genome_pos']}{expected['utr_variant_alt_base']}")
+    utr = regions_tbl.loc[utr_id]
+    assert utr["region_type"] == "non-coding"
+    assert utr["genome_pos"] == expected["utr_variant_genome_pos"]
+    for column in ("residue", "wt_aa", "mut_aa", "codon_wt", "codon_mut",
+                   "sub_class"):
+        assert pd.isna(utr[column]), f"{column} should be empty for a UTR variant"
 
-    # The legacy table is still written, back-filled from the primary region.
-    legacy_tbl = annot_result["annot"].dropna(subset=["pos"])
-    assert legacy_tbl.iloc[0]["ref.resPos"] == expected["variant_residue"]
+    # --- the legacy table is still written, back-filled per primary region --- #
+    legacy_tbl = annot_result["annot"].dropna(subset=["pos"]).set_index("mutants")
+    coding_tok = f"{expected['variant_genome_pos']}{expected['variant_alt_base']}"
+    utr_tok = f"{expected['utr_variant_genome_pos']}{expected['utr_variant_alt_base']}"
+    assert legacy_tbl.loc[coding_tok, "ref.resPos"] == expected["variant_residue"]
+    # The UTR mutation still gets a usable, genome-anchored name rather than a
+    # blank that would collapse distinct genotypes together.
+    assert legacy_tbl.loc[utr_tok, "subName"] == utr_id
+    assert legacy_tbl.loc[utr_tok, "subClass"] == "non-coding"
 
-    # And the region-aware call differs from what the old frame-1 annotator gave,
+    # --- and the coding call differs from the old frame-1 annotator ---------- #
     # which is the whole reason this feature exists.
     legacy_only = annotate.run(
         filt_consensus_csv=f"{out_prefix}_filtConsensus.csv",
         reference_file=f"{out_prefix}_consensus_reference.txt",
         out_prefix=str(tmp_run_dir / "legacy"), network=False)
-    legacy_res = legacy_only["annot"].dropna(subset=["pos"]).iloc[0]["ref.resPos"]
+    legacy_res = (legacy_only["annot"].dropna(subset=["pos"])
+                  .set_index("mutants").loc[coding_tok, "ref.resPos"])
     assert legacy_res != expected["variant_residue"]
 
 

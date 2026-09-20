@@ -25,6 +25,21 @@ THE SCENARIO (predicted so we can VERIFY, not just capture)
 - Cell "cellA": reads match the template exactly -> consensus == template[50:550].
 - Cell "cellB": every read carries ONE planted substitution at absolute template
   position 200 (T -> A) -> consensus == template[50:550] with index 150 changed.
+  That position falls inside the CDS, so it exercises the CODING path.
+- Cell "cellC": every read carries ONE planted substitution at absolute template
+  position 120, which falls inside the 5'UTR, exercising the NON-CODING path --
+  a mutation that must be reported with no amino-acid columns rather than
+  silently translated as though it were coding.
+
+WHY THREE CELLS, NOT TWO
+------------------------
+With only two cells the variant column split 50/50, and the computed per-column
+consensus broke that tie by np.unique ordering -- alphabetically. The reference
+base came out arbitrary, so the cell MATCHING the template was reported as the
+mutant and the direction of every call was inverted. A third cell makes the
+majority at each variant column the template base, which is both the realistic
+case and the one whose output can be read at a glance. The tie-breaking behavior
+itself is still covered, at the unit level, in tests/test_consensus.py.
 
 These predictions are recorded in mapping_expected.json so the golden-freeze
 step can verify sam2consensus output against them instead of trusting it blindly.
@@ -55,8 +70,17 @@ TEMPLATE_LEN = 600
 CORE_START = 50
 CORE_END = 550
 READS_PER_CELL = 6
-VARIANT_ABS_POS = 200            # 0-based template index of the planted variant
+VARIANT_ABS_POS = 200            # 0-based template index of the CODING variant
+UTR_VARIANT_ABS_POS = 120        # 0-based template index of the NON-CODING variant
 NT = "ACGT"
+
+# The 5'UTR variant has to satisfy three overlapping constraints at once, which
+# leaves a narrow legal band of 0-based [100, 149) -- genome 101..149:
+#   * inside the 5'UTR      (genome 1-149, i.e. below CDS_START)
+#   * covered by the reads  (genome 51-550, i.e. within [CORE_START, CORE_END))
+#   * inside the analysis window used by workflow/config_test.yaml (orf_start 100
+#     / orf_end 500, which are 0-based slice indices)
+# Index 120 sits clear of all three edges.
 
 # --- Region model for the fixture (regions.gff3) --------------------------- #
 # 1-based inclusive genome coordinates, GFF3 convention. Deliberately chosen so
@@ -97,10 +121,18 @@ def build():
     # cellA: exact copies of the core.
     cellA_reads = [core for _ in range(READS_PER_CELL)]
 
-    # cellB: every read carries the planted variant.
+    # cellB: every read carries the planted CODING variant.
     cb = list(core)
     cb[variant_core_idx] = variant_base
     cellB_reads = ["".join(cb) for _ in range(READS_PER_CELL)]
+
+    # cellC: every read carries the planted NON-CODING (5'UTR) variant.
+    utr_ref_base = template[UTR_VARIANT_ABS_POS]
+    utr_variant_base = NT[(NT.index(utr_ref_base) + 1) % 4]
+    utr_core_idx = UTR_VARIANT_ABS_POS - CORE_START
+    cc = list(core)
+    cc[utr_core_idx] = utr_variant_base
+    cellC_reads = ["".join(cc) for _ in range(READS_PER_CELL)]
 
     def write_cell(name, reads):
         recs = [f">{name}_read{i}\n{seq}" for i, seq in enumerate(reads)]
@@ -108,6 +140,7 @@ def build():
 
     write_cell("cellA", cellA_reads)
     write_cell("cellB", cellB_reads)
+    write_cell("cellC", cellC_reads)
 
     # --- Predicted CONSENSUS output (verified against sam2consensus) --------- #
     # sam2consensus emits a FULL-REFERENCE-LENGTH consensus (TEMPLATE_LEN), with
@@ -121,6 +154,7 @@ def build():
 
     cellA_consensus = lead + core + tail
     cellB_consensus = lead + "".join(cb) + tail
+    cellC_consensus = lead + "".join(cc) + tail
 
     # --- Region annotations (regions.gff3) ---------------------------------- #
     gff_lines = ["##gff-version 3"]
@@ -142,6 +176,7 @@ def build():
         "consensus": {
             "cellA": cellA_consensus,
             "cellB": cellB_consensus,
+            "cellC": cellC_consensus,
         },
         # Region model + the region-aware call for the planted variant, so the
         # annotation tests assert against a prediction rather than whatever the
@@ -152,14 +187,26 @@ def build():
         "variant_genome_pos": VARIANT_ABS_POS + 1,
         "variant_region": "polyprotein",
         "variant_residue": 18,
+        # The 5'UTR variant. Non-coding, so the prediction is the ABSENCE of
+        # amino-acid columns -- there is no residue to name.
+        "utr_variant_abs_pos": UTR_VARIANT_ABS_POS,
+        "utr_variant_genome_pos": UTR_VARIANT_ABS_POS + 1,
+        "utr_variant_ref_base": utr_ref_base,
+        "utr_variant_alt_base": utr_variant_base,
+        "utr_variant_region": "5UTR",
     }
     (DATA / "mapping_expected.json").write_text(json.dumps(expected, indent=2))
 
     print(f"wrote {DATA}/template.fasta ({TEMPLATE_LEN} nt)")
-    print(f"wrote {DATA}/cellA.fa, {DATA}/cellB.fa ({READS_PER_CELL} reads each)")
+    print(f"wrote {DATA}/cellA.fa, {DATA}/cellB.fa, {DATA}/cellC.fa "
+          f"({READS_PER_CELL} reads each)")
     print(f"wrote {DATA}/regions.gff3 ({len(REGION_ROWS)} regions)")
     print(f"wrote {DATA}/mapping_expected.json (full-length gap-filled predictions)")
-    print(f"planted variant: {ref_base}->{variant_base} at template pos {VARIANT_ABS_POS}")
+    print(f"planted coding variant:     {ref_base}->{variant_base} "
+          f"at template pos {VARIANT_ABS_POS} (genome {VARIANT_ABS_POS + 1}, CDS)")
+    print(f"planted non-coding variant: {utr_ref_base}->{utr_variant_base} "
+          f"at template pos {UTR_VARIANT_ABS_POS} "
+          f"(genome {UTR_VARIANT_ABS_POS + 1}, 5'UTR)")
     print("consensus length: {} ({} lead gaps + {} core + {} tail gaps)".format(
         TEMPLATE_LEN, CORE_START, CORE_END - CORE_START, TEMPLATE_LEN - CORE_END))
 
