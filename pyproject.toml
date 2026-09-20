@@ -15,7 +15,10 @@ build-backend = "setuptools.build_meta"
 # This is what shows up on PyPI and what `pip` reads to resolve dependencies.
 [project]
 name = "anchovy"
-version = "0.3.0"                     # Single source of truth for the version.
+# Read from src/anchovy/__init__.py rather than duplicated here, so the metadata
+# pip sees and the version `anchovy --version` prints are the same string. See
+# [tool.setuptools.dynamic] below.
+dynamic = ["version"]
 description = "Single-cell viral consensus and genotype-network pipeline"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -59,6 +62,12 @@ anchovy = "anchovy.cli:main"
 # src/ for packages, so `import anchovy` resolves to src/anchovy/.
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The version lives in the package itself (src/anchovy/__init__.py) and is read
+# from there. setuptools parses the assignment statically -- it does not import
+# the package -- so this works without the dependencies being installed yet.
+[tool.setuptools.dynamic]
+version = { attr = "anchovy.__version__" }
 
 # --- Tool configuration (optional but conventional) -------------------------
 # Co-locating tool config here keeps the repo root uncluttered.
