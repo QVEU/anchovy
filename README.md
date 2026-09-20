@@ -228,6 +228,14 @@ A few things worth knowing:
 - If you want genome positions but don't have a GFF3, use `whole_reference: true`
   on its own.
 
+### A complete worked example
+
+`examples/eva71_sra/` runs the whole pipeline on real public data, starting from
+nothing but an SRA accession: it downloads an enterovirus A71 single-cell run and
+its reference genome, builds the region file from the reference's own GenBank
+annotation, and hands everything to the workflow. It's written to be copied and
+pointed at your own virus. See the README in that folder.
+
 ## Running one step at a time
 
 If you'd rather run steps individually instead of the full pipeline, each is its

@@ -34,6 +34,11 @@ dependencies:
   - minimap2>=2.28
   - samtools>=1.20
 
+  # --- SRA download, for the worked examples under examples/ ---
+  #     Provides prefetch / fasterq-dump. Not needed to run the pipeline on data
+  #     you already have; only examples/eva71_sra/fetch.sh uses it.
+  - sra-tools>=3.0
+
   # --- workflow manager ---
   - snakemake-minimal>=9
 
