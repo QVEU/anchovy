@@ -11,29 +11,53 @@ directory and change the accessions.
 
 ## Before you start
 
-Two things you have to supply or check yourself.
+One thing you have to supply yourself.
 
 **A 10X barcode whitelist.** anchovy matches each read's cell barcode against a
 list of the barcodes that exist in the chemistry you used. That list ships with
-Cell Ranger and isn't ours to redistribute, so you point at your copy:
+Cell Ranger and isn't ours to redistribute, so you point at your copy. This run
+is **v2 chemistry**, so you want:
 
-- v2 chemistry: `cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt`
-- v3 chemistry: the same folder's `3M-february-2018.txt.gz` — unzip it first
+```
+cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt
+```
 
-The signature in `config.yaml` expects 16 barcode bases plus a 10-base UMI,
-which is the v2 layout. If the run used v3, use the v3 whitelist.
+That matches the signature in `config.yaml`, whose 26-base N-run is 16 bases of
+barcode plus a 10-base UMI — the v2 layout. (v3 would be 28 bases, a 12-base
+UMI, and the `3M-february-2018.txt` whitelist instead.)
 
-> **Two settings in these files could not be verified when they were written,
-> because the machine had no access to NCBI. Please check both before you trust
-> any results.**
->
-> - **`REFERENCE_ACC=AF304458`** in `fetch.sh`, meant to be enterovirus A71
->   strain Tainan/4643/98. If it's the wrong accession you won't get an error —
->   you'll get a full set of confident variant calls against the wrong genome.
->   Check it at <https://www.ncbi.nlm.nih.gov/nuccore/AF304458>.
-> - **`MINIMAP_PRESET=map-hifi`**, which assumes PacBio HiFi reads. For Oxford
->   Nanopore use `map-ont`. The wrong one quietly costs you alignments rather
->   than failing.
+Everything else is already set for this dataset:
+
+| Setting | Value | |
+|---|---|---|
+| Reference | `AF304458` | EV-A71 Tainan/4643/98 |
+| Read technology | `map-hifi` | PacBio |
+| Chemistry | 26-base signature | 10X v2 |
+
+### Checking the chemistry, if you're unsure
+
+Using the wrong chemistry doesn't produce an error. The signature search still
+runs, it just matches badly, and you end up with fewer cells than you should
+have. You can see it in the extract stage's own output:
+
+```bash
+anchovy extract examples/eva71_sra/data/SRR28178313.sam \
+    /path/to/737K-august-2016.txt -o /tmp/check.csv
+
+python -c "
+import pandas as pd
+d = pd.read_csv('/tmp/check.csv')
+print(f'reads assigned : {len(d)}')
+print(f'distinct cells : {d.CBC.nunique()}')
+print(d.minD.describe())
+"
+```
+
+`minD` is how far each read's barcode was from its best match in the whitelist.
+On the right chemistry most reads sit at a low distance and you get a sensible
+number of distinct cells. On the wrong one the distances shift high and the cell
+count collapses — try it with the other whitelist and compare if the numbers
+look off.
 
 ## Running it
 

@@ -14,16 +14,16 @@ data_dir: "examples/eva71_sra/data"
 
 # --- 10X barcode whitelist -- YOU MUST SET THIS ----------------------------- #
 # Not redistributable, and not downloadable by fetch.sh. It ships with Cell
-# Ranger:
-#   v2 chemistry: .../cellranger/barcodes/737K-august-2016.txt
-#   v3 chemistry: .../3M-february-2018.txt.gz  (gunzip first)
-# Match it to the chemistry the run actually used -- the signature below is the
-# v2 layout (16 nt barcode + 10 nt UMI).
+# Ranger. This run is v2 chemistry, so use:
+#
+#   cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt
+#
 whitelist: "/path/to/737K-august-2016.txt"     # <<< EDIT ME
 
 # The 10X signature searched for in each read. The N-run is the barcode+UMI
-# region: 26 Ns here = 16 + 10. This is the default anchovy ships with and the
-# one the original AnchovyJob.sh used.
+# region: 26 Ns = 16 nt barcode + 10 nt UMI, which is the v2 layout, matching
+# the whitelist above. This is the default anchovy ships with and the one the
+# original AnchovyJob.sh used. (v3 would need 28 Ns and the v3 whitelist.)
 signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
 
 # --- Reference -------------------------------------------------------------- #
@@ -31,7 +31,9 @@ signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
 # FASTA, because sam2consensus prefixes its per-cell output files with it --
 # fetch.sh prints the right value when it finishes.
 template: "examples/eva71_sra/data/AF304458.fasta"
-reference_name: "AF304458.1"                   # <<< CONFIRM against fetch.sh output
+# fetch.sh prints the exact value when it finishes -- copy it rather than
+# assuming the version suffix, which can be .1 or .2 depending on the record.
+reference_name: "AF304458.1"
 
 # --- Region-aware annotation ------------------------------------------------ #
 # Derived by fetch.sh from the reference's own GenBank annotation, so the

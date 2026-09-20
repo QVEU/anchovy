@@ -25,29 +25,24 @@ set -euo pipefail
 # present in the read, so do NOT use a preprocessed/trimmed submission.
 SRR="${SRR:-SRR28178313}"
 
-# Reference genome, as an NCBI nucleotide accession. Enterovirus A71 strain
-# Tainan/4643/98.
-#
-# >>> CONFIRM THIS ACCESSION BEFORE TRUSTING ANY OUTPUT. <<<
-# It could not be verified when this script was written (no NCBI access from
-# that environment). If it is wrong you will not get an error -- you will get a
-# complete set of confidently wrong variant calls against the wrong genome.
-# Check it resolves to the strain you mean at
-# https://www.ncbi.nlm.nih.gov/nuccore/AF304458
+# Reference genome, as an NCBI nucleotide accession.
+# AF304458 = enterovirus A71 strain Tainan/4643/98. Confirmed by the lab.
 REFERENCE_ACC="${REFERENCE_ACC:-AF304458}"
 
-# minimap2 preset for the read technology.
-#   map-hifi  PacBio HiFi / CCS   (what the original AnchovyJob.sh used)
-#   map-ont   Oxford Nanopore
-# >>> Set this to match the run. The wrong preset silently costs you alignments.
+# minimap2 preset for the read technology. This run is PacBio, so map-hifi.
+# Change to map-ont if you point this script at Oxford Nanopore data -- the
+# wrong preset does not fail, it just quietly costs you alignments.
 MINIMAP_PRESET="${MINIMAP_PRESET:-map-hifi}"
 
 # 10X barcode whitelist. REQUIRED, and not downloadable here -- it ships with
-# Cell Ranger:
-#   v2 chemistry: cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt
-#   v3 chemistry: .../3M-february-2018.txt.gz   (gunzip it first)
-# The signature in config.yaml has 26 Ns (16 nt barcode + 10 nt UMI), which is
-# the v2 layout; match the whitelist to whichever chemistry the run used.
+# Cell Ranger. This run is v2 chemistry, so you want:
+#
+#   cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt
+#
+# That matches the signature in config.yaml, whose 26-base N-run is 16 nt of
+# barcode plus a 10 nt UMI -- the v2 layout. (v3 would be 28: a 12 nt UMI, and
+# the 3M-february-2018.txt whitelist.) See "Checking the chemistry" in the
+# README for how to confirm it from the data if you are unsure.
 WHITELIST="${WHITELIST:-}"
 
 SAMPLE="${SAMPLE:-$SRR}"
