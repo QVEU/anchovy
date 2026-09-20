@@ -143,7 +143,13 @@ def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
             rows.append({"mutants": tok, "pos": pos, "base": base,
                          "CBC_ID": r["CBC_ID"], "genotype": geno})
 
-    table = pd.DataFrame(rows)
+    # Name the columns explicitly. Built from an empty `rows` list, a bare
+    # DataFrame() has no columns at all, and the groupby below then fails with
+    # KeyError: 'mutants' -- which is what a run where every cell was too sparse
+    # to yield a consensus used to produce, several stages after the real
+    # problem. An empty table with the right shape flows through instead.
+    table = pd.DataFrame(rows, columns=["mutants", "pos", "base",
+                                        "CBC_ID", "genotype"])
 
     # BCMutCount per cell; filter out hypermutated cells (< 200), matching R.
     if not table.empty:
@@ -501,6 +507,25 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     # not be (see io.read_reference_sequence).
     reference = read_reference_sequence(reference_file).upper()
     cons = pd.read_csv(filt_consensus_csv)
+
+    # No cells at all is a failed run, not an empty one, and writing a set of
+    # empty CSVs would hide that. It happens when every barcode was too sparse
+    # to reach the consensus stage's depth thresholds -- common on a small slice
+    # of a real run, where the reads spread thinly over thousands of barcodes.
+    if cons.empty:
+        raise ValueError(
+            f"{filt_consensus_csv} contains no cells, so there is nothing to "
+            f"annotate.\n"
+            f"  Every barcode was filtered out before this point. The usual "
+            f"causes, in order:\n"
+            f"    - too few reads overall (are you running on a subsample?)\n"
+            f"    - cons_min_depth too high: a cell needs that much coverage at "
+            f"a position\n"
+            f"      for sam2consensus to call it at all\n"
+            f"    - depth_min too high: it drops whole cells below that "
+            f"coverage\n"
+            f"  Lower those thresholds, or use more reads.")
+
     cons["genotype"] = cons["genotype"].fillna("")
 
     haplocounts = haplo_analysis(cons)

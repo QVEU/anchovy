@@ -1,0 +1,217 @@
+"""
+test_sparse_cells.py -- cells with too little coverage must not kill the run.
+
+THE FAILURE THIS GUARDS, which only appeared on real data. sam2consensus
+collects the sequences it intends to write into a dict, skipping any whose bases
+are all gaps, then writes one file per entry. A cell where NO position reaches
+--min-depth therefore leaves that dict empty, writes nothing at all, and still
+exits 0. The workflow declares that file as a required output, so one sparse
+cell aborted the entire run with MissingOutputException.
+
+On real 10X data most barcodes carry few reads, so this is the common case, not
+an edge case. It never showed up on the mapping fixture because every fixture
+cell has 6 reads at every position -- comfortably over the default min-depth of
+5. A fixture that is uniformly well covered cannot exercise the path where
+coverage runs out.
+
+Dropping an under-covered cell is correct; that is what the depth filter is for.
+The bug was only that "no consensus" is signalled by an absent file. The
+workflow now touches the output, so the cell becomes an empty file and simply
+does not appear downstream.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from anchovy.config import ConsensusConfig
+from anchovy.consensus import parse_consensus_fasta, run
+
+SAM2CONSENSUS = Path(__file__).resolve().parent.parent / "workflow" / "scripts" / "sam2consensus.py"
+
+
+def _template(data_dir) -> str:
+    path = data_dir / "mapping" / "template.fasta"
+    if not path.exists():
+        pytest.skip("mapping fixture missing; run tests/make_mapping_fixtures.py")
+    return "".join(l.strip() for l in path.read_text().splitlines()
+                   if not l.startswith(">"))
+
+
+def _write_sam(path: Path, template: str, n_reads: int,
+               start: int = 101, length: int = 100) -> None:
+    """A SAM with n_reads identical alignments, i.e. uniform depth n_reads."""
+    seq = template[start - 1:start - 1 + length]
+    lines = [f"@SQ\tSN:testref\tLN:{len(template)}\n"]
+    lines += [f"r{i}\t0\ttestref\t{start}\t60\t{length}M\t*\t0\t0\t"
+              f"{seq}\t{'I' * length}\n" for i in range(n_reads)]
+    path.write_text("".join(lines))
+
+
+def _run_sam2consensus(sam: Path, outdir: Path, min_depth: int):
+    outdir.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        [sys.executable, str(SAM2CONSENSUS), "-c", "0.5", "-m", str(min_depth),
+         "--outfolder", f"{outdir}/", "-i", str(sam)],
+        # check=False deliberately: the exit code is part of what these tests
+        # assert, since the bug is that sam2consensus succeeds while producing
+        # nothing.
+        capture_output=True, text=True, check=False)
+
+
+# --------------------------------------------------------------------------- #
+# The upstream behavior we compensate for
+# --------------------------------------------------------------------------- #
+def test_sam2consensus_writes_nothing_when_depth_is_unmet(data_dir, tmp_path):
+    """Characterizes the vendored tool: no output file, and exit code 0.
+
+    If a future sam2consensus starts emitting an empty file itself, this fails
+    and the `touch` in the workflow can be reconsidered. Until then it is what
+    makes that touch necessary.
+    """
+    template = _template(data_dir)
+    sam = tmp_path / "sparse_BC.sam"
+    _write_sam(sam, template, n_reads=2)
+
+    result = _run_sam2consensus(sam, tmp_path / "out", min_depth=5)
+
+    assert result.returncode == 0, result.stderr
+    assert list((tmp_path / "out").iterdir()) == [], (
+        "sam2consensus produced a file; the workflow's touch may no longer be "
+        "needed -- re-check before removing it")
+
+
+def test_sam2consensus_writes_a_file_when_depth_is_met(data_dir, tmp_path):
+    """The contrast case, so the test above is about DEPTH and not about setup."""
+    template = _template(data_dir)
+    sam = tmp_path / "covered_BC.sam"
+    _write_sam(sam, template, n_reads=6)
+
+    result = _run_sam2consensus(sam, tmp_path / "out", min_depth=5)
+
+    assert result.returncode == 0, result.stderr
+    produced = [p.name for p in (tmp_path / "out").iterdir()]
+    assert produced == ["testref__covered_BC.fasta"]
+
+
+# --------------------------------------------------------------------------- #
+# Downstream tolerance of what the workflow leaves behind
+# --------------------------------------------------------------------------- #
+def test_empty_consensus_file_parses_to_no_records(tmp_path):
+    """What `touch` leaves: an empty file, which must read as zero cells."""
+    empty = tmp_path / "empty.fasta"
+    empty.write_text("")
+    assert parse_consensus_fasta(empty) == []
+
+
+def test_merged_fasta_tolerates_cells_that_produced_nothing(tmp_path):
+    """The real shape after a merge: sparse cells contribute no bytes at all.
+
+    `cat` of an empty file adds nothing, so the merged FASTA simply holds fewer
+    cells than there were barcodes. The consensus stage must treat that as
+    normal rather than as malformed input.
+    """
+    merged = tmp_path / "test_allConsensus.fasta"
+    # Two covered cells; three sparse ones contributed empty files to the cat.
+    merged.write_text(
+        ">cellA ref coverage:9 length:8\nACGTACGT\n"
+        ">cellB ref coverage:9 length:8\nACGTACGA\n")
+
+    result = run(fasta=str(merged), start=None, end=None, trim=False,
+                 config=ConsensusConfig(depth_min=1),
+                 out_prefix=str(tmp_path / "out"))
+
+    assert [r["CBC_ID"] for r in result["records"]] == ["cellA", "cellB"]
+    # cellB differs from cellA at the last base; with two cells the computed
+    # reference breaks the tie alphabetically, so one of them carries the call.
+    assert sum(1 for r in result["records"] if r["genotype"]) == 1
+
+
+def test_a_merge_of_only_empty_files_does_not_crash(tmp_path):
+    """Every cell sparse -- degenerate, but it must fail cleanly or empty."""
+    merged = tmp_path / "test_allConsensus.fasta"
+    merged.write_text("")
+
+    result = run(fasta=str(merged), start=None, end=None, trim=False,
+                 config=ConsensusConfig(depth_min=1),
+                 out_prefix=str(tmp_path / "out"))
+    assert result["records"] == []
+
+
+# --------------------------------------------------------------------------- #
+# The workflow rule actually carries the fix
+# --------------------------------------------------------------------------- #
+def test_workflow_touches_the_consensus_output():
+    """Guards the `touch` itself -- removing it reintroduces the abort."""
+    snakefile = (Path(__file__).resolve().parent.parent
+                 / "workflow" / "Snakefile").read_text()
+    rule = snakefile.split("rule cell_consensus:")[1].split("\nrule ")[0]
+    assert "touch {output.fasta}" in rule, (
+        "cell_consensus no longer touches its output; a cell whose coverage "
+        "never reaches --min-depth will abort the whole run")
+
+
+# --------------------------------------------------------------------------- #
+# When EVERY cell is sparse
+# --------------------------------------------------------------------------- #
+def test_annotate_reports_clearly_when_no_cells_survived(tmp_path):
+    """Zero cells is a failed run, and must say so rather than crash obscurely.
+
+    Fixing the missing-output abort moved this failure downstream: the workflow
+    now reaches annotate, which used to die with KeyError: 'mutants' several
+    stages after the real problem. It is a reachable state, not a curiosity --
+    on a small slice of a real run the reads spread thinly over thousands of
+    barcodes, so every cell can fall under the depth thresholds.
+    """
+    import pandas as pd
+
+    from anchovy import annotate
+
+    reference = tmp_path / "reference.txt"
+    reference.write_text("ACGT" * 30)
+    empty = tmp_path / "filtConsensus.csv"
+    pd.DataFrame(columns=["CBC_ID", "genotype", "sequence",
+                          "description"]).to_csv(empty, index=False)
+
+    with pytest.raises(ValueError) as excinfo:
+        annotate.run(str(empty), str(reference), str(tmp_path / "out"))
+
+    message = str(excinfo.value)
+    assert "no cells" in message
+    # The message has to name the knobs, or it is just a nicer crash.
+    assert "cons_min_depth" in message and "depth_min" in message
+
+
+def test_haplo_analysis_survives_an_empty_table():
+    """The pure function is total: an empty input gives an empty, well-shaped
+    table rather than a frame with no columns at all."""
+    import pandas as pd
+
+    from anchovy.annotate import haplo_analysis
+
+    out = haplo_analysis(pd.DataFrame(columns=["CBC_ID", "genotype"]))
+    assert out.empty
+    for column in ("mutants", "pos", "base", "CBC_ID", "genotype"):
+        assert column in out.columns
+
+
+def test_one_surviving_cell_is_enough(tmp_path):
+    """The boundary next to the empty case: a single cell must still work."""
+    import pandas as pd
+
+    from anchovy import annotate
+
+    reference = tmp_path / "reference.txt"
+    reference.write_text("ATG" + "AAA" * 20)
+    cons = tmp_path / "filtConsensus.csv"
+    pd.DataFrame([{"CBC_ID": "only", "genotype": "5G", "sequence": "",
+                   "description": "coverage:50"}]).to_csv(cons, index=False)
+
+    result = annotate.run(str(cons), str(reference), str(tmp_path / "out"),
+                          network=True)
+    assert len(result["annot"]) == 1
+    assert len(result["nodes"]) == 1

@@ -168,6 +168,23 @@ rule map_cell:
 # OUTPUT NAMING (empirical): "{reference}__{prefix}.fasta", prefix = SAM minus .sam.
 # LIMITATION (conscious): reference name hardcoded from config -> assumes a SINGLE
 # reference. Multi-segment references would emit multiple files per cell.
+#
+# THE `touch` IS LOAD-BEARING, and this failed on real data without it.
+# sam2consensus builds a dict of sequences to write, skipping any whose bases
+# are all gaps, and then writes one file per entry -- so a cell where NO
+# position reaches --min-depth leaves that dict empty, writes nothing at all,
+# and still exits 0. Snakemake declares the file required, so a single sparse
+# cell aborted the entire run with MissingOutputException.
+#
+# That is the normal case on real 10X data: most barcodes carry few reads. It
+# never showed up on the test fixture because every fixture cell has 6 reads at
+# every position, comfortably over the default min-depth of 5.
+#
+# Dropping a cell with too little coverage is correct -- that is what the depth
+# filter is for. The bug is only that "no consensus" is signalled by an absent
+# file. touch turns it into an empty one, which merge_consensus concatenates to
+# nothing and parse_consensus_fasta reads as zero records, so the cell simply
+# does not appear downstream.
 rule cell_consensus:
     input:
         sam=WORK + "/{cell}_BC.sam",
@@ -180,7 +197,8 @@ rule cell_consensus:
         outfolder=WORK,
     shell:
         "python {input.script} -c {params.cons_threshold} -m {params.min_depth} "
-        "--outfolder {params.outfolder} -i {input.sam}"
+        "--outfolder {params.outfolder} -i {input.sam} && "
+        "touch {output.fasta}"
 
 
 # --------------------------------------------------------------------------- #
