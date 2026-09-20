@@ -15,6 +15,7 @@ STRUCTURE (pure core + thin orchestration, like the other stages):
   annotate_mutation()-- one mutation token -> ref/mut codon, AA, subName, subClass
   haplo_analysis()   -- unroll genotypes -> per-mutation counts/frequencies table
   hap_network_gen()  -- genotype-overlap network edges (pure -> DataFrames)
+  genotype_nodes()   -- per-genotype NODE attributes for those edges (pure)
   annotate_variants_by_region() -- GFF3 region-aware annotation (long format)
   run()              -- orchestrate + write the CSVs
 
@@ -27,7 +28,6 @@ exactly as before, which is why the R-frozen goldens still pass.
 from __future__ import annotations
 
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -372,6 +372,62 @@ def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
+# Genotype node table (for network visualization)
+# --------------------------------------------------------------------------- #
+NODE_COLUMNS = ["genotype", "genotypeName", "nMutations", "nCells",
+                "genoFreq", "haploFreq"]
+
+
+def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
+    """One row per genotype: the NODE attributes for the network CSVs (pure).
+
+    WHY THIS EXISTS. Both network files are entirely EDGE-level -- source,
+    target, overlap, mutNumSource, mutNumTarget. Cytoscape therefore draws nodes
+    with no attributes at all, so a genotype cannot be sized by how common it is
+    or labelled by what it does to the protein without hand-joining CSVs inside
+    Cytoscape. Every one of those values already exists in the annotated table;
+    it just never reached a file keyed by genotype.
+
+    `genotype` matches the source/target values in the network CSVs exactly,
+    including the "reference" node, so Cytoscape can key a node-table import on
+    it directly (File -> Import -> Table from File).
+
+    genotypeName carries the amino-acid-level name ("R5S", "D3V_R5S"), which is
+    what makes a rendered network readable -- and which is frame-correct and
+    region-aware when annotate ran with a GFF, so a node can read "5UTR:A121C"
+    rather than a bare nucleotide token.
+    """
+    if annotated.empty:
+        return pd.DataFrame(columns=NODE_COLUMNS)
+
+    rows = []
+    for genotype, group in annotated.groupby("genotype", dropna=False):
+        name = group["genotypeName"].dropna()
+        # Reference cells have no substitutions, so no amino-acid name; label the
+        # node by what it is rather than leaving the field blank.
+        label = name.iloc[0] if len(name) and name.iloc[0] else None
+        if genotype == "reference" or not label:
+            label = "reference" if genotype == "reference" else str(genotype)
+
+        # Mutation count from the genotype string itself, so it agrees with the
+        # network's mutNumSource/mutNumTarget rather than being recomputed from
+        # a different source.
+        n_mutations = 0 if genotype == "reference" else len(str(genotype).split("_"))
+
+        rows.append({
+            "genotype": genotype,
+            "genotypeName": label,
+            "nMutations": n_mutations,
+            "nCells": group["CBC_ID"].nunique(),
+            "genoFreq": group["genoFreq"].iloc[0] if "genoFreq" in group else None,
+            "haploFreq": group["haploFreq"].iloc[0] if "haploFreq" in group else None,
+        })
+
+    return (pd.DataFrame(rows, columns=NODE_COLUMNS)
+            .sort_values(["nMutations", "genotype"]).reset_index(drop=True))
+
+
+# --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
 def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
@@ -381,6 +437,7 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     Outputs (matching the R naming):
       {out_prefix}_annot_v3.csv
       {out_prefix}_epistaticNetwork.csv, {out_prefix}_genotypeNetwork.csv (if network)
+      {out_prefix}_genotypeNodes.csv                                      (if network)
       {out_prefix}_regionAnnotations.csv                                  (if gff)
 
     TWO MODES, and the default is the old one:
@@ -462,6 +519,7 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
         region_table.to_csv(f"{out_prefix}_regionAnnotations.csv", index=False)
         written["regions"] = f"{out_prefix}_regionAnnotations.csv"
 
+    nodes = None
     if network:
         single_steps, all_entries = hap_network_gen(haplocounts)
         single_steps.to_csv(f"{out_prefix}_epistaticNetwork.csv", index=False)
@@ -469,4 +527,11 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
         written["epistatic"] = f"{out_prefix}_epistaticNetwork.csv"
         written["genotype"] = f"{out_prefix}_genotypeNetwork.csv"
 
-    return {"annot": merged, "regions": region_table, "written": written}
+        # Node attributes for the two edge tables above. Written with them
+        # because it is only useful alongside them.
+        nodes = genotype_nodes(merged)
+        nodes.to_csv(f"{out_prefix}_genotypeNodes.csv", index=False)
+        written["nodes"] = f"{out_prefix}_genotypeNodes.csv"
+
+    return {"annot": merged, "regions": region_table, "nodes": nodes,
+            "written": written}
