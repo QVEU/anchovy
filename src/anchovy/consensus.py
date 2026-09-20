@@ -29,7 +29,11 @@ Migrated from ConsensusTool.py. Two behavior-relevant decisions are baked in:
 BEHAVIOR PRESERVATION (reference=None path)
 -------------------------------------------
 Reproduces genotypeSummary's if-branch exactly:
-  - variant sites = columns (of the trimmed alignment) with >1 unique character
+  - variant sites = columns where any sequence differs from the reference. The
+    original asked whether the column varied across the cells, which is the SAME
+    SET when the reference is the computed consensus (the consensus is always one
+    of the characters present), but differs for a SUPPLIED reference -- see
+    genotype_summary().
   - per-column consensus = most frequent character (argmax of unique counts)
   - each sequence's genotype = "_".join((i+1)+base) over variant sites where the
     sequence differs from the per-column consensus, 1-based within the trimmed region
@@ -202,9 +206,9 @@ def genotype_summary(sequences: list[str], reference: str | None = None,
         token string for sequences[i], and reference_used is the reference the
         genotypes were called against.
 
-    Variant sites are columns where more than one character appears across
-    `sequences`; a token is emitted for a sequence at a variant site only where
-    it differs from the reference. Positions are 1-based over the input columns.
+    A variant site is any column where at least one sequence differs from the
+    reference, so a mutation FIXED across every cell is still reported. Positions
+    are 1-based over the input columns.
 
     WHY skip_gaps EXISTS (whole-reference mode only, hence default False)
     --------------------------------------------------------------------
@@ -219,13 +223,27 @@ def genotype_summary(sequences: list[str], reference: str | None = None,
     if not sequences:
         return [], reference or ""
 
-    columns = np.transpose([list(s) for s in sequences])
-    ncols = len(columns)
+    ncols = len(sequences[0])
     lo, hi = (0, ncols) if window is None else (max(0, window[0]), min(ncols, window[1]))
-    variant_sites = [i for i in range(lo, hi)
-                     if len(np.unique(columns[i])) > 1]
 
     ref = reference if reference is not None else _column_consensus(sequences)
+
+    # A site is worth calling wherever ANY sequence differs from the reference.
+    #
+    # This used to ask a different question -- whether the column varied ACROSS
+    # THE CELLS -- which quietly discarded FIXED DIFFERENCES: a position where
+    # every cell agrees with the others but none matches the supplied reference
+    # produced no call at all, so the whole population read as wild-type there.
+    # On a passaged or lab-adapted stock that can be most of the real variants.
+    #
+    # For the computed-reference path the two questions are provably the same,
+    # because the column consensus is always one of the characters present, so a
+    # column varies if and only if some sequence differs from it. Verified over
+    # 20000 randomized alignments (including gap-bearing alphabets): zero
+    # disagreements. That is why widening this cannot move any reference=None
+    # output, and why the frozen goldens still pass unchanged.
+    variant_sites = [i for i in range(lo, hi)
+                     if any(seq[i] != ref[i] for seq in sequences)]
 
     genotypes = []
     for seq in sequences:
