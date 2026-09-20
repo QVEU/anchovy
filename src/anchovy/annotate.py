@@ -34,6 +34,7 @@ import pandas as pd
 from Bio.Seq import Seq
 
 from anchovy import regions as regions_mod
+from anchovy.io import read_reference_sequence
 
 
 # --------------------------------------------------------------------------- #
@@ -397,7 +398,11 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
         (consensus.run(trim=False)); legacy trimmed tokens are numbered from the
         ORF start and would annotate the wrong genome positions.
     """
-    reference = Path(reference_file).read_text().strip().upper()
+    # Shared reader: accepts FASTA or a raw sequence file. Reading this by hand
+    # would splice a '>' header into the sequence and shift every genome
+    # coordinate, silently, which is exactly the kind of wrong this stage must
+    # not be (see io.read_reference_sequence).
+    reference = read_reference_sequence(reference_file).upper()
     cons = pd.read_csv(filt_consensus_csv)
     cons["genotype"] = cons["genotype"].fillna("")
 

@@ -226,6 +226,14 @@ def genotype_summary(sequences: list[str], reference: str | None = None,
     ncols = len(sequences[0])
     lo, hi = (0, ncols) if window is None else (max(0, window[0]), min(ncols, window[1]))
 
+    if reference is not None and len(reference) != ncols:
+        raise ValueError(
+            f"reference length {len(reference)} does not match the alignment "
+            f"length {ncols}. Every position is compared by index, so a "
+            f"mismatched reference would shift or truncate the calls. In "
+            f"whole-reference mode pass the full genome; in the default trimmed "
+            f"mode pass a reference already cut to the same region.")
+
     ref = reference if reference is not None else _column_consensus(sequences)
 
     # A site is worth calling wherever ANY sequence differs from the reference.

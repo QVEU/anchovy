@@ -84,7 +84,10 @@ def _cmd_consensus(args: argparse.Namespace) -> int:
 
     reference = None
     if args.reference:
-        reference = open(args.reference).read().strip()
+        # Via the shared reader, so a FASTA reference works. A bare read() would
+        # splice the '>' header into the sequence and shift every coordinate.
+        from anchovy.io import read_reference_sequence
+        reference = read_reference_sequence(args.reference)
 
     trim = not args.whole_reference
     if trim and (args.start is None or args.end is None):
@@ -170,7 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "start/end, so genotype positions are genome "
                              "coordinates. Required for region-aware annotation "
                              "(`anchovy annotate --gff`).")
-    p_cons.add_argument("--reference", help="Reference sequence file (default: compute consensus).")
+    p_cons.add_argument("--reference",
+                        help="Reference sequence, as FASTA or a raw sequence file "
+                             "(default: compute the consensus of the input).")
     p_cons.add_argument("--out-prefix", dest="out_prefix",
                         help="Output path prefix (default: derived from input).")
     p_cons.add_argument("--depth-min", type=int, dest="depth_min",
