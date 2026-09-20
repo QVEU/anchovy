@@ -1,3 +1,3 @@
-mutants,pos,base,CBC_ID,genotype,BCMutCount,total,count,freq,ref.codon,ref.resPos,ref.AA,mut.codon,mut.resPos,mut.AA,subName,subClass,genotypeName,genoFreq,haploFreq
-101T,101.0,T,cellA_BC|c50,101T,1,2,1,0.5,TAG,34.0,*,TTG,34.0,L,*34L,Non-Syn,*34L,0.5,0.5
-,,,cellB_BC|c50,reference,0,2,1,0.5,,,,,,,,,,0.5,0.5
+mutants,pos,base,CBC_ID,genotype,BCMutCount,total,count,freq,ref.codon,ref.AA,mut.codon,mut.AA,mut.resPos,subName,subClass,genotypeName,genoFreq,haploFreq
+201T,201.0,T,cellA_BC|c50,201T,1,2,1,0.5,AGT,S,TGT,C,18.0,S18C,Non-Syn,S18C,0.5,0.5
+,,,cellB_BC|c50,reference,0,2,1,0.5,,,,,,,,,0.5,0.5

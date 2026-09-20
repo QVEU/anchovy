@@ -30,17 +30,18 @@ cons_min_depth: 5
 
 # Consensus-stage (anchovy consensus) parameters.
 # The mapping fixture's cells report coverage 5.0 (6 reads, minimal by design).
-# The DEFAULT depth_min is 10 (see config.yaml) which would filter these out --
-# correct for real data, wrong for this deliberately-tiny test fixture. We lower
-# it here so the consensus stage produces output on the fixture. This override
-# lives ONLY in the test config; real runs keep the meaningful default.
+# The DEFAULT depth_min is 10 which would filter these out -- correct for real
+# data, wrong for this tiny test fixture. Lower it here so output is produced.
 depth_min: 1
 
-# ORF/region of interest for the consensus stage. The mapping fixture's reads
-# cover template positions 50-550; we analyze a window well inside that covered
-# core so every sequence has data there.
-orf_start: 100
-orf_end: 500
+# No window_start/window_end -> analyze the WHOLE reference (non-coding variants
+# surface). Add them to restrict variant-calling to a window if needed.
+
+# GFF3 of regions. Because it's set, the annotate stage is REGION-AWARE:
+# it writes _regionAnnotations.csv with coding + non-coding annotations, and
+# fills the legacy columns from the primary (first-in-GFF) region. Omit `gff`
+# to fall back to legacy single-reference frame-1 annotation.
+gff: "tests/data/mapping/regions.gff3"
 
 # --- Fields still required by the Snakefile even though the front-half stages
 # --- aren't exercised in this config. They point at the barcode fixture so the

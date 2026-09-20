@@ -22,3 +22,26 @@ signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
 # Reference/template FASTA that minimap2 maps each per-cell FASTA against.
 # (This was the $3 argument to AnchovyJob.sh.)
 template: "tests/data/template.fasta"
+
+# The NAME of the reference sequence inside the template FASTA (the text after
+# ">"). sam2consensus prefixes its output filenames with this, so the workflow
+# needs it to predict output names. For the mapping fixture the reference is
+# named "testref". IMPORTANT: this must match the actual FASTA header.
+reference_name: "testref"
+
+# sam2consensus parameters (were hardcoded as -c .5 -m 5 in AnchovyJob.sh).
+cons_threshold: 0.5
+cons_min_depth: 5
+
+# Consensus stage: analyzes the WHOLE reference by default so non-coding variants
+# surface. Optionally restrict variant-calling to a window (to exclude ragged,
+# low-coverage flanks) by setting both of these (1-based inclusive):
+# window_start: 97
+# window_end: 10272
+
+# Region annotation (optional). Point this at a GFF3 describing your regions
+# (CDS / mature_protein_region / UTRs) to get region-aware annotation: coding
+# regions get amino-acid calls in their own frame, non-coding regions get
+# nucleotide-level annotation, and overlapping regions each get a row. Omit it
+# for legacy single-reference frame-1 annotation.
+# gff: "path/to/regions.gff3"

@@ -1,5 +1,5 @@
 source,count,target,overlap,mutNumSource,mutNumTarget
-101T,1,101T,1,1,1
+201T,1,201T,1,1,1
 reference,1,reference,1,1,1
-101T,1,reference,1,1,0
+201T,1,reference,1,1,0
 reference,1,reference,1,1,0

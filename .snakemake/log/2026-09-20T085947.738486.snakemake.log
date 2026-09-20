@@ -1,0 +1,69 @@
+Config file workflow/config.yaml is extended by additional config specified via the command line.
+Assuming unrestricted shared filesystem usage.
+
+SNAKEMAKE
+=========
+  Date: 2026-09-20 08:59:47
+  Workflow ID: fe627eb0-61bb-42cf-8246-0874e8061af4
+  Platform: macOS-14.8.5-arm64-arm-64bit-Mach-O
+  Host: L02308744.niaid.nih.gov
+  User: dolanpt
+  Snakemake version: 9.26.1
+  Python version: 3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:04:32) [Clang 20.1.8 ]
+  Command: /Users/dolanpt/opt/anaconda3/envs/anchovy_env/bin/snakemake -s workflow/Snakefile --configfile workflow/config_test.yaml --cores 4
+  Snakefile: /Users/dolanpt/Documents/GitHub/anchovy/workflow/Snakefile
+  Base directory: /Users/dolanpt/Documents/GitHub/anchovy/workflow
+  Run directory: /Users/dolanpt/Documents/GitHub/anchovy
+  Working directory: /Users/dolanpt/Documents/GitHub/anchovy
+  Config file(s): [PosixPath('/Users/dolanpt/Documents/GitHub/anchovy/workflow/config_test.yaml'), 'workflow/config.yaml']
+  Config MD5: 0f97cbd9172e95629f9e5830f48c3e57
+
+Building DAG of jobs...
+Using shell: /bin/bash
+Provided cores: 4
+Rules claiming more threads will be scaled down.
+Job stats:
+job          count
+---------  -------
+consensus        1
+annotate         1
+all              1
+total            3
+
+Select jobs to execute...
+Execute 1 jobs...
+[Sun Sep 20 08:59:48 2026]
+localrule consensus:
+    input: results/test/test_allConsensus.fasta
+    output: results/test/test_filtConsensus.csv, results/test/test_consensus_reference.txt
+    jobid: 2
+    reason: Missing output files: results/test/test_consensus_reference.txt, results/test/test_filtConsensus.csv
+    resources: tmpdir=/var/folders/kk/1fzwcqps6dd_3dt2hsjct0tr_85vzj/T
+[Sun Sep 20 08:59:49 2026]
+Finished jobid: 2 (Rule: consensus)
+1 of 3 steps (33%) done
+Select jobs to execute...
+Execute 1 jobs...
+[Sun Sep 20 08:59:49 2026]
+localrule annotate:
+    input: results/test/test_filtConsensus.csv, results/test/test_consensus_reference.txt
+    output: results/test/test_annot_v3.csv, results/test/test_epistaticNetwork.csv, results/test/test_genotypeNetwork.csv
+    jobid: 1
+    reason: Missing output files: results/test/test_annot_v3.csv; Input files updated by another job: results/test/test_consensus_reference.txt, results/test/test_filtConsensus.csv
+    resources: tmpdir=/var/folders/kk/1fzwcqps6dd_3dt2hsjct0tr_85vzj/T
+[Sun Sep 20 08:59:49 2026]
+Finished jobid: 1 (Rule: annotate)
+2 of 3 steps (67%) done
+Select jobs to execute...
+Execute 1 jobs...
+[Sun Sep 20 08:59:49 2026]
+localrule all:
+    input: results/test/test_annot_v3.csv
+    jobid: 0
+    reason: Input files updated by another job: results/test/test_annot_v3.csv
+    resources: tmpdir=/var/folders/kk/1fzwcqps6dd_3dt2hsjct0tr_85vzj/T
+[Sun Sep 20 08:59:49 2026]
+Finished jobid: 0 (Rule: all)
+3 of 3 steps (100%) done
+Complete log(s): /Users/dolanpt/Documents/GitHub/anchovy/.snakemake/log/2026-09-20T085947.738486.snakemake.log
+Elapsed time: 0:00:02.109243

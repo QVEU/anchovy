@@ -1,0 +1,11 @@
+##gff-version 3
+# Test region annotation for the mapping fixture (600 nt reference "testref").
+# Layout chosen so pipeline variants land in different region types:
+#   - 5' UTR:   positions 1-149   (non-coding)
+#   - CDS:      positions 150-449  (coding, frame from 150, phase 0; length 300 = 100 codons)
+#   - 3' UTR:   positions 450-600  (non-coding)
+# The planted variant at genome ~200 falls inside the CDS (coding annotation);
+# any variant in the flanks would get non-coding annotation.
+testref	anchovy	five_prime_UTR	1	149	.	+	.	ID=5UTR;Name=5UTR
+testref	anchovy	CDS	150	449	.	+	0	ID=cds;Name=polyprotein
+testref	anchovy	three_prime_UTR	450	600	.	+	.	ID=3UTR;Name=3UTR

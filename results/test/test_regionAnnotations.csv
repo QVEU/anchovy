@@ -1,0 +1,2 @@
+mutation_id,region,region_type,strand,genome_pos,wt_base,mut_base,wt_aa,mut_aa,residue,codon_wt,codon_mut,sub_class,mutants
+polyprotein:A201T,polyprotein,coding,+,201,A,T,S,C,18,AGT,TGT,Non-Syn,201T

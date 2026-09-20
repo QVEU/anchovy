@@ -174,8 +174,14 @@ def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
 
     table = pd.DataFrame(rows)
 
-    # BCMutCount per cell; filter out hypermutated cells (< 200), matching R.
-    if not table.empty:
+    # Handle the no-mutations case gracefully: with only reference cells (or no
+    # cells), there are no mutation rows to group on. Build a well-formed empty
+    # table with the expected columns rather than crashing on groupby.
+    if table.empty:
+        table = pd.DataFrame(columns=[
+            "mutants", "pos", "base", "CBC_ID", "genotype", "BCMutCount"])
+    else:
+        # BCMutCount per cell; filter out hypermutated cells (< 200), matching R.
         table["BCMutCount"] = table.groupby("CBC_ID")["mutants"].transform("size")
         table = table[table["BCMutCount"] < 200]
 
@@ -189,8 +195,11 @@ def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
 
     # Frequencies across cells: count is number of rows per mutant token.
     table["total"] = depth
-    table["count"] = table.groupby("mutants")["mutants"].transform("size")
-    table["freq"] = table["count"] / table["total"]
+    if len(table) and table["mutants"].notna().any():
+        table["count"] = table.groupby("mutants")["mutants"].transform("size")
+    else:
+        table["count"] = 0
+    table["freq"] = table["count"] / table["total"] if depth else 0
     return table
 
 

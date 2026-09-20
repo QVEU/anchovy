@@ -105,6 +105,7 @@ def _cmd_annotate(args: argparse.Namespace) -> int:
         reference_file=args.reference,
         out_prefix=args.out_prefix,
         network=not args.no_network,
+        gff=args.gff,          # None -> legacy frame-1; set -> region-aware
     )
     for label, path in result["written"].items():
         print(f"Wrote {path}")
@@ -150,15 +151,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_cons = sub.add_parser(
         "consensus", help="Filter consensus sequences and summarize genotypes.")
     p_cons.add_argument("fasta", help="Path to <NAME>_allConsensus.fasta.")
-    p_cons.add_argument("start", type=int, help="ORF/region start (nt).")
-    p_cons.add_argument("end", type=int, help="ORF/region end (nt).")
+    p_cons.add_argument("start", type=int, nargs="?", default=None,
+                        help="Optional analysis window start (1-based, nt). "
+                             "Omit to analyze the whole reference.")
+    p_cons.add_argument("end", type=int, nargs="?", default=None,
+                        help="Optional analysis window end (1-based, nt).")
     p_cons.add_argument("--reference", help="Reference sequence file (default: compute consensus).")
     p_cons.add_argument("--out-prefix", dest="out_prefix",
                         help="Output path prefix (default: derived from input).")
     p_cons.add_argument("--depth-min", type=int, dest="depth_min",
                         help="Minimum coverage to keep a sequence (default: 10).")
     p_cons.add_argument("--max-gaps", type=int, dest="max_gaps",
-                        help="Max gaps allowed in region (default: 3).")
+                        help="Max gaps allowed in window (default: 3).")
     p_cons.set_defaults(func=_cmd_consensus)
 
     # --- annotate ---
@@ -167,6 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_annot.add_argument("csv", help="filtConsensus.csv (from `anchovy consensus`).")
     p_annot.add_argument("reference", help="Reference sequence file.")
     p_annot.add_argument("out_prefix", help="Output path prefix.")
+    p_annot.add_argument("--gff", default=None,
+                         help="GFF3 file of regions. If given, annotation is "
+                              "region-aware (coding + non-coding, both strands) "
+                              "and a _regionAnnotations.csv is written. If omitted, "
+                              "legacy single-reference frame-1 annotation is used.")
     p_annot.add_argument("--no-network", action="store_true",
                          help="Skip generating the network CSVs.")
     p_annot.set_defaults(func=_cmd_annotate)

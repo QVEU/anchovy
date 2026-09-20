@@ -155,10 +155,9 @@ rule merge_consensus:
 # --------------------------------------------------------------------------- #
 # Stage 6: consensus  (allConsensus.fasta -> filtered genotype table + reference)
 # --------------------------------------------------------------------------- #
-# One-in-one-out rule calling the `anchovy consensus` CLI. Filters/trims the
-# merged consensuses to the ORF region and calls per-cell genotypes.
-# Produces two outputs (the CLI derives their names from the input via
-# --out-prefix): the filtered genotype CSV and the reference sequence.
+# Analyzes the WHOLE reference by default (so non-coding variants surface), with
+# an OPTIONAL window (config: window_start/window_end) to exclude ragged flanks.
+# Variant positions are genome-relative.
 rule consensus:
     input:
         fasta=ALL_CONSENSUS,
@@ -166,22 +165,26 @@ rule consensus:
         csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
         reference=RESULTS + "/" + SAMPLE + "_consensus_reference.txt",
     params:
-        start=config["orf_start"],
-        end=config["orf_end"],
+        # optional window; empty string -> whole reference
+        window=(f"{config['window_start']} {config['window_end']}"
+                if "window_start" in config and "window_end" in config else ""),
         depth_min=config.get("depth_min", 10),
         out_prefix=RESULTS + "/" + SAMPLE,
     shell:
-        "anchovy consensus {input.fasta} {params.start} {params.end} "
+        "anchovy consensus {input.fasta} {params.window} "
         "--depth-min {params.depth_min} --out-prefix {params.out_prefix}"
 
 
 # --------------------------------------------------------------------------- #
 # Stage 7: annotate  (filtConsensus.csv + reference -> annotated table + networks)
 # --------------------------------------------------------------------------- #
-# The final analysis stage: the Python port of the R annotation. Produces the
-# annotated genotype table and the genotype/epistatic network CSVs. Plotting was
-# deliberately dropped (see annotate.py). This is a one-in-two-out rule (three
-# outputs when networks are on).
+# Region-aware when a GFF is configured (config: gff), else legacy frame-1.
+# When region-aware, additionally writes _regionAnnotations.csv (long format:
+# one row per mutation x containing region, coding + non-coding, both strands).
+def _annotate_gff_flag(wildcards):
+    gff = config.get("gff")
+    return f"--gff {gff}" if gff else ""
+
 rule annotate:
     input:
         csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
@@ -192,5 +195,7 @@ rule annotate:
         genotype=RESULTS + "/" + SAMPLE + "_genotypeNetwork.csv",
     params:
         out_prefix=RESULTS + "/" + SAMPLE,
+        gff_flag=_annotate_gff_flag,
     shell:
-        "anchovy annotate {input.csv} {input.reference} {params.out_prefix}"
+        "anchovy annotate {input.csv} {input.reference} {params.out_prefix} "
+        "{params.gff_flag}"

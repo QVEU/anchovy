@@ -121,13 +121,20 @@ def select_sequences(records: list[ConsensusRecord],
     kept: list[ConsensusRecord] = []
     for r in records:
         depth = r.coverage if r.coverage is not None else 0
-        lo = 0 if start is None else start
-        hi = len(r.seq) if end is None else end
-        gaps_in_region = sum(1 for i in range(lo, min(hi, len(r.seq)))
-                             if r.seq[i] == "-")
-        if depth > config.depth_min and gaps_in_region < config.max_gaps_in_region:
-            # keep full-length; no trimming
-            kept.append(r)
+        if depth <= config.depth_min:
+            continue
+        # The gap filter is quality control WITHIN an explicit analysis window.
+        # With no window (whole-reference), uncovered flanks are gap-filled by
+        # design (e.g. sam2consensus fills no-coverage regions with '-'), so we
+        # do NOT reject a cell for flank gaps -- we simply won't call variants at
+        # gap positions later (see genotype_summary). Only apply the gap filter
+        # when the user gave a window to QC.
+        if start is not None and end is not None:
+            gaps_in_region = sum(1 for i in range(start, min(end, len(r.seq)))
+                                 if r.seq[i] == "-")
+            if gaps_in_region >= config.max_gaps_in_region:
+                continue
+        kept.append(r)
     return kept
 
 
@@ -185,8 +192,12 @@ def genotype_summary(sequences: list[str], reference: str | None = None,
 
     genotypes = []
     for seq in sequences:
-        # position i (0-based column) -> 1-based genome coordinate (i+1)
-        tokens = [f"{i + 1}{seq[i]}" for i in variant_sites if seq[i] != ref[i]]
+        # position i (0-based column) -> 1-based genome coordinate (i+1).
+        # Skip gap positions: a '-' in the sequence or the reference is not a
+        # real substitution (typically an uncovered/gap-filled flank), so it
+        # must not be called as a variant.
+        tokens = [f"{i + 1}{seq[i]}" for i in variant_sites
+                  if seq[i] != ref[i] and seq[i] != "-" and ref[i] != "-"]
         genotypes.append("_".join(tokens))
     return genotypes, ref
 
