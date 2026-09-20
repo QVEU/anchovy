@@ -27,6 +27,13 @@ positional .iat[minPos, 0], which is what the old code MEANT.
 from __future__ import annotations
 
 import numpy as np
+
+from anchovy.schema import (
+    SIGNATURE_BARCODE_LEN,
+    SIGNATURE_NON_UMI_LEN,
+    SIGNATURE_PREFIX_LEN,
+    SIGNATURE_SUFFIX_LEN,
+)
 import Levenshtein
 
 
@@ -79,6 +86,76 @@ def best_query_match(seq: str, query: str) -> tuple[int, int, str]:
         return query_len, -1, ""
 
 
+def validate_signature(query: str) -> None:
+    """Check a 10X signature has the layout the rest of this module assumes.
+
+    WHY THIS EXISTS. The slice points below are not arbitrary: they encode a
+    fixed 22-base 5' handle, a 16-base barcode and a fixed 10-base 3' handle,
+    with the UMI width derived as len(query) - 48. That derivation is what lets
+    a single signature string carry the whole chemistry -- swap the 26-N v2
+    signature for the 28-N v3 one and the UMI follows automatically, because
+    only the UMI length differs between them.
+
+    It holds only while the signature actually has that shape. A signature with,
+    say, a 4-base prefix is not rejected by anything: it just shifts the slice
+    points, and the "UMI" that comes out is mostly barcode. Nothing downstream
+    can tell, because a wrong-but-consistent UMI still groups reads -- it just
+    groups the wrong ones, collapsing distinct molecules or splitting one.
+
+    So the assumption is checked once, loudly, rather than silently relied on.
+
+    Raises:
+        ValueError: if the signature does not have the expected structure.
+    """
+    query = query.upper()
+    n_start = query.find("N")
+    n_end = query.rfind("N")
+
+    if n_start == -1:
+        raise ValueError(
+            f"10X signature has no N-run marking the barcode+UMI region: "
+            f"{query!r}")
+
+    prefix, suffix = query[:n_start], query[n_end + 1:]
+    n_run = query[n_start:n_end + 1]
+
+    # The span between the first and last N must be ALL Ns. Checking the prefix
+    # and suffix instead would be vacuous: they are defined as the text outside
+    # those two positions, so neither can contain an N by construction.
+    if set(n_run) != {"N"}:
+        raise ValueError(
+            f"10X signature must be <constant prefix><N-run><constant suffix>, "
+            f"but the Ns are not contiguous -- found "
+            f"{sorted(set(n_run) - {'N'})} inside the N-run: {query!r}")
+
+    problems = []
+    if len(prefix) != SIGNATURE_PREFIX_LEN:
+        problems.append(
+            f"5' handle is {len(prefix)} nt, expected {SIGNATURE_PREFIX_LEN}")
+    if len(suffix) != SIGNATURE_SUFFIX_LEN:
+        problems.append(
+            f"3' handle is {len(suffix)} nt, expected {SIGNATURE_SUFFIX_LEN}")
+    if len(n_run) <= SIGNATURE_BARCODE_LEN:
+        problems.append(
+            f"N-run is {len(n_run)} nt, which leaves no UMI after the "
+            f"{SIGNATURE_BARCODE_LEN} nt barcode")
+
+    if problems:
+        umi = len(query) - SIGNATURE_NON_UMI_LEN
+        raise ValueError(
+            "10X signature does not have the layout anchovy assumes:\n"
+            "    " + "\n    ".join(problems) + "\n"
+            f"  got:      {query!r} ({len(query)} nt)\n"
+            f"  expected: {SIGNATURE_PREFIX_LEN} nt constant 5' handle, then "
+            f"{SIGNATURE_BARCODE_LEN} nt barcode + UMI as Ns, then "
+            f"{SIGNATURE_SUFFIX_LEN} nt constant 3' handle.\n"
+            f"  For reference, 10X v2 is 26 Ns (10 nt UMI) and v3 is 28 "
+            f"(12 nt UMI).\n"
+            f"  Proceeding would slice the UMI at the wrong offsets and "
+            f"silently mis-group reads (this signature would give a "
+            f"{umi} nt UMI).")
+
+
 def build_barcode_query_blocks(query: str, barcodes) -> np.ndarray:
     """Build one barcode-augmented query template per whitelist barcode.
 
@@ -94,7 +171,10 @@ def build_barcode_query_blocks(query: str, barcodes) -> np.ndarray:
     """
     n = len(query)
     return np.array([
-        query[0:22] + bc + "N" * (n - 48) + query[n - 10:n]
+        query[0:SIGNATURE_PREFIX_LEN]
+        + bc
+        + "N" * (n - SIGNATURE_NON_UMI_LEN)          # UMI width, derived
+        + query[n - SIGNATURE_SUFFIX_LEN:n]
         for bc in barcodes
     ])
 
