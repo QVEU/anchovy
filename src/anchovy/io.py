@@ -27,6 +27,7 @@ clearly-labeled commits, validated against the golden tests.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pandas as pd
 import pysam
@@ -198,3 +199,63 @@ def parse_description(description: str) -> dict[str, float | None]:
             except ValueError:
                 length = None
     return {"coverage": coverage, "length": length}
+
+
+# --------------------------------------------------------------------------- #
+# Reference sequence reading
+# --------------------------------------------------------------------------- #
+def read_reference_sequence(path: str | Path) -> str:
+    """Read a reference sequence from a FASTA file or a raw sequence file.
+
+    WHY THIS EXISTS -- it fixes a silent data-corruption hazard. Both callers
+    used to do the obvious thing, `open(path).read().strip()`. Handed a FASTA --
+    the format every reference genome actually ships in -- that put the header
+    line INTO the sequence:
+
+        ">testref\\nAGGGTATCTAAA..."
+
+    Nothing raised. Every genome coordinate simply shifted by the length of the
+    header, and reference[i] could land on a newline, so the whole run produced
+    confidently wrong calls. A reference that is merely too SHORT at least fails
+    loudly with an IndexError; this one failed silently, which is worse.
+
+    Accepts either form:
+      - FASTA: a '>' header followed by sequence lines, which may be wrapped.
+      - Raw: the bare sequence, optionally wrapped across lines.
+
+    Internal whitespace and line breaks are removed in both cases, so a wrapped
+    sequence reads the same as a single-line one. Case is preserved; callers
+    apply their own normalization.
+
+    Raises ValueError on an empty file, or on a multi-record FASTA -- the
+    pipeline assumes a single reference (see the Snakefile's cell_consensus
+    note), so a segmented genome should fail loudly here rather than silently
+    annotate everything against whichever record happened to come first.
+    """
+    text = Path(path).read_text()
+
+    if ">" in text:
+        records: list[list[str]] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                records.append([])
+            elif records:
+                records[-1].append(line)
+            else:
+                raise ValueError(
+                    f"{path}: sequence data appears before the first '>' header.")
+        if len(records) > 1:
+            raise ValueError(
+                f"{path}: expected one sequence, found {len(records)} FASTA "
+                f"records. The pipeline assumes a single reference; split the "
+                f"file or pass the one record you mean to use.")
+        sequence = "".join(records[0])
+    else:
+        sequence = "".join(text.split())
+
+    if not sequence:
+        raise ValueError(f"{path}: no reference sequence found.")
+    return sequence

@@ -15,16 +15,26 @@ STRUCTURE (pure core + thin orchestration, like the other stages):
   annotate_mutation()-- one mutation token -> ref/mut codon, AA, subName, subClass
   haplo_analysis()   -- unroll genotypes -> per-mutation counts/frequencies table
   hap_network_gen()  -- genotype-overlap network edges (pure -> DataFrames)
+  annotate_variants_by_region() -- GFF3 region-aware annotation (long format)
   run()              -- orchestrate + write the CSVs
+
+REGION AWARENESS (added later, opt-in via run(gff=...)) layers a GFF3-driven
+model over the above without disturbing it. See the run() docstring and
+regions.py. With no GFF supplied the legacy single-ORF, frame-1 path runs
+exactly as before, which is why the R-frozen goldens still pass.
 """
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from Bio.Seq import Seq
+
+from anchovy import regions as regions_mod
+from anchovy.io import read_reference_sequence
 
 
 # --------------------------------------------------------------------------- #
@@ -50,7 +60,15 @@ def codon(seq: str, pos: int) -> dict:
 
     # Translate full sequence with the standard genetic code. Biopython's
     # translate matches R's Biostrings translate for the standard table.
-    protein = str(Seq(seq).translate())
+    #
+    # Gap characters are mapped to 'N' first. Biopython RAISES on a codon like
+    # '--A', so without this a reference carrying gaps crashes the whole stage --
+    # which is reachable now that the consensus stage can keep the whole
+    # reference, whose uncovered flanks sam2consensus gap-fills. 'N' translates
+    # to 'X' ("not translatable"), which is the honest answer for a position with
+    # no coverage. On a gap-free reference this substitution does nothing, so
+    # every frozen golden is untouched.
+    protein = str(Seq(seq.replace("-", "N")).translate())
 
     res = _residue_of(pos)
     os_ = pos % 3
@@ -242,17 +260,149 @@ def hap_network_gen(haplocounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
 
 
 # --------------------------------------------------------------------------- #
+# Region-aware annotation (GFF3-driven)
+# --------------------------------------------------------------------------- #
+# The legacy path above assumes ONE reference read in frame 1 from its first
+# base. That is wrong in two ways for a real viral genome: it cannot annotate
+# non-coding regions at all, and it mis-numbers residues whenever the ORF does
+# not start at position 1. The functions below replace that assumption with the
+# GFF3 region model in regions.py, while leaving the legacy path byte-identical
+# for callers that pass no GFF (gff=None).
+
+REGION_COLUMNS = [
+    "mutation_id", "region", "region_type", "strand", "genome_pos",
+    "wt_base", "mut_base", "residue", "codon_wt", "codon_mut",
+    "wt_aa", "mut_aa", "sub_class",
+]
+
+
+def _token_parts(token: str) -> tuple[int, str]:
+    """Split a genotype token like '201A' into (position, base)."""
+    return int(token[:-1]), token[-1].upper()
+
+
+def annotate_variants_by_region(variants: list[str], reference: str,
+                                gff: str) -> pd.DataFrame:
+    """Annotate genotype tokens against every containing GFF3 region (long format).
+
+    One row per (mutation x containing region): a variant inside both a
+    polyprotein and a mature protein yields two rows, each numbered in its own
+    frame of reference. Positions in no region yield a single 'intergenic' row.
+
+    `variants` are genotype tokens whose positions are GENOME coordinates, which
+    is only true when the consensus stage ran in whole-reference mode
+    (consensus.run(trim=False)). Feeding it legacy trimmed tokens would silently
+    annotate the wrong positions.
+    """
+    region_list = regions_mod.parse_gff3(gff)
+    for message in regions_mod.validate_regions(region_list):
+        warnings.warn(f"{gff}: {message}", stacklevel=2)
+
+    rows: list[dict] = []
+    for token in variants:
+        pos, mut_base = _token_parts(token)
+        # The WT base is the reference base at that genome position. This is
+        # exact, not inferred: a token exists only where the cell differs from
+        # the reference the genotypes were called against.
+        wt_base = reference[pos - 1] if 1 <= pos <= len(reference) else "N"
+        rows.extend(regions_mod.annotate_mutation(
+            region_list, pos, wt_base, mut_base, reference))
+
+    table = pd.DataFrame(rows, columns=REGION_COLUMNS)
+    if not table.empty:
+        # STABLE sort, and deliberately NOT by region name. regions.annotate_mutation
+        # emits a mutation's rows in GFF3 file order, and "the primary region is the
+        # first one listed in the GFF" is the contract _legacy_rows_from_regions
+        # relies on to back-fill the legacy columns. A non-stable sort, or one that
+        # included `region` as a key, would silently reorder those rows and make the
+        # primary region whichever one sorts first alphabetically instead.
+        table = table.sort_values(
+            ["genome_pos", "mut_base"], kind="stable").reset_index(drop=True)
+    return table
+
+
+def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
+    """Back-fill the legacy _annot_v3 columns from each mutation's PRIMARY region.
+
+    The primary region is the first one in GFF3 order that contains the position
+    (regions.annotate_mutation preserves file order, so it is the first row for
+    that mutation). Keeping the legacy columns populated means the annotated
+    table, the genotype names, and every downstream consumer keep working
+    unchanged when a GFF is supplied -- region awareness ADDS a file, it does not
+    reshape the existing one.
+
+    Verified: for a single + strand CDS starting at genome position 1 with phase
+    0, this reproduces the legacy frame-1 calls exactly (see
+    test_annotate_region_matches_legacy_on_single_cds).
+    """
+    if region_table.empty:
+        return pd.DataFrame(columns=[
+            "pos", "base", "ref.codon", "ref.resPos", "ref.AA",
+            "mut.codon", "mut.resPos", "mut.AA", "subName", "subClass"])
+
+    primary = region_table.drop_duplicates(subset=["genome_pos", "mut_base"],
+                                           keep="first")
+    rows = []
+    for r in primary.itertuples(index=False):
+        # pd.notna, NOT `is not None`: building the frame coerces the None cells of
+        # a mixed column to NaN, and `NaN is not None` is True. Without this, a
+        # coding row that has no complete codon (a position inside the feature's
+        # phase lead-in) reaches int(NaN) and raises.
+        if (r.region_type == "coding"
+                and pd.notna(r.wt_aa) and pd.notna(r.residue)):
+            sub_name = f"{r.wt_aa}{int(r.residue)}{r.mut_aa}"
+        else:
+            # Non-coding (and intergenic) mutations have no amino-acid name. Use
+            # the genome-anchored mutation id so genotype names stay meaningful
+            # and distinct instead of collapsing to a shared blank.
+            sub_name = r.mutation_id
+        rows.append({
+            "pos": r.genome_pos,
+            "base": r.mut_base,
+            "ref.codon": r.codon_wt,
+            "ref.resPos": r.residue,
+            "ref.AA": r.wt_aa,
+            "mut.codon": r.codon_mut,
+            "mut.resPos": r.residue,
+            "mut.AA": r.mut_aa,
+            "subName": sub_name,
+            "subClass": r.sub_class if pd.notna(r.sub_class) else "non-coding",
+        })
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
 def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
-        network: bool = True) -> dict:
+        network: bool = True, gff: str | None = None) -> dict:
     """Read genotype table + reference, annotate, optionally build network, write CSVs.
 
     Outputs (matching the R naming):
       {out_prefix}_annot_v3.csv
       {out_prefix}_epistaticNetwork.csv, {out_prefix}_genotypeNetwork.csv (if network)
+      {out_prefix}_regionAnnotations.csv                                  (if gff)
+
+    TWO MODES, and the default is the old one:
+
+    gff=None -- LEGACY. Annotate every mutation against the single reference read
+        in frame 1 from its first base. Unchanged, still golden-tested.
+
+    gff=<path> -- REGION-AWARE. Mutation positions are treated as GENOME
+        coordinates and annotated against every GFF3 region containing them, in
+        long format, written to the extra _regionAnnotations.csv. The legacy
+        _annot_v3.csv is still produced, with its columns back-filled from each
+        mutation's primary region, so nothing downstream has to change.
+
+        This requires the consensus stage to have run in whole-reference mode
+        (consensus.run(trim=False)); legacy trimmed tokens are numbered from the
+        ORF start and would annotate the wrong genome positions.
     """
-    reference = Path(reference_file).read_text().strip().upper()
+    # Shared reader: accepts FASTA or a raw sequence file. Reading this by hand
+    # would splice a '>' header into the sequence and shift every genome
+    # coordinate, silently, which is exactly the kind of wrong this stage must
+    # not be (see io.read_reference_sequence).
+    reference = read_reference_sequence(reference_file).upper()
     cons = pd.read_csv(filt_consensus_csv)
     cons["genotype"] = cons["genotype"].fillna("")
 
@@ -261,18 +411,26 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     # annotate each distinct variant token (excluding the reference sentinel)
     variants = sorted({t for g in haplocounts["genotype"].unique()
                        for t in str(g).split("_")} - {"reference", ""})
-    annos = [annotate_mutation(v, reference) for v in variants]
-    anno_rows = [{
-        "pos": a["pos"], "base": a["base"],
-        "ref.codon": a["ref"]["codon"] if a["ref"] else None,
-        "ref.resPos": a["ref"]["resPos"] if a["ref"] else None,
-        "ref.AA": a["ref"]["AA"] if a["ref"] else None,
-        "mut.codon": a["mut"]["codon"] if a["mut"] else None,
-        "mut.resPos": a["mut"]["resPos"] if a["mut"] else None,
-        "mut.AA": a["mut"]["AA"] if a["mut"] else None,
-        "subName": a["subName"], "subClass": a["subClass"],
-    } for a in annos]
-    anno = pd.DataFrame(anno_rows)
+
+    written = {}
+    region_table = None
+
+    if gff is None:
+        annos = [annotate_mutation(v, reference) for v in variants]
+        anno_rows = [{
+            "pos": a["pos"], "base": a["base"],
+            "ref.codon": a["ref"]["codon"] if a["ref"] else None,
+            "ref.resPos": a["ref"]["resPos"] if a["ref"] else None,
+            "ref.AA": a["ref"]["AA"] if a["ref"] else None,
+            "mut.codon": a["mut"]["codon"] if a["mut"] else None,
+            "mut.resPos": a["mut"]["resPos"] if a["mut"] else None,
+            "mut.AA": a["mut"]["AA"] if a["mut"] else None,
+            "subName": a["subName"], "subClass": a["subClass"],
+        } for a in annos]
+        anno = pd.DataFrame(anno_rows)
+    else:
+        region_table = annotate_variants_by_region(variants, reference, gff)
+        anno = _legacy_rows_from_regions(region_table)
 
     merged = haplocounts.merge(anno, how="left", on=["pos", "base"])
 
@@ -282,9 +440,12 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     merged["genoFreq"] = merged.groupby("genotypeName")["CBC_ID"].transform("nunique") / merged["total"]
     merged["haploFreq"] = merged.groupby("genotype")["CBC_ID"].transform("nunique") / merged["total"]
 
-    written = {}
     merged.to_csv(f"{out_prefix}_annot_v3.csv", index=False)
     written["annot"] = f"{out_prefix}_annot_v3.csv"
+
+    if region_table is not None:
+        region_table.to_csv(f"{out_prefix}_regionAnnotations.csv", index=False)
+        written["regions"] = f"{out_prefix}_regionAnnotations.csv"
 
     if network:
         single_steps, all_entries = hap_network_gen(haplocounts)
@@ -293,4 +454,4 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
         written["epistatic"] = f"{out_prefix}_epistaticNetwork.csv"
         written["genotype"] = f"{out_prefix}_genotypeNetwork.csv"
 
-    return {"annot": merged, "written": written}
+    return {"annot": merged, "regions": region_table, "written": written}

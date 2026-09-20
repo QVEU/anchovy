@@ -72,15 +72,61 @@ def test_genotype_summary_no_variation():
 # --------------------------------------------------------------------------- #
 def test_genotype_summary_supplied_reference_changes_calls():
     # Same sequences, but with an explicit reference the calls differ from the
-    # computed-consensus case. Reference says position 1 should be 'G'.
+    # computed-consensus case. Reference says position 1 should be 'A'.
     seqs = ["GACG", "GTCG", "GACG"]
     genos, ref = genotype_summary(seqs, reference="AACG")
     assert ref == "AACG"
-    # Variant sites: pos1 (G/G/G) is NOT variant across seqs, so even though all
-    # differ from ref 'A' there, no token is emitted (matches original semantics:
-    # tokens only at columns that vary across the input). pos2: A/T/A is variant;
-    # 'T' differs from ref 'A' -> "2T".
-    assert genos == ["", "2T", ""]
+    # pos1: every cell has 'G' where the reference says 'A'. That is a FIXED
+    # DIFFERENCE and it IS reported, for all three cells -- see the test below
+    # for why. pos2: A/T/A, so only the middle cell differs from ref 'A'.
+    assert genos == ["1G", "1G_2T", "1G"]
+
+
+def test_fixed_difference_from_supplied_reference_is_reported():
+    """A mutation shared by EVERY cell must still be called against the reference.
+
+    This is a deliberate behavior change from the original ConsensusTool, which
+    chose variant sites by asking whether a column varied ACROSS THE CELLS. Under
+    that rule a position where the whole population has moved off the reference
+    never became a variant site, so every cell silently read as wild-type there
+    -- the more uniformly a mutation had swept the population, the more certainly
+    it was dropped. On a passaged or lab-adapted stock that can discard most of
+    the real variants, so the reference is now what sites are judged against.
+    """
+    # Every cell carries 'G' at position 3 where the reference says 'T'.
+    seqs = ["AAG", "AAG", "AAG"]
+    genos, _ = genotype_summary(seqs, reference="AAT")
+    assert genos == ["3G", "3G", "3G"]
+
+    # The computed-reference path is unaffected: with no reference supplied the
+    # consensus IS 'G' there, so there is nothing to report.
+    genos_computed, ref = genotype_summary(seqs)
+    assert ref == "AAG"
+    assert genos_computed == ["", "", ""]
+
+
+def test_widened_predicate_is_a_no_op_for_the_computed_reference():
+    """The safety property behind the change above.
+
+    Choosing sites by "any cell differs from the reference" instead of "the column
+    varies" is the SAME SET whenever the reference is the computed consensus,
+    because the consensus is always one of the characters present. That is what
+    lets the supplied-reference behavior change without disturbing any frozen
+    golden. Checked here on alignments that mix agreement, variation and gaps.
+    """
+    for seqs in (["ACGT", "ACGT", "ACGT"],          # no variation at all
+                 ["ACGT", "AGGT", "ACGA"],          # several variant columns
+                 ["A-GT", "ACGT", "A--T"],          # gap-bearing columns
+                 ["AAAA"]):                          # single sequence
+        genos, ref = genotype_summary(seqs)
+        # Under either rule a cell can only be called where it differs from the
+        # consensus, so every token must correspond to a real difference.
+        for seq, geno in zip(seqs, genos):
+            positions = [int(t[:-1]) for t in geno.split("_") if t]
+            assert all(seq[i - 1] != ref[i - 1] for i in positions)
+            # ...and nothing that differs from the consensus was missed.
+            expected = {i + 1 for i in range(len(seq)) if seq[i] != ref[i]}
+            assert set(positions) == expected
 
 
 def test_genotype_summary_supplied_reference_does_not_crash():

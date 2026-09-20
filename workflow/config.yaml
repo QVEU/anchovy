@@ -22,3 +22,31 @@ signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
 # Reference/template FASTA that minimap2 maps each per-cell FASTA against.
 # (This was the $3 argument to AnchovyJob.sh.)
 template: "tests/data/template.fasta"
+
+# --- Region-aware annotation (optional) ------------------------------------- #
+# Uncomment `gff` to annotate mutations against a genome region model instead of
+# assuming a single ORF read in frame 1 from its first base. A GFF3 gets you:
+#
+#   * non-coding regions annotated at all (UTRs, stem-loops), instead of silently
+#     translated as though they were coding;
+#   * frame-correct residue numbers, taken from the feature's own start and phase
+#     rather than from position 1 of the reference;
+#   * one row per (mutation x containing region), so a variant inside both a
+#     polyprotein and a mature protein is numbered in BOTH frames of reference;
+#   * both strands handled, driven by the GFF3's strand and phase columns.
+#
+# It adds {sample}_regionAnnotations.csv to the outputs. The existing
+# {sample}_annot_v3.csv is still written, with its columns filled in from each
+# mutation's primary (first-listed containing) region, so nothing downstream
+# needs to change.
+#
+# Setting `gff` also switches the consensus stage into whole-reference mode,
+# because region lookup needs genome coordinates and the default mode renumbers
+# positions relative to the ORF. In that mode orf_start/orf_end stop being a cut
+# and become an optional analysis window over the covered core.
+#
+#   gff: "path/to/regions.gff3"
+#
+# To keep genome coordinates WITHOUT a region model, set this instead:
+#
+#   whole_reference: true

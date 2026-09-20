@@ -1,8 +1,27 @@
 # --- Pipeline output (generated; never commit) ---
-results/              # per-sample workflow outputs
-.snakemake/           # Snakemake's working/metadata directory
-*_anchovy.csv         # extract output written next to inputs
-*_allConsensus.fasta  # merged consensus written next to inputs
+#
+# CAREFUL: .gitignore has NO inline-comment syntax. A '#' only begins a comment
+# when it is the FIRST character of a line. These four rules were written as
+# "results/   # per-sample workflow outputs", which git read as a pattern
+# containing spaces and a literal '#' -- matching nothing at all. None of them
+# worked, which is how results/ and .snakemake/ came to be tracked. Keep every
+# comment on its own line.
+
+# per-sample workflow outputs
+results/
+# Snakemake's working/metadata directory
+.snakemake/
+# extract output written next to inputs
+*_anchovy.csv
+# merged consensus written next to inputs
+*_allConsensus.fasta
+
+# ...but never the committed fixtures and goldens under tests/data/, which match
+# the two patterns above by name and must stay trackable.
+!tests/data/*_anchovy.csv
+!tests/data/*_allConsensus.fasta
+!tests/data/**/*_anchovy.csv
+!tests/data/**/*_allConsensus.fasta
 
 # --- Python packaging / build artifacts ---
 __pycache__/
