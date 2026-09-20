@@ -103,6 +103,38 @@ def test_annotate_matches_r_golden(tmp_path):
         f"annotation calls differ:\n got: {calls(got)}\n exp: {calls(exp)}"
     )
 
+    # genotypeName too. This column was NOT compared for a long time, and a
+    # divergence hid there: the port joined the per-mutation names in the order
+    # the tokens appeared in the genotype string, while the R joined them in
+    # genome-position order, so "13A_8T" came out "R5S_D3V" against the R's
+    # "D3V_R5S". Only multi-mutation genotypes were affected, which is why
+    # nothing noticed. It is a user-visible label -- it names nodes in the
+    # network files -- so it is worth holding to the golden.
+    def genotype_names(df):
+        d = df[["genotype", "genotypeName"]].drop_duplicates()
+        return {row["genotype"]: row["genotypeName"]
+                for _, row in d.iterrows()
+                # reference cells have no substitutions; the two sides render
+                # that as "" and NaN respectively, which is not a disagreement.
+                if isinstance(row["genotypeName"], str) and row["genotypeName"]}
+
+    assert genotype_names(got) == genotype_names(exp), (
+        f"genotype names differ:\n got: {genotype_names(got)}"
+        f"\n exp: {genotype_names(exp)}"
+    )
+
+    # And the per-genotype frequencies, which are what a network node gets
+    # sized by.
+    def freqs(df):
+        d = df[["genotype", "genoFreq", "haploFreq"]].drop_duplicates()
+        return {row["genotype"]: (round(row["genoFreq"], 9),
+                                  round(row["haploFreq"], 9))
+                for _, row in d.iterrows()}
+
+    assert freqs(got) == freqs(exp), (
+        f"genotype frequencies differ:\n got: {freqs(got)}\n exp: {freqs(exp)}"
+    )
+
 
 def test_network_matches_r_golden(tmp_path):
     """Python network CSVs reproduce the R epistatic/genotype network output."""

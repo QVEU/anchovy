@@ -435,8 +435,23 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     merged = haplocounts.merge(anno, how="left", on=["pos", "base"])
 
     # genotypeName = "_".join(unique subName) per genotype; geno/haplo freqs
-    merged["genotypeName"] = merged.groupby("genotype")["subName"].transform(
-        lambda s: "_".join(pd.unique(s.dropna())))
+    # genotypeName joins the per-mutation names in GENOME-POSITION order.
+    #
+    # The port previously joined them in the order the tokens happened to appear
+    # in the genotype string, so "13A_8T" became "R5S_D3V" where the R produced
+    # "D3V_R5S". Same genotype, different label. Nothing caught it because the
+    # golden test compares only the per-mutation (subName, subClass) calls, not
+    # this derived column. Sorting by position matches the R and reads along the
+    # genome, which is what you want on a network node.
+    #
+    # Missing names collapse to "" rather than NaN, exactly as the old transform
+    # did: reference cells have no substitutions, and genoFreq groups on this
+    # column, so NaN here would silently drop those rows out of the frequency.
+    _names = (merged.dropna(subset=["subName"])
+                    .sort_values("pos", kind="stable")
+                    .groupby("genotype")["subName"]
+                    .apply(lambda s: "_".join(pd.unique(s))))
+    merged["genotypeName"] = merged["genotype"].map(_names).fillna("")
     merged["genoFreq"] = merged.groupby("genotypeName")["CBC_ID"].transform("nunique") / merged["total"]
     merged["haploFreq"] = merged.groupby("genotype")["CBC_ID"].transform("nunique") / merged["total"]
 
