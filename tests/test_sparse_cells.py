@@ -315,3 +315,62 @@ def test_a_supplied_reference_makes_one_cell_meaningful(tmp_path):
                                config=ConsensusConfig(depth_min=1),
                                out_prefix=str(tmp_path / "out"))
     assert result["records"][0]["genotype"] == "8T"
+
+
+# --------------------------------------------------------------------------- #
+# Calling against a supplied reference rather than the crowd
+# --------------------------------------------------------------------------- #
+def test_a_single_cell_yields_variants_against_a_supplied_reference(tmp_path):
+    """The fix for the single-cell dead end, end to end.
+
+    A computed reference is the consensus ACROSS cells, so one cell means the
+    reference IS that cell and no genotype can be non-empty -- regardless of
+    what the cell actually carries. Against the genome, the same cell reports
+    its variants.
+
+    This is the difference between a run that "succeeded" with nothing in it and
+    one that answers the question, so it is worth holding both halves.
+    """
+    from anchovy.consensus import run as consensus_run
+
+    template = "".join("ACGTTGCA"[i % 8] for i in range(300))
+    variant_pos = 150                                  # 1-based
+    cell = (template[:variant_pos - 1]
+            + ("A" if template[variant_pos - 1] != "A" else "C")
+            + template[variant_pos:])
+
+    merged = tmp_path / "one_allConsensus.fasta"
+    merged.write_text(f">cell ref coverage:24 length:{len(cell)}\n{cell}\n")
+    ref_fasta = tmp_path / "genome.fasta"
+    ref_fasta.write_text(f">genome\n{template}\n")
+
+    # Computed: nothing to compare against, so nothing is reported.
+    with pytest.warns(UserWarning, match="nothing to compare against"):
+        computed = consensus_run(fasta=str(merged), trim=False,
+                                 config=ConsensusConfig(depth_min=1),
+                                 out_prefix=str(tmp_path / "computed"))
+    assert computed["records"][0]["genotype"] == ""
+
+    # Supplied: the variant is found, at its genome position.
+    from anchovy.io import read_reference_sequence
+    supplied = consensus_run(fasta=str(merged), trim=False,
+                             reference=read_reference_sequence(ref_fasta),
+                             config=ConsensusConfig(depth_min=1),
+                             out_prefix=str(tmp_path / "supplied"))
+    genotype = supplied["records"][0]["genotype"]
+    assert genotype == f"{variant_pos}{cell[variant_pos - 1]}"
+
+
+def test_workflow_passes_the_reference_when_configured():
+    """The Snakefile must forward `reference`, and track it as an input.
+
+    As a params string alone it would be untracked, so changing the reference
+    would leave stale genotypes in place without Snakemake noticing.
+    """
+    snakefile = (Path(__file__).resolve().parent.parent
+                 / "workflow" / "Snakefile").read_text()
+    rule = snakefile.split("rule consensus:")[1].split("\nrule ")[0]
+    assert "--reference" in rule, "consensus rule does not forward `reference`"
+    assert '"reference": REFERENCE' in rule, (
+        "the reference is not declared as an input, so Snakemake cannot tell "
+        "that changing it invalidates the genotypes")

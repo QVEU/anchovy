@@ -173,6 +173,52 @@ needs editing by hand. If your reference has no annotation, write the GFF3
 yourself — the main README's "Annotating by genome region" section explains the
 format.
 
+## What the variants are measured against
+
+By default anchovy works out its own reference: the consensus of whatever cells
+survived filtering. That answers "which cells differ from the crowd", which is
+often what you want — but it needs a crowd. With a single surviving cell, the
+reference *is* that cell, so its genotype comes out empty no matter what it
+carries. An empty genotype then means "there was nothing to compare against",
+which reads identically to "matches the virus".
+
+This example sets `reference` to the genome instead:
+
+```yaml
+reference: "examples/eva71_sra/data/AF304458.fasta"
+```
+
+Each cell is then compared to EV-A71 itself. Two things change:
+
+- **A single cell can carry variants.** Useful whenever filtering is strict or
+  coverage is thin.
+- **Mutations fixed across every cell are reported.** Against a computed
+  reference they vanish, because they *become* the reference — the more
+  completely a mutation has swept your population, the more certainly it
+  disappears. On a passaged or lab-adapted stock that can be most of what you
+  care about.
+
+It has to be the same genome the reads were mapped to, since positions are
+compared by index. anchovy checks the lengths match and stops if they don't.
+
+Delete the line to go back to the cross-cell consensus.
+
+## If you get fewer cells than you expected
+
+Two filters drop cells, and both are set low in this example so it produces
+something to look at:
+
+- `cons_min_depth` — coverage a cell needs *at a position* for sam2consensus to
+  call it. A cell that never reaches it produces no consensus at all.
+- `depth_min` — coverage a cell needs overall to enter the consensus stage.
+
+On a real run most barcodes carry few reads, so the package defaults (5 and 10)
+can leave very few cells standing on a subsample. Raise them for a deeply
+sequenced run, where you can afford to demand more evidence per cell.
+
+anchovy warns if fewer than two cells survive with no reference supplied, since
+that combination cannot produce a genotype.
+
 ## Setting an analysis window
 
 Real runs have ragged coverage at the ends of the genome, where only a few cells

@@ -65,6 +65,24 @@ WHOLE_REF  = bool(config.get("whole_reference", False)) or GFF is not None
 ORF_START  = config.get("orf_start")
 ORF_END    = config.get("orf_end")
 
+# --------------------------------------------------------------------------- #
+# What genotypes are called AGAINST (optional but consequential)
+# --------------------------------------------------------------------------- #
+# Unset, the consensus stage computes its reference as the per-column consensus
+# ACROSS the surviving cells. That answers "which cells differ from the crowd",
+# and it needs a crowd: with one surviving cell that reference IS the cell, so
+# every genotype comes out empty by construction.
+#
+# Set `reference` to a genome FASTA and each cell is called against that
+# instead. Then a single cell can carry variants, mutations FIXED across the
+# whole population are reported rather than silently absorbed into the
+# reference, and positions mean the same thing between runs.
+#
+# Usually you want the same FASTA that `template` points at -- the one the reads
+# were mapped to. A different genome would be compared position by position
+# against an alignment built on another, which is why the length must match.
+REFERENCE = config.get("reference")
+
 if not WHOLE_REF and (ORF_START is None or ORF_END is None):
     raise WorkflowError(
         "config needs orf_start and orf_end, or whole_reference: true / a gff.")
@@ -230,6 +248,9 @@ rule merge_consensus:
 rule consensus:
     input:
         fasta=ALL_CONSENSUS,
+        # Declared as an input so Snakemake tracks it: change the reference and
+        # the genotypes are stale, which it cannot know from a params string.
+        **({"reference": REFERENCE} if REFERENCE else {}),
     output:
         csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
         reference=RESULTS + "/" + SAMPLE + "_consensus_reference.txt",
@@ -238,9 +259,11 @@ rule consensus:
         flags=CONSENSUS_FLAGS,
         depth_min=config.get("depth_min", 10),
         out_prefix=RESULTS + "/" + SAMPLE,
+        reference=f"--reference {REFERENCE}" if REFERENCE else "",
     shell:
         "anchovy consensus {input.fasta} {params.window} {params.flags} "
-        "--depth-min {params.depth_min} --out-prefix {params.out_prefix}"
+        "--depth-min {params.depth_min} --out-prefix {params.out_prefix} "
+        "{params.reference}"
 
 
 # --------------------------------------------------------------------------- #

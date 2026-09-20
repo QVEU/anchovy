@@ -30,6 +30,20 @@ signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
 # FASTA, because sam2consensus prefixes its per-cell output files with it --
 # fetch.sh prints the right value when it finishes.
 template: "examples/eva71_sra/data/AF304458.fasta"
+
+# Call genotypes against the genome itself, rather than against the consensus of
+# whatever cells survived filtering.
+#
+# This matters more than it looks. Unset, the reference is computed ACROSS
+# cells, which answers "who differs from the crowd" and needs a crowd -- with
+# one surviving cell that reference IS the cell, so every genotype comes out
+# empty no matter what the cell carries. Set, each cell is compared to EV-A71
+# itself, so a single cell can carry variants and mutations fixed across the
+# whole population are reported instead of being absorbed into the reference.
+#
+# Same file as `template`: the genome the reads were mapped to. It has to be,
+# since positions are compared by index.
+reference: "examples/eva71_sra/data/AF304458.fasta"
 # fetch.sh prints the exact value when it finishes -- copy it rather than
 # assuming the version suffix, which can be .1 or .2 depending on the record.
 reference_name: "AF304458.1"
@@ -58,12 +72,22 @@ gff: "examples/eva71_sra/data/AF304458.gff3"
 # --- Thresholds -------------------------------------------------------------- #
 # sam2consensus: minimum depth and the consensus-calling threshold per position.
 cons_threshold: 0.5
-cons_min_depth: 5
+# A cell needs this much coverage AT A POSITION for sam2consensus to call it.
+# Cells that never reach it produce no consensus at all and are dropped -- which
+# is intended, but is the other reason a cell count can come out low.
+cons_min_depth: 3
 
-# Minimum per-cell coverage to keep a cell in the consensus stage. The default is
-# 10; raise it for a deeply sequenced run, lower it if you are losing cells you
-# expected to keep.
-depth_min: 10
+# Minimum per-cell coverage to keep a cell in the consensus stage.
+#
+# Set to 3 rather than the package default of 10, because this example is meant
+# to produce something to look at. On a real run most barcodes carry few reads,
+# and at 10 a subsample can leave a single cell standing -- which runs fine and
+# tells you nothing. Raise it for a deeply sequenced run, where you can afford
+# to demand more evidence per cell.
+#
+# If you end up with far fewer cells than you expected, this and cons_min_depth
+# below are the two knobs that dropped them.
+depth_min: 3
 
 # Keep each genotype's self-edge in the epistatic network (the original R
 # behavior). Off by default -- Cytoscape draws them as a loop on every node.
