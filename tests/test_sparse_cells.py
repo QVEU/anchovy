@@ -136,9 +136,10 @@ def test_a_merge_of_only_empty_files_does_not_crash(tmp_path):
     merged = tmp_path / "test_allConsensus.fasta"
     merged.write_text("")
 
-    result = run(fasta=str(merged), start=None, end=None, trim=False,
-                 config=ConsensusConfig(depth_min=1),
-                 out_prefix=str(tmp_path / "out"))
+    with pytest.warns(UserWarning, match="passed filtering"):
+        result = run(fasta=str(merged), start=None, end=None, trim=False,
+                     config=ConsensusConfig(depth_min=1),
+                     out_prefix=str(tmp_path / "out"))
     assert result["records"] == []
 
 
@@ -215,3 +216,102 @@ def test_one_surviving_cell_is_enough(tmp_path):
                           network=True)
     assert len(result["annot"]) == 1
     assert len(result["nodes"]) == 1
+
+
+# --------------------------------------------------------------------------- #
+# A run that finds no variants at all
+# --------------------------------------------------------------------------- #
+def test_annotate_survives_a_run_with_no_variants(tmp_path):
+    """Zero variants is a RESULT, not an error, and must not crash.
+
+    Taken from a real run: one cell cleared the depth filter, so the computed
+    reference was that cell and nothing could differ from it. The annotation
+    table was then built from an empty list of rows, giving a frame with no
+    columns, and the merge on ["pos", "base"] died with KeyError: 'pos'.
+
+    Same shape as the KeyError: 'mutants' above -- an empty intermediate losing
+    its columns -- but in the other branch, so fixing one did not fix this.
+    """
+    import pandas as pd
+
+    from anchovy import annotate
+
+    reference = tmp_path / "reference.txt"
+    reference.write_text("ATG" + "AAA" * 20)
+    cons = tmp_path / "filtConsensus.csv"
+    # One cell, empty genotype: exactly what a single-cell run produces.
+    pd.DataFrame([{"CBC_ID": "only_BC|c50", "genotype": "", "sequence": "",
+                   "description": "coverage:24.33"}]).to_csv(cons, index=False)
+
+    result = annotate.run(str(cons), str(reference), str(tmp_path / "out"),
+                          network=True)
+
+    assert len(result["annot"]) == 1
+    assert result["annot"].iloc[0]["genotype"] == "reference"
+    # The node table still describes the one cell, honestly.
+    nodes = result["nodes"]
+    assert len(nodes) == 1
+    assert nodes.iloc[0]["genotype"] == "reference"
+    assert nodes.iloc[0]["nCells"] == 1
+    assert nodes.iloc[0]["nMutations"] == 0
+
+
+def test_no_variants_works_in_region_aware_mode_too(tmp_path):
+    """The region-aware branch has its own empty path; check it as well."""
+    import pandas as pd
+
+    from anchovy import annotate
+
+    reference = tmp_path / "reference.txt"
+    reference.write_text("ACGT" * 50)
+    gff = tmp_path / "r.gff3"
+    gff.write_text("##gff-version 3\nr\ta\tCDS\t1\t60\t.\t+\t0\tName=cds\n")
+    cons = tmp_path / "filtConsensus.csv"
+    pd.DataFrame([{"CBC_ID": "only", "genotype": "", "sequence": "",
+                   "description": "coverage:24"}]).to_csv(cons, index=False)
+
+    result = annotate.run(str(cons), str(reference), str(tmp_path / "out"),
+                          network=True, gff=str(gff))
+    assert result["regions"].empty
+    assert len(result["annot"]) == 1
+
+
+def test_one_cell_with_a_computed_reference_warns(tmp_path):
+    """The vacuity is worth saying out loud.
+
+    With a computed reference the per-column consensus IS the single cell, so
+    an empty genotype means "nothing to compare against", not "matches the
+    virus". Those read identically in the output file.
+    """
+    from anchovy.consensus import run as consensus_run
+
+    merged = tmp_path / "one_allConsensus.fasta"
+    merged.write_text(">onecell ref coverage:24 length:8\nACGTACGT\n")
+
+    with pytest.warns(UserWarning, match="nothing to compare against"):
+        result = consensus_run(fasta=str(merged), trim=False,
+                               config=ConsensusConfig(depth_min=1),
+                               out_prefix=str(tmp_path / "out"))
+    assert result["records"][0]["genotype"] == ""
+
+
+def test_a_supplied_reference_makes_one_cell_meaningful(tmp_path):
+    """...and the escape hatch the warning points at actually works.
+
+    Against a supplied reference a single cell CAN carry variants, so no
+    warning and a real genotype.
+    """
+    import warnings as _warnings
+
+    from anchovy.consensus import run as consensus_run
+
+    merged = tmp_path / "one_allConsensus.fasta"
+    merged.write_text(">onecell ref coverage:24 length:8\nACGTACGT\n")
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")          # any warning fails the test
+        result = consensus_run(fasta=str(merged), trim=False,
+                               reference="ACGTACGA",
+                               config=ConsensusConfig(depth_min=1),
+                               out_prefix=str(tmp_path / "out"))
+    assert result["records"][0]["genotype"] == "8T"

@@ -51,6 +51,7 @@ trimmed region), then trim to [start:end].
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -307,6 +308,24 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
         window = (start, end) if start is not None and end is not None else None
         genotypes, ref_used = genotype_summary(
             [r.seq for r in kept], reference, window=window, skip_gaps=True)
+
+    # A COMPUTED reference needs at least two cells to mean anything. With one,
+    # the per-column consensus IS that cell, so no position can differ from it
+    # and the genotype is empty by construction -- not because the cell matches
+    # the virus, but because there was nothing to compare it against. Say so,
+    # because an empty genotype column otherwise reads as a biological result.
+    if reference is None and len(kept) < 2:
+        warnings.warn(
+            f"only {len(kept)} cell(s) passed filtering, and no reference was "
+            f"supplied.\n"
+            f"  The reference is computed as the consensus ACROSS cells, so with "
+            f"fewer than two\n"
+            f"  there is nothing to compare against and every genotype comes out "
+            f"empty.\n"
+            f"  Either lower depth_min to keep more cells, or pass an explicit "
+            f"--reference\n"
+            f"  (the genome FASTA) so each cell is called against that instead.",
+            stacklevel=2)
 
     rows = [{
         ConsensusColumns.CBC_ID: r.cbc_id,

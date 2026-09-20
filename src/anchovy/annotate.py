@@ -366,6 +366,16 @@ def annotate_variants_by_region(variants: list[str], reference: str,
     return table
 
 
+# Columns of the per-mutation annotation table. Named once so both the legacy
+# and the region-aware path produce the same shape -- including when there are
+# no mutations at all, where a bare DataFrame([]) would have no columns and the
+# merge on ["pos", "base"] would fail with KeyError.
+ANNOTATION_COLUMNS = [
+    "pos", "base", "ref.codon", "ref.resPos", "ref.AA",
+    "mut.codon", "mut.resPos", "mut.AA", "subName", "subClass",
+]
+
+
 def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
     """Back-fill the legacy _annot_v3 columns from each mutation's PRIMARY region.
 
@@ -381,9 +391,7 @@ def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
     test_annotate_region_matches_legacy_on_single_cds).
     """
     if region_table.empty:
-        return pd.DataFrame(columns=[
-            "pos", "base", "ref.codon", "ref.resPos", "ref.AA",
-            "mut.codon", "mut.resPos", "mut.AA", "subName", "subClass"])
+        return pd.DataFrame(columns=ANNOTATION_COLUMNS)
 
     primary = region_table.drop_duplicates(subset=["genome_pos", "mut_base"],
                                            keep="first")
@@ -549,7 +557,11 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
             "mut.AA": a["mut"]["AA"] if a["mut"] else None,
             "subName": a["subName"], "subClass": a["subClass"],
         } for a in annos]
-        anno = pd.DataFrame(anno_rows)
+        # columns= matters when anno_rows is empty, which happens whenever no
+        # variant was called: a single surviving cell (nothing to differ from),
+        # or several cells identical to the reference. Both are real results,
+        # not errors, so they must flow through rather than raise.
+        anno = pd.DataFrame(anno_rows, columns=ANNOTATION_COLUMNS)
     else:
         region_table = annotate_variants_by_region(variants, reference, gff)
         anno = _legacy_rows_from_regions(region_table)
