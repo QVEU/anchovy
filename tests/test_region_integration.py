@@ -385,3 +385,47 @@ def test_validate_warnings_surface_from_run(tmp_path):
     with pytest.warns(UserWarning, match="not a multiple of 3"):
         annotate.run(str(cons), str(ref_file), str(tmp_path / "out"),
                      network=False, gff=str(gff))
+
+
+def test_minus_strand_end_to_end_through_annotate_run(tmp_path):
+    """A minus-strand CDS driven all the way through annotate.run(gff=...).
+
+    The codon math and the parser are covered separately in test_regions.py; this
+    checks the whole path holds together for a minus-strand feature -- GFF3 on
+    disk, genotype tokens in, region table and back-filled legacy columns out.
+
+    Same verified gene: reference "CCCCCTTAATCTTTCAT", CDS at genome 6-17 on the
+    minus strand, mRNA ATGAAAGATTAA (M K D *). Genome T14C is residue 2 K->E,
+    confirmed by independently retranslating the mutated gene.
+    """
+    reference = "CCCCCTTAATCTTTCAT"
+    ref_file = tmp_path / "reference.txt"
+    ref_file.write_text(reference)
+    gff = tmp_path / "minus.gff3"
+    gff.write_text("##gff-version 3\n"
+                   "ref\ta\tCDS\t6\t17\t.\t-\t0\tID=cds;Name=revgene\n")
+
+    cons = tmp_path / "filtConsensus.csv"
+    pd.DataFrame([{"CBC_ID": "c1", "genotype": "14C", "sequence": reference,
+                   "description": "coverage:50"}]).to_csv(cons, index=False)
+
+    result = annotate.run(str(cons), str(ref_file), str(tmp_path / "out"),
+                          network=False, gff=str(gff))
+
+    row = result["regions"].iloc[0]
+    assert row["strand"] == "-"
+    assert row["residue"] == 2
+    assert row["wt_aa"] == "K" and row["mut_aa"] == "E"
+    assert row["sub_class"] == "Non-Syn"
+    # Genome-anchored id, forward-strand bases, even on a minus-strand feature.
+    assert row["mutation_id"] == "revgene:T14C"
+    assert row["wt_base"] == "T" and row["mut_base"] == "C"
+
+    # The legacy back-fill names the residue in the FEATURE's frame, so a
+    # minus-strand gene reads the same way a plus-strand one does.
+    assert result["annot"].iloc[0]["subName"] == "K2E"
+
+    # The written file carries it too.
+    written = pd.read_csv(f"{tmp_path / 'out'}_regionAnnotations.csv")
+    assert written.iloc[0]["mutation_id"] == "revgene:T14C"
+    assert written.iloc[0]["strand"] == "-"

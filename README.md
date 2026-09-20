@@ -144,15 +144,66 @@ from your settings file:
 gff: "path/to/regions.gff3"
 ```
 
-A small one looks like this (columns are separated by tabs):
+#### Writing your own
+
+Here is a complete example for dengue virus 1. Copy it into a file called
+something like `regions.gff3`, then change the numbers and names to match your
+own virus — that's all most people need to do.
 
 ```
 ##gff-version 3
-dengue	.	five_prime_UTR	1	96	.	+	.	Name=5UTR
-dengue	.	CDS	97	10272	.	+	0	Name=polyprotein
-dengue	.	mature_protein_region	7570	10269	.	+	0	Name=NS5
-dengue	.	three_prime_UTR	10273	10727	.	+	.	Name=3UTR
+NC_001477.1	anchovy	five_prime_UTR	1	94	.	+	.	Name=5UTR
+NC_001477.1	anchovy	CDS	95	10270	.	+	0	Name=polyprotein
+NC_001477.1	anchovy	mature_protein_region	95	436	.	+	0	Name=capsid
+NC_001477.1	anchovy	mature_protein_region	2422	3477	.	+	0	Name=NS1
+NC_001477.1	anchovy	mature_protein_region	7568	10267	.	+	0	Name=NS5
+NC_001477.1	anchovy	three_prime_UTR	10271	10735	.	+	.	Name=3UTR
 ```
+
+**Every column must be separated by a single TAB, not spaces.** This is the
+mistake that catches people out, because tabs and spaces look identical on
+screen. If you get it wrong, anchovy stops and tells you which line is at fault
+rather than guessing — but many text editors silently convert tabs to spaces when
+you type, so it's worth turning that off, or editing the file in a plain-text
+editor. Copying the block above preserves the tabs.
+
+The nine columns, left to right:
+
+| # | Column | What to put there |
+|---|--------|-------------------|
+| 1 | sequence name | The name of your reference, exactly as it appears after `>` in your reference FASTA |
+| 2 | source | Free text saying where the annotation came from. Put anything; `.` is fine |
+| 3 | **type** | What kind of region this is — see the list below |
+| 4 | **start** | First base of the region, counting the genome's first base as 1 |
+| 5 | **end** | Last base of the region, included |
+| 6 | score | Not used by anchovy. Put `.` |
+| 7 | **strand** | `+` or `-` |
+| 8 | **phase** | For coding regions, how many bases to skip before the first whole codon: `0`, `1` or `2`. Use `0` unless you know otherwise. Put `.` for non-coding regions |
+| 9 | attributes | `Name=...` is what anchovy labels the region with in the results |
+
+The types anchovy understands:
+
+- **Coding** (mutations get amino acid annotation): `CDS`, `mature_protein_region`
+- **Non-coding** (mutations reported, no amino acids): `five_prime_UTR`,
+  `three_prime_UTR`, `UTR`, `stem_loop`, `ncRNA`, `misc_feature`, `region`
+
+Any other type — `gene`, `mRNA`, `exon` and so on — is ignored, so you can leave
+an annotation file from elsewhere largely as it is and anchovy will pick out the
+parts it can use.
+
+**Regions are allowed to overlap, and that's the point.** In the example above
+the capsid, NS1 and NS5 all sit inside the polyprotein, so a mutation in NS5 gets
+one row numbered within NS5 and another numbered within the polyprotein. Annotate
+at whichever levels are useful to you.
+
+**A check worth knowing about.** A coding region's length should divide exactly
+by three, since it's whole codons. If one doesn't, anchovy warns you and names
+the region — that almost always means the coordinates are off, most often because
+they were written in amino acid numbers instead of nucleotide numbers. The
+warning doesn't stop the run.
+
+If you'd rather start from something known to work, `tests/data/mapping/regions.gff3`
+in this repository is a small, complete file used by the test suite.
 
 With that in place you get an extra results file,
 `{sample}_regionAnnotations.csv`, with one row per mutation **per region it falls
@@ -175,7 +226,10 @@ A few things worth knowing:
 - Your existing results files are still produced exactly as before, so anything
   you already do with them keeps working.
 - Both strands are handled. Which strand a region is on, and its reading frame,
-  are taken from the GFF3 file itself, so anchovy never has to guess.
+  are taken from columns 7 and 8 of the GFF3 itself, so anchovy never has to
+  guess. For a region on the `-` strand, amino acids are numbered from the
+  region's END and read in the reverse-complement direction, while the
+  nucleotide change is still reported in ordinary forward-strand genome terms.
 - If you want genome positions but don't have a GFF3, use `whole_reference: true`
   on its own.
 

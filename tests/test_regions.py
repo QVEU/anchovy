@@ -152,6 +152,79 @@ def test_minus_strand_amino_acid_call():
     assert row["codon_wt"] == "AAA" and row["codon_mut"] == "GAA"
 
 
+# A GFF3 mixing strands. Every other fixture in the suite is plus-strand only,
+# so without this the parser's strand handling is never exercised from a FILE --
+# the minus-strand tests below it build Region objects by hand, which skips
+# parse_gff3 entirely. Strand and phase must come from each feature's own
+# columns, never inferred from neighbours or nesting.
+MIXED_STRAND_GFF3 = """\
+##gff-version 3
+ref\tanchovy\tCDS\t6\t17\t.\t-\t0\tID=rev;Name=revgene
+ref\tanchovy\tCDS\t20\t31\t.\t+\t0\tID=fwd;Name=fwdgene
+ref\tanchovy\tfive_prime_UTR\t1\t5\t.\t-\t.\tID=5UTR;Name=5UTR
+"""
+
+
+def test_parse_gff3_reads_strand_and_phase_per_feature(tmp_path):
+    p = tmp_path / "mixed.gff3"
+    p.write_text(MIXED_STRAND_GFF3)
+    by_name = {r.name: r for r in parse_gff3(str(p))}
+
+    assert by_name["revgene"].strand == "-"
+    assert by_name["fwdgene"].strand == "+"
+    # A minus-strand non-coding feature keeps its strand too, even though strand
+    # does not affect how it is annotated.
+    assert by_name["5UTR"].strand == "-" and not by_name["5UTR"].coding
+    # No feature borrowed a neighbour's strand.
+    assert [by_name[n].strand for n in ("revgene", "fwdgene", "5UTR")] == ["-", "+", "-"]
+
+
+def test_parse_gff3_accepts_minus_strand_phase(tmp_path):
+    """Phase is read for a minus-strand CDS as it is for a plus-strand one."""
+    p = tmp_path / "phase.gff3"
+    p.write_text("##gff-version 3\nref\ta\tCDS\t6\t17\t.\t-\t2\tID=x;Name=x\n")
+    region = parse_gff3(str(p))[0]
+    assert region.strand == "-" and region.phase == 2
+
+
+def test_minus_strand_annotation_through_a_parsed_gff(tmp_path):
+    """The verified minus-strand case, driven from a FILE rather than by hand.
+
+    Same synthetic gene as test_minus_strand_amino_acid_call below: reference
+    "CCCCCTTAATCTTTCAT", minus-strand CDS at genome 6-17, whose mRNA (the
+    reverse complement) is ATGAAAGATTAA -> M K D *. A genome T->C at 14 is an
+    mRNA A->G, turning residue 2 from K to E.
+
+    The expected values were re-derived independently for this test by
+    retranslating the whole mutated gene with Bio.Seq, not by reusing the codon
+    helper under test: the only changed residue is 2, K->E.
+
+    This closes the gap where minus-strand codon math was covered but only via
+    hand-built Region objects, so parse_gff3 never produced a minus-strand
+    feature that anything then annotated.
+    """
+    reference = "CCCCCTTAATCTTTCAT"
+    p = tmp_path / "minus.gff3"
+    p.write_text("##gff-version 3\nref\ta\tCDS\t6\t17\t.\t-\t0\tID=cds;Name=cds\n")
+
+    region = parse_gff3(str(p))[0]
+    assert validate_regions([region]) == []          # 12 nt, a clean 4 codons
+
+    row = annotate_in_region(region, 14, "T", "C", reference)
+    assert row["residue"] == 2
+    assert row["wt_aa"] == "K" and row["mut_aa"] == "E"
+    assert row["codon_wt"] == "AAA" and row["codon_mut"] == "GAA"
+    assert row["sub_class"] == "Non-Syn"
+    # The nucleotide identity stays genome/forward-strand even though the amino
+    # acid columns are read in the minus-strand direction.
+    assert row["mutation_id"] == "cds:T14C"
+
+    # Parsing the feature must give exactly what building it by hand gives.
+    hand_built = annotate_in_region(
+        Region("cds", 6, 17, "-", 0, coding=True), 14, "T", "C", reference)
+    assert row == hand_built
+
+
 def test_minus_strand_residue_one_at_high_coordinate():
     # residue 1 sits at the feature END on minus strand (genome 17 here).
     ref = "CCCCCTTAATCTTTCAT"
@@ -169,3 +242,47 @@ def test_noncoding_has_no_amino_acid():
     assert row["region_type"] == "non-coding"
     assert row["wt_aa"] is None and row["mut_aa"] is None and row["residue"] is None
     assert row["mutation_id"] == "5UTR:A50G"
+
+
+# --------------------------------------------------------------------------- #
+# The example in the README must actually work
+# --------------------------------------------------------------------------- #
+def test_readme_gff3_examples_parse():
+    """Every GFF3 example in the README parses, with tabs intact.
+
+    Users are told to copy these and edit the numbers, so an example that has
+    rotted -- or, far more likely, has had its tabs silently converted to spaces
+    by an editor -- is a real bug in the documentation. GFF3 is tab-separated and
+    tabs are invisible on screen, so nothing but a parse will catch it.
+    """
+    import re
+    from pathlib import Path
+
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    if not readme.exists():                       # pragma: no cover
+        pytest.skip("README.md not found")
+
+    blocks = re.findall(r"```\n(##gff-version 3\n.*?)```", readme.read_text(),
+                        re.DOTALL)
+    assert blocks, "no GFF3 example found in README.md -- did the section move?"
+
+    for i, block in enumerate(blocks):
+        feature_lines = [ln for ln in block.splitlines()
+                         if ln and not ln.startswith("#")]
+        assert feature_lines, f"README GFF3 example {i} has no feature rows"
+        for line in feature_lines:
+            assert "\t" in line, (
+                f"README GFF3 example {i} lost its tabs -- this row is "
+                f"space-separated and will not parse: {line!r}")
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / f"readme_{i}.gff3"
+            path.write_text(block)
+            regions = parse_gff3(str(path))
+
+        assert regions, f"README GFF3 example {i} parsed to zero regions"
+        # A documented example should not itself trip the coordinate sanity
+        # check -- it is what people copy as a starting point.
+        assert validate_regions(regions) == [], (
+            f"README GFF3 example {i} triggers a validation warning")
