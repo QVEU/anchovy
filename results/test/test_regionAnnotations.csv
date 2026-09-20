@@ -1,2 +1,8 @@
+<<<<<<< Updated upstream
 mutation_id,region,region_type,strand,genome_pos,wt_base,mut_base,wt_aa,mut_aa,residue,codon_wt,codon_mut,sub_class,mutants
 polyprotein:A201T,polyprotein,coding,+,201,A,T,S,C,18,AGT,TGT,Non-Syn,201T
+=======
+mutation_id,region,region_type,strand,genome_pos,wt_base,mut_base,residue,codon_wt,codon_mut,wt_aa,mut_aa,sub_class
+5UTR:A121C,5UTR,non-coding,+,121,A,C,,,,,,
+polyprotein:T201A,polyprotein,coding,+,201,T,A,18.0,TGT,AGT,C,S,Non-Syn
+>>>>>>> Stashed changes
