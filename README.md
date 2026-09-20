@@ -42,11 +42,13 @@ the required programs; the second installs anchovy itself into it.
 Navigate to your `anchovy/` directory, where `environment.yml` lives and run:
 
 ```bash
-# 1. create the environment (this may take a few minutes)
 conda env create -f environment.yml
 conda activate anchovy
+```
 
-# 2. install anchovy
+That first command may take a few minutes. Then install anchovy itself into it:
+
+```bash
 pip install -e .
 ```
 
@@ -55,6 +57,15 @@ Check that it worked:
 ```bash
 anchovy --version
 snakemake --version
+```
+
+**Already have an anchovy environment from an earlier version?** New releases
+sometimes add programs to `environment.yml`, and an environment created before
+that won't have them — you'd see a "command not found" for something the
+pipeline expects. Bring yours up to date with:
+
+```bash
+conda env update -f environment.yml --prune
 ```
 
 If you have pytest installed you can also run: 

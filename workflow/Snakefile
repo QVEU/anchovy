@@ -11,7 +11,16 @@
 
 import os
 
-configfile: "workflow/config.yaml"
+# NO `configfile:` directive on purpose. It used to name workflow/config.yaml,
+# which meant every run MERGED that file underneath whatever --configfile you
+# passed. Harmless while your config overrode every key, but the base config
+# points `whitelist` and `template` at the TEST FIXTURES -- so a config that
+# omitted either silently inherited a 4-barcode whitelist instead of failing,
+# and the run looked like bad data rather than a bad config.
+#
+# Pass --configfile explicitly, as the README and every example already do:
+#   snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 8
+# A missing key is then a loud KeyError naming it.
 
 SAMPLE    = config["sample"]
 DATA_DIR  = config["data_dir"]

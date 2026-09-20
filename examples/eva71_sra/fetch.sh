@@ -67,7 +67,11 @@ need() {
 }
 
 say "Checking prerequisites"
-need fasterq-dump "Install sra-tools: conda install -c bioconda sra-tools (it is in environment.yml)."
+need fasterq-dump "Install sra-tools. It is in environment.yml, but an
+  environment created before it was added will not have it -- update yours:
+      conda env update -f environment.yml --prune
+  or install just this one tool:
+      conda install -c bioconda sra-tools"
 need minimap2     "Install minimap2: it is in environment.yml; did you 'conda activate anchovy'?"
 need curl         "curl is required to download the reference."
 need python       "Run this inside the anchovy conda environment."

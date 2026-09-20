@@ -66,14 +66,22 @@ look off.
 
 ## Running it
 
+First, download everything and build the input file:
+
 ```bash
 conda activate anchovy
-
-# 1. Download everything and build the input file.
 bash examples/eva71_sra/fetch.sh
+```
 
-# 2. See what the workflow plans to do, then do it.
+Then see what the workflow plans to do:
+
+```bash
 snakemake -s workflow/Snakefile --configfile examples/eva71_sra/config.yaml --cores 8 -n
+```
+
+and if that looks right, do it:
+
+```bash
 snakemake -s workflow/Snakefile --configfile examples/eva71_sra/config.yaml --cores 8
 ```
 
