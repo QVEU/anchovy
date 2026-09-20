@@ -34,16 +34,20 @@ REFERENCE_ACC="${REFERENCE_ACC:-AF304458}"
 # wrong preset does not fail, it just quietly costs you alignments.
 MINIMAP_PRESET="${MINIMAP_PRESET:-map-hifi}"
 
-# 10X barcode whitelist. REQUIRED, and not downloadable here -- it ships with
-# Cell Ranger. This run is v2 chemistry, so you want:
+# 10X barcode whitelist. Downloaded automatically -- this run is v2 chemistry,
+# and 10X publish that whitelist in the open-source supernova repository, so the
+# example needs no manual setup. Set WHITELIST to use a local copy instead (the
+# identical file ships with Cell Ranger as
+# cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt).
 #
-#   cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt
-#
-# That matches the signature in config.yaml, whose 26-base N-run is 16 nt of
-# barcode plus a 10 nt UMI -- the v2 layout. (v3 would be 28: a 12 nt UMI, and
-# the 3M-february-2018.txt whitelist.) See "Checking the chemistry" in the
-# README for how to confirm it from the data if you are unsure.
+# It matches the signature in config.yaml, whose 26-base N-run is 16 nt of
+# barcode plus a 10 nt UMI -- the v2 layout. v3 would be 28 Ns (12 nt UMI) and
+# the 3M-february-2018.txt whitelist; note both chemistries use 16 nt barcodes,
+# so the ENTRY COUNT is what distinguishes them, not the barcode length.
 WHITELIST="${WHITELIST:-}"
+WHITELIST_URL="${WHITELIST_URL:-https://raw.githubusercontent.com/10XGenomics/supernova/refs/heads/master/tenkit/lib/python/tenkit/barcodes/737K-august-2016.txt}"
+# Expected size of the v2 whitelist, used to verify the download completed.
+WHITELIST_EXPECTED_BARCODES="${WHITELIST_EXPECTED_BARCODES:-737280}"
 
 SAMPLE="${SAMPLE:-$SRR}"
 DATA_DIR="${DATA_DIR:-examples/eva71_sra/data}"
@@ -68,11 +72,9 @@ need minimap2     "Install minimap2: it is in environment.yml; did you 'conda ac
 need curl         "curl is required to download the reference."
 need python       "Run this inside the anchovy conda environment."
 
-[ -n "$WHITELIST" ] \
-    || die "WHITELIST is not set. Point it at a 10X barcode whitelist:
-    WHITELIST=/path/to/737K-august-2016.txt bash examples/eva71_sra/fetch.sh
-  It ships with Cell Ranger -- see the comment at the top of this script."
-[ -f "$WHITELIST" ] || die "whitelist not found: $WHITELIST"
+[ -z "$WHITELIST" ] || [ -f "$WHITELIST" ] \
+    || die "WHITELIST was set but does not exist: $WHITELIST
+  Unset it to download the v2 whitelist automatically."
 
 mkdir -p "$DATA_DIR"
 
@@ -85,7 +87,41 @@ SAM="$DATA_DIR/${SAMPLE}.sam"
 EFETCH="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=${REFERENCE_ACC}"
 
 # --------------------------------------------------------------------------- #
-say "1/5  Reference genome  ($REFERENCE_ACC)"
+say "1/6  Barcode whitelist"
+if [ -n "$WHITELIST" ]; then
+    echo "    using your copy: $WHITELIST"
+else
+    WHITELIST="$DATA_DIR/737K-august-2016.txt"
+    if [ -s "$WHITELIST" ]; then
+        echo "    $WHITELIST exists, skipping."
+    else
+        echo "    downloading the 10X v2 whitelist (~12 MB)"
+        curl -fsSL "$WHITELIST_URL" -o "$WHITELIST.part"
+        mv "$WHITELIST.part" "$WHITELIST"
+    fi
+fi
+
+# Verify it really is a whitelist. A partial download or an error page would
+# otherwise sail through and simply fail to match anything, which looks like bad
+# data rather than a bad file.
+WL_COUNT=$(grep -c . "$WHITELIST" || true)
+WL_LENGTHS=$(awk 'NF {print length($1)}' "$WHITELIST" | sort -u | tr '\n' ' ')
+echo "    $WL_COUNT barcodes, length(s): $WL_LENGTHS"
+
+[ "$WL_LENGTHS" = "16 " ] \
+    || die "whitelist barcodes are not a uniform 16 nt (got: $WL_LENGTHS).
+  The signature assumes a 16 nt barcode, so this file will not work.
+  File: $WHITELIST"
+
+if [ "$WL_COUNT" != "$WHITELIST_EXPECTED_BARCODES" ]; then
+    echo "    note: expected $WHITELIST_EXPECTED_BARCODES barcodes (10X v2)."
+    echo "          ~3,000,000 would mean this is the v3 whitelist, which does"
+    echo "          NOT match the 26-base signature in config.yaml -- v3 needs 28."
+    echo "          A much smaller number usually means a truncated download."
+fi
+
+# --------------------------------------------------------------------------- #
+say "2/6  Reference genome  ($REFERENCE_ACC)"
 if [ -s "$REF_FA" ]; then
     echo "    $REF_FA exists, skipping."
 else
@@ -105,7 +141,7 @@ REF_NAME=$(head -1 "$REF_FA" | sed 's/^>//' | awk '{print $1}')
 echo "    reference_name: $REF_NAME"
 
 # --------------------------------------------------------------------------- #
-say "2/5  Region annotation  (GenBank -> GFF3)"
+say "3/6  Region annotation  (GenBank -> GFF3)"
 if [ -s "$REF_GFF" ]; then
     echo "    $REF_GFF exists, skipping."
 else
@@ -117,7 +153,7 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
-say "3/5  Reads  ($SRR)"
+say "4/6  Reads  ($SRR)"
 if [ -s "$FASTQ" ]; then
     echo "    $FASTQ exists, skipping."
 else
@@ -129,7 +165,7 @@ fi
 echo "    $(( $(wc -l < "$FASTQ") / 4 )) reads"
 
 # --------------------------------------------------------------------------- #
-say "4/5  Optional subsample"
+say "5/6  Optional subsample"
 MAP_INPUT="$FASTQ"
 if [ -n "$MAX_READS" ]; then
     SUB="$DATA_DIR/${SRR}.subsample.fastq"
@@ -145,7 +181,7 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
-say "5/5  Map to the reference  (minimap2 -ax $MINIMAP_PRESET)"
+say "6/6  Map to the reference  (minimap2 -ax $MINIMAP_PRESET)"
 if [ -s "$SAM" ]; then
     echo "    $SAM exists, skipping."
 else
@@ -165,8 +201,9 @@ Done. Inputs are in $DATA_DIR:
     $(basename "$SAM")   the mapped reads anchovy starts from
     $(basename "$REF_FA")   reference genome
     $(basename "$REF_GFF")  region model derived from its GenBank annotation
+    $(basename "$WHITELIST")   10X v2 barcode whitelist
 
-Before running the workflow, set these in examples/eva71_sra/config.yaml:
+Check these two lines in examples/eva71_sra/config.yaml match:
 
     reference_name: "$REF_NAME"
     whitelist: "$WHITELIST"

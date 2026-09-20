@@ -9,30 +9,35 @@ It's here to be copied. The two scripts are short and the settings file is
 commented, so the usual way to run anchovy on your own virus is to copy this
 directory and change the accessions.
 
-## Before you start
+## What it needs
 
-One thing you have to supply yourself.
-
-**A 10X barcode whitelist.** anchovy matches each read's cell barcode against a
-list of the barcodes that exist in the chemistry you used. That list ships with
-Cell Ranger and isn't ours to redistribute, so you point at your copy. This run
-is **v2 chemistry**, so you want:
-
-```
-cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt
-```
-
-That matches the signature in `config.yaml`, whose 26-base N-run is 16 bases of
-barcode plus a 10-base UMI — the v2 layout. (v3 would be 28 bases, a 12-base
-UMI, and the `3M-february-2018.txt` whitelist instead.)
-
-Everything else is already set for this dataset:
+Nothing but the anchovy conda environment. The reads, the reference genome and
+the 10X barcode whitelist are all downloaded for you.
 
 | Setting | Value | |
 |---|---|---|
+| Reads | `SRR28178313` | from the SRA |
 | Reference | `AF304458` | EV-A71 Tainan/4643/98 |
 | Read technology | `map-hifi` | PacBio |
 | Chemistry | 26-base signature | 10X v2 |
+| Whitelist | `737K-august-2016.txt` | 10X v2, 737,280 barcodes |
+
+The whitelist comes from 10X's open-source
+[supernova](https://github.com/10XGenomics/supernova) repository. It's the same
+file Cell Ranger ships, so if you already have a copy you can use it instead:
+
+```bash
+WHITELIST=/path/to/737K-august-2016.txt bash examples/eva71_sra/fetch.sh
+```
+
+Either way `fetch.sh` checks the file really is a whitelist before going on —
+barcodes must be a uniform 16 bases, and it tells you if the count isn't the
+737,280 a v2 whitelist should have. A partial download would otherwise just
+fail to match anything, which looks like bad data rather than a bad file.
+
+Note that v2 and v3 whitelists *both* use 16-base barcodes, so barcode length
+can't tell them apart — the entry count is what distinguishes them (~3,000,000
+for v3).
 
 ### Checking the chemistry, if you're unsure
 
@@ -64,34 +69,38 @@ look off.
 ```bash
 conda activate anchovy
 
-# 1. Download the data and build the input file.
-WHITELIST=/path/to/737K-august-2016.txt bash examples/eva71_sra/fetch.sh
+# 1. Download everything and build the input file.
+bash examples/eva71_sra/fetch.sh
 
-# 2. Put the whitelist path and the reference name it prints into config.yaml.
-
-# 3. See what the workflow plans to do, then do it.
+# 2. See what the workflow plans to do, then do it.
 snakemake -s workflow/Snakefile --configfile examples/eva71_sra/config.yaml --cores 8 -n
 snakemake -s workflow/Snakefile --configfile examples/eva71_sra/config.yaml --cores 8
 ```
 
-This is a real sequencing run, so step 1 takes a while. To try the example on a
+This is a real sequencing run, so step 1 takes a while — the reads dominate;
+the whitelist is 12 MB and the reference is trivial. To try the example on a
 slice of it first:
 
 ```bash
-MAX_READS=200000 WHITELIST=/path/to/whitelist.txt bash examples/eva71_sra/fetch.sh
+MAX_READS=200000 bash examples/eva71_sra/fetch.sh
 ```
+
+`fetch.sh` prints the reference name it found when it finishes. It should match
+`reference_name` in `config.yaml`; the version suffix on an accession can change
+(`.1` vs `.2`), so it's worth a glance rather than an assumption.
 
 Every step is skipped if its output is already there, so if something fails you
 can fix it and re-run without starting over. Delete a file to redo that step.
 
 ## What `fetch.sh` does
 
-1. **Downloads the reference genome** as FASTA.
-2. **Downloads its GenBank record and turns it into a region file**
+1. **Downloads the 10X v2 barcode whitelist** and checks it really is one.
+2. **Downloads the reference genome** as FASTA.
+3. **Downloads its GenBank record and turns it into a region file**
    (`genbank_to_gff3.py`). This is the interesting part — see below.
-3. **Downloads the sequencing reads** with `fasterq-dump`.
-4. **Optionally takes a subsample**, if you set `MAX_READS`.
-5. **Maps the reads to the reference** with minimap2.
+4. **Downloads the sequencing reads** with `fasterq-dump`.
+5. **Optionally takes a subsample**, if you set `MAX_READS`.
+6. **Maps the reads to the reference** with minimap2.
 
 What comes out is `SRR28178313.sam`, which is exactly what the pipeline's first
 stage expects. From there it's the ordinary workflow.

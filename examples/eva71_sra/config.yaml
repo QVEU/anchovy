@@ -12,13 +12,12 @@
 sample: "SRR28178313"
 data_dir: "examples/eva71_sra/data"
 
-# --- 10X barcode whitelist -- YOU MUST SET THIS ----------------------------- #
-# Not redistributable, and not downloadable by fetch.sh. It ships with Cell
-# Ranger. This run is v2 chemistry, so use:
-#
-#   cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt
-#
-whitelist: "/path/to/737K-august-2016.txt"     # <<< EDIT ME
+# --- 10X barcode whitelist -------------------------------------------------- #
+# Downloaded by fetch.sh from 10X's open-source supernova repository, so there
+# is nothing to install. Point this elsewhere to use a local copy -- the
+# identical file ships with Cell Ranger as
+# cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt.
+whitelist: "examples/eva71_sra/data/737K-august-2016.txt"
 
 # The 10X signature searched for in each read. The N-run is the barcode+UMI
 # region: 26 Ns = 16 nt barcode + 10 nt UMI, which is the v2 layout, matching
