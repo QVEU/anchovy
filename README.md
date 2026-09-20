@@ -146,9 +146,7 @@ gff: "path/to/regions.gff3"
 
 #### Writing your own
 
-Here is a complete example for dengue virus 1. Copy it into a file called
-something like `regions.gff3`, then change the numbers and names to match your
-own virus — that's all most people need to do.
+Here is an example GFF3 for dengue virus 1, which can be found at: `tests/data/mapping/regions.gff3`. Copy it and edit for your own run. 
 
 ```
 ##gff-version 3
@@ -160,10 +158,8 @@ NC_001477.1	anchovy	mature_protein_region	7568	10267	.	+	0	Name=NS5
 NC_001477.1	anchovy	three_prime_UTR	10271	10735	.	+	.	Name=3UTR
 ```
 
-**Every column must be separated by a single TAB, not spaces.** This is the
-mistake that catches people out, because tabs and spaces look identical on
-screen. If you get it wrong, anchovy stops and tells you which line is at fault
-rather than guessing — but many text editors silently convert tabs to spaces when
+**Every column must be separated by a single TAB, not spaces.** This is a common
+mistake. It will get flagged in your anchovy run, but many text editors silently convert tabs to spaces when
 you type, so it's worth turning that off, or editing the file in a plain-text
 editor. Copying the block above preserves the tabs.
 
@@ -191,16 +187,15 @@ Any other type — `gene`, `mRNA`, `exon` and so on — is ignored, so you can l
 an annotation file from elsewhere largely as it is and anchovy will pick out the
 parts it can use.
 
-**Regions are allowed to overlap, and that's the point.** In the example above
+**Regions are allowed to overlap.** In the example above
 the capsid, NS1 and NS5 all sit inside the polyprotein, so a mutation in NS5 gets
 one row numbered within NS5 and another numbered within the polyprotein. Annotate
 at whichever levels are useful to you.
 
 **A check worth knowing about.** A coding region's length should divide exactly
-by three, since it's whole codons. If one doesn't, anchovy warns you and names
-the region — that almost always means the coordinates are off, most often because
-they were written in amino acid numbers instead of nucleotide numbers. The
-warning doesn't stop the run.
+by three, into codons. If it doesn't, anchovy warns you and names
+the region, that almost always means the coordinates are off. The
+warning doesn't stop the run, but you should double check the coordinates are correct, genomic nucleotide positions. 
 
 If you'd rather start from something known to work, `tests/data/mapping/regions.gff3`
 in this repository is a small, complete file used by the test suite.
