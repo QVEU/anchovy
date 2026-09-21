@@ -51,9 +51,11 @@ reference_name: "AF304458.1"
 # --- Region-aware annotation ------------------------------------------------ #
 # Derived by fetch.sh from the reference's own GenBank annotation, so the
 # coordinates are not hand-copied. For a picornavirus this gives you the
-# polyprotein CDS plus a mature_protein_region per cleavage product (VP1-VP4,
-# 2A-2C, 3A-3D), which is the overlapping-region case: a mutation in VP1 is
-# reported twice, numbered within VP1 and within the polyprotein.
+# polyprotein CDS, plus a mature_protein_region per cleavage product (VP1-VP4,
+# 2A-2C, 3A-3D) when the record has them -- AF304458 does NOT, so fetch.sh
+# transfers them from MATPEP_DONOR_ACC by protein alignment. With them, a VP1
+# mutation is reported twice: numbered within VP1 and within the polyprotein.
+# Without them, everything is numbered against the 2194-residue polyprotein.
 #
 # Setting this also switches the consensus stage to whole-reference mode, so
 # positions stay genome coordinates.

@@ -169,6 +169,13 @@ normal. Deriving the coordinates from the GenBank record the pipeline already
 downloads removes that risk, and means the example still works when you point it
 at a different virus.
 
+**Not every record has them.** `AF304458` annotates only the polyprotein CDS,
+which gives you one region and residue numbers against all 2,194 residues of it.
+`fetch.sh` notices this and transfers the cleavage sites from an annotated
+relative (`MATPEP_DONOR_ACC`, default `NC_001612`) by aligning the two
+polyproteins — so the coordinates are derived, not typed, and a donor that is
+not the same virus is refused rather than silently renumbering everything.
+
 You also get the mature peptides for free. Picornavirus records annotate the
 polyprotein *and* each protein cut out of it — VP1 to VP4, 2A to 2C, 3A to 3D —
 so a mutation in VP1 comes out described twice:

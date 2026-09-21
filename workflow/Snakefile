@@ -327,6 +327,12 @@ rule annotate:
     input:
         csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
         reference=RESULTS + "/" + SAMPLE + "_consensus_reference.txt",
+        # Tracked, not just passed as a flag: edit the region model and every
+        # residue number downstream is stale, which Snakemake cannot infer from
+        # a params string. Same reasoning as `reference` on the consensus rule.
+        # Annotation is the last and cheapest stage, so re-running it on a
+        # richer GFF costs seconds -- but only if the dependency is declared.
+        **({"gff": GFF} if GFF else {}),
     output:
         annot=RESULTS + "/" + SAMPLE + "_annot_v3.csv",
         epistatic=RESULTS + "/" + SAMPLE + "_epistaticNetwork.csv",

@@ -47,16 +47,47 @@ def _match_worker(seq_query: tuple[str, str]) -> tuple[int, int, str]:
     return barcodes.best_query_match(seq, query)
 
 
+# The whitelist and its derived query blocks are READ-ONLY and identical for
+# every read, so they are handed to each worker process once at startup instead
+# of travelling inside every payload.
+#
+# They used to be two of the ten fields in each payload tuple. In-process that
+# is just a reference, but Pool.map PICKLES the payloads, and the big objects
+# are re-serialized once per chunk. At 10X scale that is not a micro-
+# optimization: a 737,280-barcode whitelist makes a single payload 185 MB, and
+# 402k reads over 16 processes is ~64 chunks -- roughly 12 GB serialized each
+# way, and the parent buffers those chunks as it fills the task queue. The
+# worker needed all of it to do one positional lookup, whitelist.iat[pos, 0].
+#
+# With the fork start method the children inherit initargs through the fork
+# itself, so this costs nothing at all; under spawn it is paid once per worker
+# rather than once per chunk.
+_ASSIGN_STATE: dict = {}
+
+
+def _assign_init(whitelist, barcode_blocks, umi_start, umi_end_trim) -> None:
+    """Pool initializer: publish the shared read-only state to this worker."""
+    _ASSIGN_STATE["whitelist"] = whitelist
+    _ASSIGN_STATE["barcode_blocks"] = barcode_blocks
+    _ASSIGN_STATE["umi_start"] = umi_start
+    _ASSIGN_STATE["umi_end_trim"] = umi_end_trim
+
+
 def _assign_worker(payload: tuple) -> tuple:
     """Worker for the barcode-assignment pass. (was: cellMatch)
 
-    payload = (read_id, full_seq, match_pos, matchseq, read_len, offset,
-               whitelist, barcode_blocks, umi_start, umi_end_trim)
+    payload = (read_id, full_seq, match_pos, matchseq, read_len, offset)
+    The whitelist, barcode blocks and UMI offsets come from _ASSIGN_STATE,
+    which _assign_init populated once when this process started.
 
     Returns the 10 fields in schema.AnchovyColumns.ORDER order.
     """
-    (read_id, full_seq, match_pos, matchseq, read_len, offset,
-     whitelist, barcode_blocks, umi_start, umi_end_trim) = payload
+    read_id, full_seq, match_pos, matchseq, read_len, offset = payload
+
+    whitelist = _ASSIGN_STATE["whitelist"]
+    barcode_blocks = _ASSIGN_STATE["barcode_blocks"]
+    umi_start = _ASSIGN_STATE["umi_start"]
+    umi_end_trim = _ASSIGN_STATE["umi_end_trim"]
 
     read_seq = full_seq[offset:read_len]
     barcode, min_d, min_pos, matchblock = barcodes.assign_barcode(
@@ -113,14 +144,13 @@ def assign_barcodes(sam: pd.DataFrame, query: str, whitelist: pd.DataFrame,
     kept = sam[sam.minD < config.min_distance_cutoff]
 
     payloads = [
-        (row.read, row.seq, row.minPos, row.matchseq,
-         row.readLen, row.offset,
-         whitelist, barcode_blocks,
-         config.umi_start_offset, config.umi_end_trim)
+        (row.read, row.seq, row.minPos, row.matchseq, row.readLen, row.offset)
         for row in kept.itertuples()
     ]
 
-    with Pool(config.nthreads) as pool:
+    with Pool(config.nthreads, initializer=_assign_init,
+              initargs=(whitelist, barcode_blocks,
+                        config.umi_start_offset, config.umi_end_trim)) as pool:
         print("\n2. Identifying Cell Barcodes...")
         results = pool.map(_assign_worker, payloads)
 
