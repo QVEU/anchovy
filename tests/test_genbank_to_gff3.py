@@ -23,13 +23,9 @@ from Bio.Seq import Seq
 from Bio.SeqFeature import SeqFeature, SimpleLocation
 from Bio.SeqRecord import SeqRecord
 
-from anchovy.regions import annotate_mutation, parse_gff3, validate_regions
-import random as _random
-from Bio import SeqIO as _SeqIO
-from Bio.Seq import Seq as _Seq
-from Bio.SeqFeature import SeqFeature as _Feature
-from Bio.SeqFeature import SimpleLocation as _Loc
-from Bio.SeqRecord import SeqRecord as _Record
+from anchovy.regions import (annotate_mutation, classify, parse_gff3,
+                             validate_regions)
+import random
 
 SCRIPT = Path(__file__).resolve().parent.parent / "examples" / "eva71_sra" / "genbank_to_gff3.py"
 
@@ -242,37 +238,36 @@ _PEPTIDES = [("VP4", 0, 70), ("VP2", 70, 150), ("VP3", 150, 220), ("VP1", 220, 3
 
 def _synthetic(tmp_path, name, *, seed, utr5=60, peptides=(), mutations=0):
     """A small single-CDS genome, optionally with mat_peptides."""
-    rng = _random.Random(seed)
+    rng = random.Random(seed)
     cds = "".join(rng.choice(_CODONS) for _ in range(300)) + "TAA"
     seq = list(("A" * utr5) + cds + ("T" * 40))
     for _ in range(mutations):
         i = rng.randrange(utr5, utr5 + len(cds) - 3)
         seq[i] = rng.choice("ACGT")
-    record = _Record(_Seq("".join(seq)), id=name, name=name, description="test")
+    record = SeqRecord(Seq("".join(seq)), id=name, name=name, description="test")
     record.annotations["molecule_type"] = "RNA"
-    record.features.append(_Feature(
-        _Loc(utr5, utr5 + len(cds), strand=1), type="CDS",
+    record.features.append(SeqFeature(
+        SimpleLocation(utr5, utr5 + len(cds), strand=1), type="CDS",
         qualifiers={"product": ["polyprotein"], "codon_start": ["1"]}))
     for pep_name, aa_start, aa_end in peptides:
-        record.features.append(_Feature(
-            _Loc(utr5 + aa_start * 3, utr5 + aa_end * 3, strand=1),
+        record.features.append(SeqFeature(
+            SimpleLocation(utr5 + aa_start * 3, utr5 + aa_end * 3, strand=1),
             type="mat_peptide", qualifiers={"product": [pep_name]}))
     path = tmp_path / f"{name}.gb"
-    _SeqIO.write([record], str(path), "genbank")
+    SeqIO.write([record], str(path), "genbank")
     return path
 
 
-def test_transfer_places_peptides_at_the_targets_own_cds_offset(tmp_path):
+def test_transfer_places_peptides_at_the_targets_own_cds_offset(converter, tmp_path):
     """The donor's CDS offset must not leak into the target's coordinates."""
-    from examples.eva71_sra.genbank_to_gff3 import transfer_mat_peptides
 
-    donor = _SeqIO.read(str(_synthetic(tmp_path, "donor", seed=1,
+    donor = SeqIO.read(str(_synthetic(tmp_path, "donor", seed=1,
                                        peptides=_PEPTIDES)), "genbank")
     # Same virus, 25 extra bases of 5'UTR, so every CDS coordinate shifts.
-    target = _SeqIO.read(str(_synthetic(tmp_path, "target", seed=1, utr5=85,
+    target = SeqIO.read(str(_synthetic(tmp_path, "target", seed=1, utr5=85,
                                         mutations=20)), "genbank")
 
-    features, report = transfer_mat_peptides(donor, target)
+    features, report = converter.transfer_mat_peptides(donor, target)
 
     assert report["identity"] > 0.9
     assert [f["name"] for f in features] == ["VP4", "VP2", "VP3", "VP1"]
@@ -285,62 +280,57 @@ def test_transfer_places_peptides_at_the_targets_own_cds_offset(tmp_path):
         assert feature["start"] == 86 + aa_start * 3
 
 
-def test_transfer_refuses_an_unrelated_donor(tmp_path):
+def test_transfer_refuses_an_unrelated_donor(converter, tmp_path):
     """A wrong donor must fail loudly, not renumber everything quietly."""
-    from examples.eva71_sra.genbank_to_gff3 import transfer_mat_peptides
 
-    donor = _SeqIO.read(str(_synthetic(tmp_path, "other", seed=424242,
+    donor = SeqIO.read(str(_synthetic(tmp_path, "other", seed=424242,
                                        peptides=_PEPTIDES)), "genbank")
-    target = _SeqIO.read(str(_synthetic(tmp_path, "target2", seed=1)), "genbank")
+    target = SeqIO.read(str(_synthetic(tmp_path, "target2", seed=1)), "genbank")
 
     with pytest.raises(ValueError, match="identical"):
-        transfer_mat_peptides(donor, target)
+        converter.transfer_mat_peptides(donor, target)
 
 
-def test_transfer_refuses_a_donor_without_mature_peptides(tmp_path):
-    from examples.eva71_sra.genbank_to_gff3 import transfer_mat_peptides
+def test_transfer_refuses_a_donor_without_mature_peptides(converter, tmp_path):
 
-    donor = _SeqIO.read(str(_synthetic(tmp_path, "bare", seed=1)), "genbank")
-    target = _SeqIO.read(str(_synthetic(tmp_path, "target3", seed=1)), "genbank")
+    donor = SeqIO.read(str(_synthetic(tmp_path, "bare", seed=1)), "genbank")
+    target = SeqIO.read(str(_synthetic(tmp_path, "target3", seed=1)), "genbank")
 
     with pytest.raises(ValueError, match="no mat_peptide"):
-        transfer_mat_peptides(donor, target)
+        converter.transfer_mat_peptides(donor, target)
 
 
-def test_transferred_regions_are_marked_in_the_gff3(tmp_path):
+def test_transferred_regions_are_marked_in_the_gff3(converter, tmp_path):
     """Provenance belongs in the file, not only in the terminal that made it."""
-    from examples.eva71_sra.genbank_to_gff3 import convert, transfer_mat_peptides
 
-    donor = _SeqIO.read(str(_synthetic(tmp_path, "donor4", seed=1,
+    donor = SeqIO.read(str(_synthetic(tmp_path, "donor4", seed=1,
                                        peptides=_PEPTIDES)), "genbank")
-    target = _SeqIO.read(str(_synthetic(tmp_path, "target4", seed=1)), "genbank")
+    target = SeqIO.read(str(_synthetic(tmp_path, "target4", seed=1)), "genbank")
 
-    features, _ = transfer_mat_peptides(donor, target)
-    lines = convert(target, transferred=features)
+    features, _ = converter.transfer_mat_peptides(donor, target)
+    lines = converter.convert(target, transferred=features)
     rows = [ln for ln in lines if not ln.startswith("#")]
 
     assert sum("transferred_by_alignment" in r for r in rows) == 4
     assert sum(r.split("\t")[2] == "CDS" for r in rows) == 1
 
 
-def test_transferred_gff3_is_readable_by_anchovys_region_model(tmp_path):
+def test_transferred_gff3_is_readable_by_anchovys_region_model(converter, tmp_path):
     """The output has to work as input to the thing it is built for."""
-    from anchovy import regions as regions_mod
-    from examples.eva71_sra.genbank_to_gff3 import convert, transfer_mat_peptides
 
-    donor = _SeqIO.read(str(_synthetic(tmp_path, "donor5", seed=1,
+    donor = SeqIO.read(str(_synthetic(tmp_path, "donor5", seed=1,
                                        peptides=_PEPTIDES)), "genbank")
-    target = _SeqIO.read(str(_synthetic(tmp_path, "target5", seed=1)), "genbank")
+    target = SeqIO.read(str(_synthetic(tmp_path, "target5", seed=1)), "genbank")
 
-    features, _ = transfer_mat_peptides(donor, target)
+    features, _ = converter.transfer_mat_peptides(donor, target)
     gff = tmp_path / "regions.gff3"
-    gff.write_text("\n".join(convert(target, transferred=features)) + "\n")
+    gff.write_text("\n".join(converter.convert(target, transferred=features)) + "\n")
 
-    parsed = regions_mod.parse_gff3(str(gff))
+    parsed = parse_gff3(str(gff))
     assert len(parsed) == 5
 
     # A position inside VP1 must now land in TWO regions: the polyprotein and
     # VP1 itself. That overlap is the entire point of the transfer.
     vp1 = [r for r in parsed if r.name == "VP1"][0]
-    containing = regions_mod.classify(parsed, vp1.start + 3)
+    containing = classify(parsed, vp1.start + 3)
     assert {r.name for r in containing} == {"polyprotein", "VP1"}
