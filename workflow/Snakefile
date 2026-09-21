@@ -10,6 +10,7 @@
 # See workflow/README.md for the config-swap pattern and examples.
 
 import os
+import shutil
 
 # NO `configfile:` directive on purpose. It used to name workflow/config.yaml,
 # which meant every run MERGED that file underneath whatever --configfile you
@@ -163,18 +164,43 @@ rule extract:
 # --------------------------------------------------------------------------- #
 # Stage 2: fasta  (anchovy CSV -> per-cell FASTAs)  -- THE CHECKPOINT
 # --------------------------------------------------------------------------- #
+# `min_reads` DECIDES THE SIZE OF THE WHOLE RUN, so it is exposed here rather
+# than left at the CLI default of 5. Every barcode emitted by this checkpoint
+# becomes two downstream jobs (map_cell + cell_consensus), and on a cluster that
+# means two scheduler submissions. The per-cell depth filter that actually
+# matters for the science (`depth_min`) is applied much later, at the consensus
+# stage -- so a barcode carrying 5 reads costs a full minimap2 run and a full
+# sam2consensus run before being discarded for having too little coverage.
+#
+# On a real 10X run the barcode distribution has a very long tail of such cells.
+# Raising this is the cheapest way to cut a run from hundreds of thousands of
+# jobs to a tractable number, and it discards only cells that could not have
+# survived `depth_min` anyway.
 checkpoint fasta:
     input:
         csv=DATA_DIR + "/" + SAMPLE + "_anchovy.csv",
     output:
         cells=directory(RESULTS + "/cells"),
+    params:
+        min_reads=f"--min-reads {config['min_reads']}" if "min_reads" in config else "",
     shell:
-        "anchovy fasta {input.csv} {output.cells}"
+        "anchovy fasta {input.csv} {output.cells} {params.min_reads}"
 
 
 # --------------------------------------------------------------------------- #
 # Stage 3: map_cell  (read one per-cell FASTA -> write one per-cell SAM to WORK)
 # --------------------------------------------------------------------------- #
+# BOTH PER-CELL RULES ARE IN THE GROUP "cell", which matters on a cluster.
+# Without a group, every cell is two separate submissions, each doing seconds of
+# work -- scheduler overhead then dominates the run and, at hundreds of
+# thousands of cells, the queue itself becomes the bottleneck. Grouping keeps a
+# cell's map and consensus together (the intermediate SAM never leaves the
+# node), and lets you batch many cells into one submission:
+#
+#   snakemake -s workflow/Snakefile --configfile config.yaml \
+#       --executor slurm --jobs 200 --group-components cell=200
+#
+# Locally the group is harmless; it just runs the pair back to back.
 # Reads from CELLS_IN, writes to WORK -- input and output locations are distinct,
 # so the source cells directory is never written to.
 rule map_cell:
@@ -183,6 +209,8 @@ rule map_cell:
         template=config["template"],
     output:
         sam=WORK + "/{cell}_BC.sam",
+    group:
+        "cell"
     shell:
         "minimap2 -ax map-hifi {input.template} {input.fa} > {output.sam}"
 
@@ -221,6 +249,8 @@ rule cell_consensus:
         cons_threshold=config.get("cons_threshold", 0.5),
         min_depth=config.get("cons_min_depth", 5),
         outfolder=WORK,
+    group:
+        "cell"
     shell:
         "python {input.script} -c {params.cons_threshold} -m {params.min_depth} "
         "--outfolder {params.outfolder} -i {input.sam} && "
@@ -235,13 +265,24 @@ rule cell_consensus:
 # exists. Concatenates them into the _allConsensus.fasta that `anchovy consensus`
 # consumes. This replaces the `cat ${indir}/*.fasta > ..._allConsensus.fasta`
 # line at the end of AnchovyJob.sh -- but tracked and dependency-correct.
+# WHY THIS IS PYTHON AND NOT `cat {input} > {output}`.
+# {input} expands to one path per cell on a single command line. A real run has
+# tens or hundreds of thousands of cells, and the kernel caps a command's
+# argument list (ARG_MAX, typically ~2MB) -- at roughly 60 bytes per path that
+# is about 30,000 cells, past which the rule dies with "Argument list too long".
+# It is a hard failure at the GATHER step, after every per-cell job has already
+# run, so it wastes the entire scatter. Streaming the files in Python has no
+# such limit and never materializes the list as text.
 rule merge_consensus:
     input:
         aggregate_cell_consensuses,
     output:
         ALL_CONSENSUS,
-    shell:
-        "cat {input} > {output}"
+    run:
+        with open(output[0], "wb") as out_fh:
+            for path in input:
+                with open(path, "rb") as in_fh:
+                    shutil.copyfileobj(in_fh, out_fh)
 
 
 # --------------------------------------------------------------------------- #
