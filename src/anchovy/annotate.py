@@ -34,6 +34,7 @@ import pandas as pd
 from Bio.Seq import Seq
 
 from anchovy import regions as regions_mod
+from anchovy.config import AnnotationConfig
 from anchovy.io import read_reference_sequence
 
 
@@ -118,13 +119,17 @@ def annotate_mutation(variant: str, seq: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Haplotype analysis
 # --------------------------------------------------------------------------- #
-def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
+def haplo_analysis(cons: pd.DataFrame,
+                   config: AnnotationConfig | None = None) -> pd.DataFrame:
     """Unroll genotype strings into per-mutation records with counts/frequencies.
 
     Port of R haploanalysis(). Input needs CBC_ID and genotype columns.
     Returns a long table: one row per (cell, mutation), plus explicit reference
     rows for cells with empty genotype. Columns include mutants, pos, base,
     CBC_ID, genotype, count, freq, total, BCMutCount.
+
+    config.max_mutations_per_cell caps how many mutations a cell may carry
+    before it is dropped as an artifact; it defaults to the 200 the R used.
     """
     depth = cons["CBC_ID"].nunique()
 
@@ -151,10 +156,13 @@ def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
     table = pd.DataFrame(rows, columns=["mutants", "pos", "base",
                                         "CBC_ID", "genotype"])
 
-    # BCMutCount per cell; filter out hypermutated cells (< 200), matching R.
+    # BCMutCount per cell; drop hypermutated cells, matching R's `< 200`. The
+    # threshold was a literal here while AnnotationConfig carried a field of the
+    # same name that nothing read -- so setting it did nothing at all.
+    config = config or AnnotationConfig()
     if not table.empty:
         table["BCMutCount"] = table.groupby("CBC_ID")["mutants"].transform("size")
-        table = table[table["BCMutCount"] < 200]
+        table = table[table["BCMutCount"] < config.max_mutations_per_cell]
 
     # Explicit reference rows so ref cells appear downstream.
     ref_rows = pd.DataFrame([{
@@ -485,7 +493,8 @@ def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
         network: bool = True, gff: str | None = None,
-        self_edges: bool = False) -> dict:
+        self_edges: bool = False,
+        config: AnnotationConfig | None = None) -> dict:
     """Read genotype table + reference, annotate, optionally build network, write CSVs.
 
     Outputs (matching the R naming):
@@ -536,7 +545,7 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
 
     cons["genotype"] = cons["genotype"].fillna("")
 
-    haplocounts = haplo_analysis(cons)
+    haplocounts = haplo_analysis(cons, config=config)
 
     # annotate each distinct variant token (excluding the reference sentinel)
     variants = sorted({t for g in haplocounts["genotype"].unique()

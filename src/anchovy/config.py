@@ -132,32 +132,25 @@ class ConsensusConfig:
 
 @dataclass(frozen=True)
 class AnnotationConfig:
-    """Parameters passed through to the R annotation stage.
+    """Parameters for the annotation stage (anchovy.annotate).
 
-    These don't affect the Python code, but centralizing them here means the
-    workflow (Phase 5) has one place to read every parameter from, including the
-    ones it forwards to Rscript.
+    Previously described an R stage and two settings that controlled nothing:
+    `plot_haplotypes` (the port dropped plotting) and `build_network` (which
+    duplicated annotate.run's own `network` argument). Both removed.
     """
 
-    # Drop cells carrying more than this many called mutations as likely
-    # artifacts. (was: mutantTable[BCMutCount < 200] in Consensus_Annotation.R)
+    # Cells with this many called mutations or more are dropped as likely
+    # artifacts. (was: mutantTable[BCMutCount < 200] in Consensus_Annotation.R,
+    # and note the bound is exclusive -- a cell AT this count is dropped.)
     max_mutations_per_cell: int = 200
-
-    # Whether to generate the genotype/epistatic network CSVs.
-    # (was: network=T in the R entry point)
-    build_network: bool = True
-
-    # Whether to render the multi-panel haplotype PDF.
-    # (was: plothaps=T in the R entry point)
-    plot_haplotypes: bool = True
 
 
 @dataclass(frozen=True)
 class PipelineConfig:
     """Top-level config aggregating every stage.
 
-    A single object to pass around (or load from the workflow's config.yaml in
-    Phase 5). Each stage config is built with its own defaults unless overridden.
+    A single object to pass around. Each stage config is built with its own
+    defaults unless overridden.
     """
 
     extract: ExtractConfig = field(default_factory=ExtractConfig)

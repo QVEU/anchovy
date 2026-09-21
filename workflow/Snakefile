@@ -340,6 +340,8 @@ rule annotate:
     params:
         out_prefix=RESULTS + "/" + SAMPLE,
         flags=ANNOTATE_FLAGS,
+        max_mutations=(f"--max-mutations {config['max_mutations_per_cell']}"
+                       if "max_mutations_per_cell" in config else ""),
     shell:
         "anchovy annotate {input.csv} {input.reference} {params.out_prefix} "
-        "{params.flags}"
+        "{params.flags} {params.max_mutations}"

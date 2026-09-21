@@ -180,3 +180,55 @@ def test_per_cell_rules_share_a_group():
         body = text.split(rule_name)[1].split("\nrule ")[0]
         assert re.search(r'group:\s*\n\s*"cell"', body), (
             f"{rule_name} is not in the 'cell' group")
+
+
+# --------------------------------------------------------------------------- #
+# AnnotationConfig: the hypermutation cap must actually be reachable
+# --------------------------------------------------------------------------- #
+def _cells(n_mutations_per_cell: dict[str, int]) -> pd.DataFrame:
+    """A filtConsensus-shaped frame where each cell carries N mutations."""
+    rows = []
+    for cbc, n in n_mutations_per_cell.items():
+        genotype = "_".join(f"{i + 1}A" for i in range(n))
+        rows.append({"CBC_ID": cbc, "genotype": genotype})
+    return pd.DataFrame(rows)
+
+
+def test_max_mutations_per_cell_is_honoured():
+    """The field existed but nothing read it; a literal 200 was used instead."""
+    from anchovy.annotate import haplo_analysis
+    from anchovy.config import AnnotationConfig
+
+    cons = _cells({"quiet": 2, "loud": 10})
+
+    kept_by_default = set(haplo_analysis(cons)["CBC_ID"])
+    assert {"quiet", "loud"} <= kept_by_default, "default 200 should keep both"
+
+    capped = haplo_analysis(cons, config=AnnotationConfig(max_mutations_per_cell=5))
+    mutation_rows = capped[capped["mutants"] != ""]
+    assert "quiet" in set(mutation_rows["CBC_ID"])
+    assert "loud" not in set(mutation_rows["CBC_ID"]), (
+        "a cell above the cap must be dropped; the setting is not wired through")
+
+
+def test_max_mutations_bound_is_exclusive():
+    """R used `< 200`, so a cell AT the threshold is dropped. Preserved."""
+    from anchovy.annotate import haplo_analysis
+    from anchovy.config import AnnotationConfig
+
+    cons = _cells({"at_threshold": 5, "below": 4})
+    out = haplo_analysis(cons, config=AnnotationConfig(max_mutations_per_cell=5))
+    with_mutations = set(out[out["mutants"] != ""]["CBC_ID"])
+
+    assert "below" in with_mutations
+    assert "at_threshold" not in with_mutations
+
+
+def test_annotation_config_has_no_settings_that_control_nothing():
+    """plot_haplotypes and build_network described behavior that did not exist."""
+    from anchovy.config import AnnotationConfig
+
+    fields = set(AnnotationConfig.__dataclass_fields__)
+    assert "plot_haplotypes" not in fields, "the port dropped plotting"
+    assert "build_network" not in fields, "duplicated annotate.run(network=)"
+    assert fields == {"max_mutations_per_cell"}
