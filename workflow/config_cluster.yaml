@@ -1,150 +1,65 @@
-# workflow/config_cluster.yaml
+# Full-scale cluster run. Paths below match what fetch.sh prints when it
+# finishes -- copy them from its output rather than assuming.
 #
-# A full-scale run on a cluster. Differs from the example config in one respect
-# that matters: the example is tuned to produce SOMETHING from a subsample, and
-# this is tuned to produce something you can trust from all of the data.
+#   FASTQ=/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/5_EVA71_6h_P5.ccs.fastq \
+#     THREADS=16 bash examples/eva71_sra/fetch.sh
 #
 #   snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml \
-#       --executor slurm --jobs 200 --group-components cell=200
+#     --executor slurm --jobs 200 --group-components cell=200
 #
-# Do a dry run first, purely to see the job count:
-#   snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml -n
-# That number tells you whether min_reads and --group-components are set sanely
-# BEFORE you queue anything. See "Sizing the run" at the bottom.
+# Add -n first: the map_cell count is the surviving barcode count, and dividing
+# by --group-components gives the number of SLURM submissions.
 
-# =========================================================================== #
-# EDIT THIS BLOCK -- everything below it is tuning, not paths.
-# =========================================================================== #
+# --- paths ---------------------------------------------------------------- #
+# Reads are taken from {data_dir}/{sample}.sam. fetch.sh derives this name from
+# the FASTQ's basename; run it with SAMPLE=5_EVA71_6h_P5 to drop the .ccs.
+sample: "5_EVA71_6h_P5.ccs"
+data_dir: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data"
 
-# Input is read from {data_dir}/{sample}.sam
-sample: "SRR28178313"
-data_dir: "data"
+# Genome the reads were mapped to.
+template: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/AF304458.fasta"
 
-# Genome the reads were mapped to. reference_name must match the name after ">"
-# in the FASTA -- sam2consensus prefixes every per-cell output file with it, and
-# a mismatch makes the workflow look for files that were never written.
-template: "ref/AF304458.fasta"
+# Call genotypes against the genome, not the consensus across cells. Unset,
+# anything fixed in the population is absorbed into the reference and vanishes.
+# Must be the same file as `template`.
+reference: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/AF304458.fasta"
+
+# Must match the name after ">" in `template`.
 reference_name: "AF304458.1"
 
-# Call genotypes against the genome itself rather than the cross-cell consensus.
-# Keep this set. Without it the reference is computed ACROSS cells, so anything
-# fixed in your population is absorbed into the reference and disappears, and a
-# run that leaves few cells reports nothing at all. Must be the same FASTA as
-# `template`, since positions are compared by index.
-reference: "ref/AF304458.fasta"
+# 10X v2 (737,280 barcodes).
+whitelist: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/737K-august-2016.txt"
 
-# 10X barcode whitelist. v2 chemistry = 737,280 barcodes.
-whitelist: "ref/737K-august-2016.txt"
-
-# The N-run is barcode+UMI: 26 Ns = 16 nt barcode + 10 nt UMI, the v2 layout.
-# v3 would be 28 Ns and the v3 whitelist.
+# 26 Ns = 16 nt barcode + 10 nt UMI. v3 is 28 Ns and the v3 whitelist.
 signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
 
-# Region model. Generate it from the reference's own GenBank record rather than
-# writing one by hand -- a mistyped coordinate raises nothing, it silently
-# renumbers every downstream amino acid.
-#   python examples/eva71_sra/genbank_to_gff3.py AF304458 ref/AF304458.gff3
-# Setting this also switches the consensus stage to genome coordinates.
-gff: "ref/AF304458.gff3"
+# Region model. Also switches genotype positions to genome coordinates.
+gff: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/AF304458.gff3"
 
-# =========================================================================== #
-# Sizing the run -- the settings that decide how big the job graph is
-# =========================================================================== #
-
-# HOW MANY READS A BARCODE NEEDS TO BECOME A JOB AT ALL.
-#
-# Every barcode that clears this becomes two jobs (map_cell + cell_consensus).
-# The filter that matters scientifically, depth_min, is not applied until much
-# later, so a barcode below it still costs a full minimap2 and sam2consensus run
-# before being thrown away. On a 10X run the barcode distribution has a very
-# long tail of such cells, and they are most of the job graph.
-#
-# WHY 20, AND WHY IT IS NOT AN ARBITRARY NUMBER.
-# sam2consensus reports coverage as (total aligned bases / genome length). A
-# read cannot align more bases than the genome is long, so:
-#
-#       coverage <= n_reads         always
-#
-# A barcode with fewer reads than depth_min therefore CANNOT reach depth_min, no
-# matter how long its reads are. Setting min_reads = depth_min is thus provably
-# lossless: it discards only cells that were already guaranteed to be dropped,
-# and it discards them before they cost you two cluster jobs.
-#
-# In practice reads do not span the whole genome, so real cells need MORE reads
-# than this. The realistic requirement is:
-#
-#       n_reads ~= depth_min x genome_length / mean_mapped_read_length
-#
-# For a 7.4 kb genome at depth_min 20 that is ~57 reads for 2.6 kb reads, or
-# ~148 for 1 kb reads. So if the dry-run job count is still too large, raising
-# min_reads toward that figure is the right lever -- but measure your read
-# length first rather than guessing (see the bottom of this file).
+# --- filters -------------------------------------------------------------- #
+# Reads a barcode needs to become two jobs (map_cell + cell_consensus).
+# coverage <= n_reads always, so min_reads = depth_min discards only cells that
+# could never have passed. Raise it to cut the job count -- a cell realistically
+# needs depth_min x genome_length / mean_read_length reads.
 min_reads: 20
 
-# =========================================================================== #
-# Thresholds
-# =========================================================================== #
-
-# Per-cell coverage needed to enter the consensus stage. Raised from the 3 the
-# example uses: 3 exists so a subsample yields something to look at, and it is
-# too thin to read biology from. At 3-5x a single discordant read stops any base
-# reaching the consensus threshold, which is what produces IUPAC ambiguity codes
-# rather than called bases.
+# Per-cell mean coverage to enter the consensus stage.
 depth_min: 20
 
-# Per-POSITION depth for sam2consensus to call that position at all. Below it
-# the position is gap-filled. Half of depth_min is a reasonable pairing: the
-# well-covered core gets called and ragged ends drop out rather than being
-# called from one or two reads.
+# Per-position depth for sam2consensus to call a position; below it, gap-filled.
 cons_min_depth: 10
 
-# Consensus threshold per position. LEAVE THIS AT 0.5.
-# Raising it produces MORE ambiguity, not less -- the algorithm accumulates
-# bases most-frequent-first until their COMBINED coverage reaches the threshold,
-# so a higher threshold pulls in more bases. 3A/2G calls A at 0.5 and R at 0.75.
-# More reads per cell is the only thing that actually resolves ambiguity.
+# Leave at 0.5. Raising it emits MORE IUPAC ambiguity codes, not fewer.
 cons_threshold: 0.5
 
-# Keep IUPAC ambiguity codes as genotype tokens. Off by default, which is what
-# you want: they record that a cell's reads DISAGREED, not that it carries a
-# mutation, and as tokens they group cells by shared uncertainty. The consensus
-# stage prints how many calls it dropped.
-#
-# Worth one deliberate run with this ON, compared against a normal run: at full
-# depth, a position that still comes back ambiguous is a candidate for a real
-# within-cell mixed population rather than thin coverage, which for a viral
-# quasispecies is signal.
+# --- optional ------------------------------------------------------------- #
+# Keep IUPAC codes as genotype tokens. Off by default: they mark positions where
+# reads disagreed, not mutations. Worth one run with it on at full depth.
 # keep_ambiguous: true
 
-# Analysis window. In whole-reference mode these do not trim or renumber; they
-# only restrict which positions variants are called over, which is how you
-# exclude ragged, poorly-covered ends. Leave unset for the first pass, look at
-# where this run actually has coverage, then set them and re-run.
+# Restrict which positions variants are called over. Renumbers nothing.
 # orf_start: 700
 # orf_end: 7300
 
-# Self-edges in the epistatic network (the original R behavior). Off by default;
-# Cytoscape draws them as a loop on every node.
+# Keep self-loops in the epistatic network (the original R behavior).
 # self_edges: true
-
-# =========================================================================== #
-# Sizing the run, concretely
-# =========================================================================== #
-#
-# 1. Measure your mean mapped read length:
-#
-#      samtools view -F 0x904 data/SRR28178313.sam \
-#        | awk '{n++; s+=length($10)} END {print "reads:", n, "mean len:", s/n}'
-#
-# 2. Work out the reads a cell needs to clear depth_min:
-#
-#      depth_min x genome_length / mean_read_length
-#
-# 3. Dry-run and read the job count:
-#
-#      snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml -n
-#
-#    map_cell and cell_consensus counts are each the surviving barcode count.
-#    Divide by your --group-components value to get actual SLURM submissions.
-#    Aim for hundreds to low thousands of submissions, not hundreds of
-#    thousands -- past that the scheduler, not your compute, is the bottleneck.

@@ -73,6 +73,15 @@ conda activate anchovy
 bash examples/eva71_sra/fetch.sh
 ```
 
+To run on reads you already have, point `FASTQ` at them and no download
+happens. `.gz` is fine, and the sample name is derived from the filename:
+
+```bash
+FASTQ=/path/to/5_EVA71_6h_P5.ccs.fastq bash examples/eva71_sra/fetch.sh
+```
+
+`fetch.sh` prints the exact config lines to use when it finishes.
+
 Then see what the workflow plans to do:
 
 ```bash
@@ -140,7 +149,8 @@ can fix it and re-run without starting over. Delete a file to redo that step.
 2. **Downloads the reference genome** as FASTA.
 3. **Downloads its GenBank record and turns it into a region file**
    (`genbank_to_gff3.py`). This is the interesting part — see below.
-4. **Downloads the sequencing reads** with `fasterq-dump`.
+4. **Gets the sequencing reads** — your own file if you set `FASTQ`, otherwise
+   downloaded with `fasterq-dump`.
 5. **Optionally takes a subsample**, if you set `MAX_READS`.
 6. **Maps the reads to the reference** with minimap2.
 
@@ -177,7 +187,7 @@ within the mature protein, so having both saves converting by hand.
 
 Copy this directory and change:
 
-- `SRR` in `fetch.sh` — your run accession
+- `FASTQ` — your own reads, or `SRR` in `fetch.sh` for a run accession
 - `REFERENCE_ACC` in `fetch.sh` — your reference
 - `MINIMAP_PRESET` — `map-hifi` for PacBio, `map-ont` for Nanopore
 - `sample`, `template`, `reference_name`, `gff` in `config.yaml` to match
