@@ -232,3 +232,59 @@ def test_annotation_config_has_no_settings_that_control_nothing():
     assert "plot_haplotypes" not in fields, "the port dropped plotting"
     assert "build_network" not in fields, "duplicated annotate.run(network=)"
     assert fields == {"max_mutations_per_cell"}
+
+
+# --------------------------------------------------------------------------- #
+# extract: shared read-only state must not travel in every payload
+# --------------------------------------------------------------------------- #
+def test_assign_payloads_carry_no_bulk_objects():
+    """The whitelist must not be pickled once per chunk.
+
+    Pool.map pickles payloads, so a 737,280-barcode whitelist inside each one
+    made a single payload 185 MB. Across the ~64 chunks that 402k reads over 16
+    processes produces, that is ~12 GB serialized in each direction -- to let
+    the worker do one positional lookup. The payload is now the per-read fields
+    only, with the shared state published once by the pool initializer.
+    """
+    import inspect
+    import pickle
+
+    from anchovy import extract
+
+    source = inspect.getsource(extract.assign_barcodes)
+    payload_block = source.split("payloads = [")[1].split("]")[0]
+    for leaked in ("whitelist", "barcode_blocks"):
+        assert leaked not in payload_block, (
+            f"{leaked} is back in the per-read payload; it belongs in "
+            f"_assign_init, or every chunk ships a copy of it")
+
+    assert "initializer=_assign_init" in source, (
+        "the pool must publish shared state via its initializer")
+
+    # A payload must stay small enough that per-chunk pickling is irrelevant.
+    payload = ("read1", "ACGT" * 500, 5, "x" * 58, 2000, 0)
+    assert len(pickle.dumps(payload)) < 10_000
+
+
+def test_assign_worker_reads_its_state_from_the_initializer(tmp_path):
+    """_assign_worker must work once _assign_init has populated the state."""
+    import numpy as np
+    import pandas as pd
+
+    from anchovy import extract
+    from anchovy.barcodes import build_barcode_query_blocks
+
+    signature = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    whitelist = pd.DataFrame({"CBC": ["AAACCCAAGAAACACT", "AAACCCAAGAAACCAT"]})
+    blocks = build_barcode_query_blocks(signature, whitelist.CBC)
+
+    extract._assign_init(whitelist, blocks, 38, 10)
+
+    # A read whose matched block carries the first barcode exactly.
+    matchseq = str(blocks[0]).replace("N" * 10, "TGTGTTATCT")
+    row = ("read0", "G" * 20 + matchseq, 20, matchseq, 20 + len(matchseq), 20)
+    result = extract._assign_worker(row)
+
+    assert result[0] == "AAACCCAAGAAACACT"   # CBC
+    assert result[7] == "read0"               # read id
+    assert isinstance(np.int64(result[1]), np.integer) or isinstance(result[1], int)
