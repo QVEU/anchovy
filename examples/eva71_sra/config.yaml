@@ -89,6 +89,15 @@ cons_min_depth: 3
 # below are the two knobs that dropped them.
 depth_min: 3
 
+# Treat IUPAC ambiguity codes (R, Y, S...) as mutations. Off by default: those
+# mark positions where a cell's reads DISAGREED, not bases anyone called, and as
+# genotype tokens they group cells by shared uncertainty. At the low depths this
+# example runs at they are common -- the consensus stage prints how many calls it
+# dropped. Turn this on only if you are after genuine within-cell mixed
+# populations. Note that raising cons_threshold produces MORE of them, not fewer;
+# more reads per cell is the fix.
+# keep_ambiguous: true
+
 # Keep each genotype's self-edge in the epistatic network (the original R
 # behavior). Off by default -- Cytoscape draws them as a loop on every node.
 # self_edges: true

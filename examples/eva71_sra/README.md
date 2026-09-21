@@ -111,6 +111,20 @@ mapping time only — by the time it applies, the whole run has come down. Use i
 when you have the full data and want a faster mapping pass, not to shorten the
 download.
 
+### Then go bigger
+
+A subsample is for checking the pipeline runs, not for reading the biology off.
+Spots are spread across ~750,000 possible barcodes, so cutting the download cuts
+*per-cell depth*, and per-cell depth is what every downstream number rests on.
+At 500,000 spots this run yields on the order of five cells past `depth_min: 3`,
+each covered thinly enough that over half their genotype tokens come back as
+ambiguity codes rather than called bases — see
+[Ambiguity codes](#ambiguity-codes-and-why-they-arent-mutations) below.
+
+Lowering `depth_min` does not fix that; it admits more cells at the same thin
+coverage. The fix is more reads per barcode: raise `MAX_SPOTS` by an order of
+magnitude, or drop it entirely.
+
 When you want the real thing, delete the FASTQ and re-run with neither set.
 
 `fetch.sh` prints the reference name it found when it finishes. It should match
@@ -218,6 +232,50 @@ sequenced run, where you can afford to demand more evidence per cell.
 
 anchovy warns if fewer than two cells survive with no reference supplied, since
 that combination cannot produce a genotype.
+
+## Ambiguity codes, and why they aren't mutations
+
+sam2consensus does not only emit A/C/G/T. Where a position's reads disagree it
+emits an IUPAC ambiguity code — `R` for A-or-G, `Y` for C-or-T, `S` for G-or-C —
+and the lowercase form when a gap or an `N` was among the observed bases. Those
+mark positions where the reads **disagreed**, not positions where the cell
+carries a mutation.
+
+anchovy does not turn them into genotype tokens. A genotype token is a claim
+about a base, and the token machinery compares cells by token identity — so two
+cells both reading `R` at 3185 would be grouped as *sharing a mutation*, when
+what they actually share is not having enough reads to call one. The consensus
+stage prints how many calls it dropped, so the filtering is never silent.
+
+On this example's data at `depth_min: 3` it mattered a lot. Five cells gave
+eleven distinct tokens, six of which were ambiguity codes:
+
+```
+1294C_2873C_3176S_3185R_3587R_3751C_6058R   →   1294C_2873C_3751C
+1294C_3751C                                 →   1294C_3751C
+2873C                                       →   2873C
+3288T_5059C_5431Y                           →   3288T_5059C
+3288T_6202R                                 →   3288T
+```
+
+The filtered column is not just tidier, it is more informative. Single-step
+edges in the genotype network went from **0 to 2**, because they are defined by
+one genotype's mutation set being a subset of another's, and the uncalled
+positions were padding those sets apart. `1294C_3751C` sits inside
+`1294C_2873C_3751C`; with four phantom mutations in the way, nothing sat inside
+anything.
+
+The real fix is coverage. These are self-inflicted at 3–5× depth, where a single
+discordant read stops any base reaching the consensus threshold. **Raising
+`cons_threshold` makes this worse, not better** — the algorithm accumulates
+bases most-frequent-first until their *combined* coverage reaches the threshold,
+so a higher threshold pulls in more bases and emits more ambiguity. 3A/2G calls
+`A` at 0.5 and `R` at 0.75. More reads per cell is the only thing that resolves
+them.
+
+Set `keep_ambiguous: true` if you want them kept — reasonable if you are
+deliberately after genuine within-cell mixed populations, which for a viral
+quasispecies can be real signal rather than noise.
 
 ## Setting an analysis window
 

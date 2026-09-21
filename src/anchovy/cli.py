@@ -98,7 +98,7 @@ def _cmd_consensus(args: argparse.Namespace) -> int:
     result = consensus.run(
         fasta=args.fasta, start=args.start, end=args.end,
         reference=reference, config=config, out_prefix=args.out_prefix,
-        trim=trim,
+        trim=trim, keep_ambiguous=args.keep_ambiguous,
     )
     written = result["written"]
     print(f"Kept {len(result['records'])} sequences.")
@@ -174,6 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
                              "start/end, so genotype positions are genome "
                              "coordinates. Required for region-aware annotation "
                              "(`anchovy annotate --gff`).")
+    p_cons.add_argument("--keep-ambiguous", dest="keep_ambiguous",
+                        action="store_true",
+                        help="Keep positions whose base is an IUPAC ambiguity "
+                             "code (R, Y, S...), N, or lowercase. By default "
+                             "these are skipped: they mark positions where the "
+                             "reads disagreed, not called mutations, and "
+                             "treating them as variants groups cells by shared "
+                             "uncertainty. Use this if you are after genuine "
+                             "within-cell mixed populations.")
     p_cons.add_argument("--reference",
                         help="Reference sequence, as FASTA or a raw sequence file "
                              "(default: compute the consensus of the input).")

@@ -83,6 +83,14 @@ ORF_END    = config.get("orf_end")
 # against an alignment built on another, which is why the length must match.
 REFERENCE = config.get("reference")
 
+# sam2consensus emits IUPAC ambiguity codes (R, Y, S...) where a position's
+# reads disagree. Those mark uncertainty, not mutations, and by default the
+# consensus stage does not turn them into genotype tokens -- otherwise two cells
+# that are merely both unresolved at a position get grouped as sharing a
+# variant. Set `keep_ambiguous: true` to retain them, e.g. when you are
+# deliberately looking for within-cell mixed populations.
+KEEP_AMBIGUOUS = bool(config.get("keep_ambiguous", False))
+
 if not WHOLE_REF and (ORF_START is None or ORF_END is None):
     raise WorkflowError(
         "config needs orf_start and orf_end, or whole_reference: true / a gff.")
@@ -260,10 +268,11 @@ rule consensus:
         depth_min=config.get("depth_min", 10),
         out_prefix=RESULTS + "/" + SAMPLE,
         reference=f"--reference {REFERENCE}" if REFERENCE else "",
+        ambiguous="--keep-ambiguous" if KEEP_AMBIGUOUS else "",
     shell:
         "anchovy consensus {input.fasta} {params.window} {params.flags} "
         "--depth-min {params.depth_min} --out-prefix {params.out_prefix} "
-        "{params.reference}"
+        "{params.reference} {params.ambiguous}"
 
 
 # --------------------------------------------------------------------------- #
