@@ -109,7 +109,13 @@ def _cmd_consensus(args: argparse.Namespace) -> int:
 
 def _cmd_annotate(args: argparse.Namespace) -> int:
     from anchovy import annotate
+    from anchovy.config import AnnotationConfig
 
+    defaults = AnnotationConfig()
+    config = AnnotationConfig(
+        max_mutations_per_cell=(args.max_mutations if args.max_mutations
+                                is not None else defaults.max_mutations_per_cell),
+    )
     result = annotate.run(
         filt_consensus_csv=args.csv,
         reference_file=args.reference,
@@ -117,6 +123,7 @@ def _cmd_annotate(args: argparse.Namespace) -> int:
         network=not args.no_network,
         gff=args.gff,
         self_edges=args.self_edges,
+        config=config,
     )
     for label, path in result["written"].items():
         print(f"Wrote {path}")
@@ -215,6 +222,9 @@ def build_parser() -> argparse.ArgumentParser:
                               "containing region, written to "
                               "<out_prefix>_regionAnnotations.csv. Requires the "
                               "consensus stage to have run --whole-reference.")
+    p_annot.add_argument("--max-mutations", type=int, dest="max_mutations",
+                         help="Drop cells carrying this many called mutations "
+                              "or more, as likely artifacts (default: 200).")
     p_annot.set_defaults(func=_cmd_annotate)
 
     return parser
