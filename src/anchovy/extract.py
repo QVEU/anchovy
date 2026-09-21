@@ -139,13 +139,27 @@ def run(sam: str, whitelist: str, signature: str | None = None,
         sam: path to the mapped SAM/BAM.
         whitelist: path to the 10X barcode whitelist.
         signature: 10X signature to search for. Defaults to config.signature.
+            Must have the standard layout (22 nt handle, N-run covering the
+            16 nt barcode plus the UMI, 10 nt handle) -- validated up front.
+            Changing chemistry is exactly this plus a matching whitelist: the
+            UMI width is derived from the signature's length, so the v2 (26 N)
+            and v3 (28 N) signatures need no other configuration.
         config: an ExtractConfig; defaults to ExtractConfig() (original values).
 
     Returns:
         DataFrame in schema.AnchovyColumns.ORDER order.
+
+    Raises:
+        ValueError: if the signature does not have the expected layout.
     """
     config = config or ExtractConfig()
     query = (signature or config.signature).upper()
+
+    # Fail here rather than three stages later. The slice points that pull the
+    # barcode and UMI out of a matched block assume a specific signature layout;
+    # a signature that does not have it produces a wrong-but-plausible UMI that
+    # nothing downstream can detect. See barcodes.validate_signature.
+    barcodes.validate_signature(query)
 
     print("Query Length: {}".format(len(query)))
     sam_df = read_sam(sam, config.effective_min_read_length())

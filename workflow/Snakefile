@@ -11,7 +11,16 @@
 
 import os
 
-configfile: "workflow/config.yaml"
+# NO `configfile:` directive on purpose. It used to name workflow/config.yaml,
+# which meant every run MERGED that file underneath whatever --configfile you
+# passed. Harmless while your config overrode every key, but the base config
+# points `whitelist` and `template` at the TEST FIXTURES -- so a config that
+# omitted either silently inherited a 4-barcode whitelist instead of failing,
+# and the run looked like bad data rather than a bad config.
+#
+# Pass --configfile explicitly, as the README and every example already do:
+#   snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 8
+# A missing key is then a loud KeyError naming it.
 
 SAMPLE    = config["sample"]
 DATA_DIR  = config["data_dir"]
@@ -56,6 +65,32 @@ WHOLE_REF  = bool(config.get("whole_reference", False)) or GFF is not None
 ORF_START  = config.get("orf_start")
 ORF_END    = config.get("orf_end")
 
+# --------------------------------------------------------------------------- #
+# What genotypes are called AGAINST (optional but consequential)
+# --------------------------------------------------------------------------- #
+# Unset, the consensus stage computes its reference as the per-column consensus
+# ACROSS the surviving cells. That answers "which cells differ from the crowd",
+# and it needs a crowd: with one surviving cell that reference IS the cell, so
+# every genotype comes out empty by construction.
+#
+# Set `reference` to a genome FASTA and each cell is called against that
+# instead. Then a single cell can carry variants, mutations FIXED across the
+# whole population are reported rather than silently absorbed into the
+# reference, and positions mean the same thing between runs.
+#
+# Usually you want the same FASTA that `template` points at -- the one the reads
+# were mapped to. A different genome would be compared position by position
+# against an alignment built on another, which is why the length must match.
+REFERENCE = config.get("reference")
+
+# sam2consensus emits IUPAC ambiguity codes (R, Y, S...) where a position's
+# reads disagree. Those mark uncertainty, not mutations, and by default the
+# consensus stage does not turn them into genotype tokens -- otherwise two cells
+# that are merely both unresolved at a position get grouped as sharing a
+# variant. Set `keep_ambiguous: true` to retain them, e.g. when you are
+# deliberately looking for within-cell mixed populations.
+KEEP_AMBIGUOUS = bool(config.get("keep_ambiguous", False))
+
 if not WHOLE_REF and (ORF_START is None or ORF_END is None):
     raise WorkflowError(
         "config needs orf_start and orf_end, or whole_reference: true / a gff.")
@@ -65,7 +100,14 @@ WINDOW_ARGS     = "" if ORF_START is None or ORF_END is None else f"{ORF_START} 
 CONSENSUS_FLAGS = "--whole-reference" if WHOLE_REF else ""
 ANNOTATE_FLAGS  = f"--gff {GFF}" if GFF else ""
 
+# Keep each genotype's self-edge in the epistatic network. Off by default --
+# Cytoscape draws them as a loop on every node and dropping them loses none.
+# Set `self_edges: true` to reproduce the original R output exactly.
+if config.get("self_edges", False):
+    ANNOTATE_FLAGS = (ANNOTATE_FLAGS + " --self-edges").strip()
+
 REGION_ANNOTATIONS = RESULTS + "/" + SAMPLE + "_regionAnnotations.csv"
+GENOTYPE_NODES     = RESULTS + "/" + SAMPLE + "_genotypeNodes.csv"
 
 
 # --------------------------------------------------------------------------- #
@@ -152,6 +194,23 @@ rule map_cell:
 # OUTPUT NAMING (empirical): "{reference}__{prefix}.fasta", prefix = SAM minus .sam.
 # LIMITATION (conscious): reference name hardcoded from config -> assumes a SINGLE
 # reference. Multi-segment references would emit multiple files per cell.
+#
+# THE `touch` IS LOAD-BEARING, and this failed on real data without it.
+# sam2consensus builds a dict of sequences to write, skipping any whose bases
+# are all gaps, and then writes one file per entry -- so a cell where NO
+# position reaches --min-depth leaves that dict empty, writes nothing at all,
+# and still exits 0. Snakemake declares the file required, so a single sparse
+# cell aborted the entire run with MissingOutputException.
+#
+# That is the normal case on real 10X data: most barcodes carry few reads. It
+# never showed up on the test fixture because every fixture cell has 6 reads at
+# every position, comfortably over the default min-depth of 5.
+#
+# Dropping a cell with too little coverage is correct -- that is what the depth
+# filter is for. The bug is only that "no consensus" is signalled by an absent
+# file. touch turns it into an empty one, which merge_consensus concatenates to
+# nothing and parse_consensus_fasta reads as zero records, so the cell simply
+# does not appear downstream.
 rule cell_consensus:
     input:
         sam=WORK + "/{cell}_BC.sam",
@@ -164,7 +223,8 @@ rule cell_consensus:
         outfolder=WORK,
     shell:
         "python {input.script} -c {params.cons_threshold} -m {params.min_depth} "
-        "--outfolder {params.outfolder} -i {input.sam}"
+        "--outfolder {params.outfolder} -i {input.sam} && "
+        "touch {output.fasta}"
 
 
 # --------------------------------------------------------------------------- #
@@ -196,6 +256,9 @@ rule merge_consensus:
 rule consensus:
     input:
         fasta=ALL_CONSENSUS,
+        # Declared as an input so Snakemake tracks it: change the reference and
+        # the genotypes are stale, which it cannot know from a params string.
+        **({"reference": REFERENCE} if REFERENCE else {}),
     output:
         csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
         reference=RESULTS + "/" + SAMPLE + "_consensus_reference.txt",
@@ -204,9 +267,12 @@ rule consensus:
         flags=CONSENSUS_FLAGS,
         depth_min=config.get("depth_min", 10),
         out_prefix=RESULTS + "/" + SAMPLE,
+        reference=f"--reference {REFERENCE}" if REFERENCE else "",
+        ambiguous="--keep-ambiguous" if KEEP_AMBIGUOUS else "",
     shell:
         "anchovy consensus {input.fasta} {params.window} {params.flags} "
-        "--depth-min {params.depth_min} --out-prefix {params.out_prefix}"
+        "--depth-min {params.depth_min} --out-prefix {params.out_prefix} "
+        "{params.reference} {params.ambiguous}"
 
 
 # --------------------------------------------------------------------------- #
@@ -224,6 +290,9 @@ rule annotate:
         annot=RESULTS + "/" + SAMPLE + "_annot_v3.csv",
         epistatic=RESULTS + "/" + SAMPLE + "_epistaticNetwork.csv",
         genotype=RESULTS + "/" + SAMPLE + "_genotypeNetwork.csv",
+        # Node attributes for the two edge tables above, so Cytoscape can label
+        # and size genotypes without a manual join.
+        nodes=GENOTYPE_NODES,
         # The long-format per-region table exists only in region-aware mode, so
         # it is declared as an output only when a GFF3 is configured.
         **({"regions": REGION_ANNOTATIONS} if GFF else {}),

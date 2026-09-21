@@ -87,3 +87,31 @@ class ConsensusColumns:
 # the *tunable* ones (cutoffs, thresholds) live in config.py instead.
 DESCRIPTION_COVERAGE_KEY = "coverage:"
 DESCRIPTION_LENGTH_KEY = "length:"
+
+
+# --------------------------------------------------------------------------- #
+# 10X signature layout
+# --------------------------------------------------------------------------- #
+# The signature itself is a per-run CHOICE and lives in config.py. Its SHAPE is
+# structural, and belongs here:
+#
+#     <---- 22 ----><------- barcode 16 -------><-- UMI n --><--- 10 --->
+#     CTACACGACG...  NNNNNNNNNNNNNNNN            NNNNNNNNNN   TTTCTTATAT
+#      constant 5'         barcode                  UMI       constant 3'
+#
+# barcodes.py encoded these as bare numbers (22, 48, 10, and 38 = 22 + 16), and
+# they are load-bearing: the UMI width is derived as len(signature) - 48, which
+# is what lets one signature string carry the whole chemistry. Swap the 26-N v2
+# signature for the 28-N v3 one and the UMI follows automatically, because the
+# prefix, barcode and suffix lengths are identical between the two.
+#
+# That only holds while a signature actually HAS this shape. Naming the parts
+# lets validate_signature() check it instead of assuming it.
+SIGNATURE_PREFIX_LEN = 22    # constant 5' handle
+SIGNATURE_BARCODE_LEN = 16   # cell barcode; 16 in both 10X v2 and v3
+SIGNATURE_SUFFIX_LEN = 10    # constant 3' handle
+
+# Offset of the UMI within a matched block, i.e. past the prefix and barcode.
+SIGNATURE_UMI_START = SIGNATURE_PREFIX_LEN + SIGNATURE_BARCODE_LEN          # 38
+# Everything that is not UMI: len(signature) minus this is the UMI width.
+SIGNATURE_NON_UMI_LEN = SIGNATURE_UMI_START + SIGNATURE_SUFFIX_LEN          # 48

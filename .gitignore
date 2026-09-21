@@ -15,6 +15,8 @@ results/
 *_anchovy.csv
 # merged consensus written next to inputs
 *_allConsensus.fasta
+# data downloaded by the worked examples (SRA runs, reference genomes)
+examples/*/data/
 
 # ...but never the committed fixtures and goldens under tests/data/, which match
 # the two patterns above by name and must stay trackable.

@@ -98,7 +98,7 @@ def _cmd_consensus(args: argparse.Namespace) -> int:
     result = consensus.run(
         fasta=args.fasta, start=args.start, end=args.end,
         reference=reference, config=config, out_prefix=args.out_prefix,
-        trim=trim,
+        trim=trim, keep_ambiguous=args.keep_ambiguous,
     )
     written = result["written"]
     print(f"Kept {len(result['records'])} sequences.")
@@ -116,6 +116,7 @@ def _cmd_annotate(args: argparse.Namespace) -> int:
         out_prefix=args.out_prefix,
         network=not args.no_network,
         gff=args.gff,
+        self_edges=args.self_edges,
     )
     for label, path in result["written"].items():
         print(f"Wrote {path}")
@@ -173,6 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
                              "start/end, so genotype positions are genome "
                              "coordinates. Required for region-aware annotation "
                              "(`anchovy annotate --gff`).")
+    p_cons.add_argument("--keep-ambiguous", dest="keep_ambiguous",
+                        action="store_true",
+                        help="Keep positions whose base is an IUPAC ambiguity "
+                             "code (R, Y, S...), N, or lowercase. By default "
+                             "these are skipped: they mark positions where the "
+                             "reads disagreed, not called mutations, and "
+                             "treating them as variants groups cells by shared "
+                             "uncertainty. Use this if you are after genuine "
+                             "within-cell mixed populations.")
     p_cons.add_argument("--reference",
                         help="Reference sequence, as FASTA or a raw sequence file "
                              "(default: compute the consensus of the input).")
@@ -192,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_annot.add_argument("out_prefix", help="Output path prefix.")
     p_annot.add_argument("--no-network", action="store_true",
                          help="Skip generating the network CSVs.")
+    p_annot.add_argument("--self-edges", dest="self_edges", action="store_true",
+                         help="Keep each genotype's edge to itself in the "
+                              "epistatic network. Off by default: Cytoscape "
+                              "draws them as a loop on every node and no node "
+                              "is lost by removing them. Use this to reproduce "
+                              "the original R output exactly.")
     p_annot.add_argument("--gff",
                          help="GFF3 of genome regions. Enables region-aware "
                               "annotation: mutation positions are treated as "

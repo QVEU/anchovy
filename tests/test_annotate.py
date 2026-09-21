@@ -103,9 +103,49 @@ def test_annotate_matches_r_golden(tmp_path):
         f"annotation calls differ:\n got: {calls(got)}\n exp: {calls(exp)}"
     )
 
+    # genotypeName too. This column was NOT compared for a long time, and a
+    # divergence hid there: the port joined the per-mutation names in the order
+    # the tokens appeared in the genotype string, while the R joined them in
+    # genome-position order, so "13A_8T" came out "R5S_D3V" against the R's
+    # "D3V_R5S". Only multi-mutation genotypes were affected, which is why
+    # nothing noticed. It is a user-visible label -- it names nodes in the
+    # network files -- so it is worth holding to the golden.
+    def genotype_names(df):
+        d = df[["genotype", "genotypeName"]].drop_duplicates()
+        return {row["genotype"]: row["genotypeName"]
+                for _, row in d.iterrows()
+                # reference cells have no substitutions; the two sides render
+                # that as "" and NaN respectively, which is not a disagreement.
+                if isinstance(row["genotypeName"], str) and row["genotypeName"]}
+
+    assert genotype_names(got) == genotype_names(exp), (
+        f"genotype names differ:\n got: {genotype_names(got)}"
+        f"\n exp: {genotype_names(exp)}"
+    )
+
+    # And the per-genotype frequencies, which are what a network node gets
+    # sized by.
+    def freqs(df):
+        d = df[["genotype", "genoFreq", "haploFreq"]].drop_duplicates()
+        return {row["genotype"]: (round(row["genoFreq"], 9),
+                                  round(row["haploFreq"], 9))
+                for _, row in d.iterrows()}
+
+    assert freqs(got) == freqs(exp), (
+        f"genotype frequencies differ:\n got: {freqs(got)}\n exp: {freqs(exp)}"
+    )
+
 
 def test_network_matches_r_golden(tmp_path):
-    """Python network CSVs reproduce the R epistatic/genotype network output."""
+    """Python network CSVs reproduce the R epistatic/genotype network output.
+
+    Asks for self_edges=True explicitly. The default now drops a genotype's edge
+    to itself from the epistatic network, since Cytoscape draws each as a loop on
+    the node and no node is lost by removing them. That is a deliberate
+    divergence from the R, so the R-fidelity proof has to opt back in rather than
+    quietly weaken -- see test_self_edges_dropped_by_default below for the new
+    default's own test.
+    """
     import pathlib
     data = pathlib.Path(__file__).parent / "data" / "annot"
     fixture_csv = data / "filtConsensus.csv"
@@ -116,7 +156,7 @@ def test_network_matches_r_golden(tmp_path):
             pytest.skip(f"missing {p.name}; run make_annot_fixtures.py + R analysis first.")
 
     out_prefix = str(tmp_path / "py")
-    run(str(fixture_csv), str(ref), out_prefix, network=True)
+    run(str(fixture_csv), str(ref), out_prefix, network=True, self_edges=True)
 
     # Compare numerically (not as text) so int/float rendering can't cause a
     # spurious mismatch; sort rows so ordering differences don't either -- the
@@ -130,3 +170,70 @@ def test_network_matches_r_golden(tmp_path):
     exp_s = exp.sort_values(sort_cols).reset_index(drop=True)
 
     pd.testing.assert_frame_equal(got_s, exp_s, check_dtype=False)
+
+
+# --------------------------------------------------------------------------- #
+# Self-edges: dropped from the epistatic network, kept in the genotype network
+# --------------------------------------------------------------------------- #
+def _fixture(request):
+    data = request.path.parent / "data" / "annot"
+    for name in ("filtConsensus.csv", "reference.txt"):
+        if not (data / name).exists():
+            pytest.skip(f"missing {name}; run tests/make_annot_fixtures.py first.")
+    return data
+
+
+def test_self_edges_dropped_by_default(request, tmp_path):
+    """The default epistatic network has no genotype linked to itself."""
+    data = _fixture(request)
+    out = str(tmp_path / "py")
+    run(str(data / "filtConsensus.csv"), str(data / "reference.txt"),
+        out, network=True)
+
+    edges = pd.read_csv(f"{out}_epistaticNetwork.csv")
+    loops = edges[edges["source"] == edges["target"]]
+    assert loops.empty, f"self-edges survived: {loops.to_dict('records')}"
+
+
+def test_dropping_self_edges_loses_no_genotype(request, tmp_path):
+    """The reason dropping them is safe HERE: every genotype is still present.
+
+    Each one is reachable by a step edge or by its edge to the reference, so the
+    epistatic network keeps the same node set either way. If that ever stops
+    being true, this fails rather than silently shrinking someone's figure.
+    """
+    data = _fixture(request)
+    kept, dropped = (str(tmp_path / "kept"), str(tmp_path / "dropped"))
+    run(str(data / "filtConsensus.csv"), str(data / "reference.txt"),
+        kept, network=True, self_edges=True)
+    run(str(data / "filtConsensus.csv"), str(data / "reference.txt"),
+        dropped, network=True)
+
+    def nodes(prefix):
+        e = pd.read_csv(f"{prefix}_epistaticNetwork.csv")
+        return set(e["source"]) | set(e["target"])
+
+    assert nodes(kept) == nodes(dropped)
+
+
+def test_genotype_network_keeps_its_self_edges(request, tmp_path):
+    """all_entries must NOT drop them -- there they are load-bearing.
+
+    A genotype sharing no mutation with any other appears in the genotype
+    network only as its own self-edge. On this fixture that is 19T, 6G and the
+    reference: dropping self-edges there would delete 3 of 5 genotypes.
+    """
+    data = _fixture(request)
+    out = str(tmp_path / "py")
+    run(str(data / "filtConsensus.csv"), str(data / "reference.txt"),
+        out, network=True)                       # default: drop where safe
+
+    edges = pd.read_csv(f"{out}_genotypeNetwork.csv")
+    loops = edges[edges["source"] == edges["target"]]
+    assert not loops.empty, "genotype network lost its self-edges"
+
+    present = set(edges["source"]) | set(edges["target"])
+    for singleton in ("19T", "6G", "reference"):
+        assert singleton in present, (
+            f"{singleton} has no non-self edge and vanished from the genotype "
+            f"network")

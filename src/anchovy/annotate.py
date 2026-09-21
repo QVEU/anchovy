@@ -15,6 +15,7 @@ STRUCTURE (pure core + thin orchestration, like the other stages):
   annotate_mutation()-- one mutation token -> ref/mut codon, AA, subName, subClass
   haplo_analysis()   -- unroll genotypes -> per-mutation counts/frequencies table
   hap_network_gen()  -- genotype-overlap network edges (pure -> DataFrames)
+  genotype_nodes()   -- per-genotype NODE attributes for those edges (pure)
   annotate_variants_by_region() -- GFF3 region-aware annotation (long format)
   run()              -- orchestrate + write the CSVs
 
@@ -27,7 +28,6 @@ exactly as before, which is why the R-frozen goldens still pass.
 from __future__ import annotations
 
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -143,7 +143,13 @@ def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
             rows.append({"mutants": tok, "pos": pos, "base": base,
                          "CBC_ID": r["CBC_ID"], "genotype": geno})
 
-    table = pd.DataFrame(rows)
+    # Name the columns explicitly. Built from an empty `rows` list, a bare
+    # DataFrame() has no columns at all, and the groupby below then fails with
+    # KeyError: 'mutants' -- which is what a run where every cell was too sparse
+    # to yield a consensus used to produce, several stages after the real
+    # problem. An empty table with the right shape flows through instead.
+    table = pd.DataFrame(rows, columns=["mutants", "pos", "base",
+                                        "CBC_ID", "genotype"])
 
     # BCMutCount per cell; filter out hypermutated cells (< 200), matching R.
     if not table.empty:
@@ -168,17 +174,47 @@ def haplo_analysis(cons: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 # Network generation
 # --------------------------------------------------------------------------- #
-def hap_network_gen(haplocounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def hap_network_gen(haplocounts: pd.DataFrame,
+                    self_edges: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Genotype-overlap network. Port of R hapNetworkGen().
 
     Returns (single_steps, all_entries) as DataFrames matching the columns of
     the R _epistaticNetwork.csv and _genotypeNetwork.csv respectively.
 
-    QUIRKS reproduced faithfully from the R (not bugs to fix here):
-      - the `count` column is rowSums(countMatrix)/rowSums(binaryMatrix) with the
-        count-matrix aggregation defaulting to occurrence counts (the R dcast
-        'fun.aggregate defaulting to length()' warning), so it is a ratio, not a
-        simple cell count.
+    Args:
+        haplocounts: the long table from haplo_analysis().
+        self_edges: whether to keep edges from a genotype to ITSELF in the
+            single-step (epistatic) network. Default False, since Cytoscape
+            draws each one as a loop on the node and they carry no information
+            there. Pass True for output byte-comparable with the R.
+
+    SELF-EDGES, and why only the epistatic network drops them
+    ---------------------------------------------------------
+    The pairwise traversal compares every genotype with itself, so each one
+    gets an i == j row. In the epistatic network those are pure decoration:
+    every genotype is also reachable by a step edge or by the reference edge
+    below, so dropping them loses no node. Measured on the annotation fixture:
+    6 of 10 rows are self-edges and removing them loses nothing.
+
+    In all_entries they are LOAD-BEARING and are therefore always kept. A
+    genotype sharing no mutation with any other appears there ONLY as its own
+    self-edge, so dropping them deletes it from the graph outright -- on the
+    same fixture that is 3 of 5 genotypes, including the reference. If you want
+    a self-edge-free genotype network, take the node list from
+    {prefix}_genotypeNodes.csv, which is complete either way, and filter the
+    edges yourself knowing what it costs.
+
+    THE `count` COLUMN is the number of cells carrying that genotype, despite
+    being computed the R's roundabout way as
+    rowSums(countMatrix)/rowSums(binaryMatrix) -- the count matrix aggregation
+    defaults to occurrence counts (the R dcast 'fun.aggregate defaulting to
+    length()' warning). It reduces exactly: every cell with genotype g
+    contributes one row per mutation in g, so for n cells and k distinct
+    mutations it is (n*k)/k = n. An earlier version of this docstring called it
+    "a ratio, not a simple cell count", which was wrong. It is pinned against
+    the node table's nCells in tests/test_network_nodes.py.
+
+    QUIRK still reproduced faithfully from the R (not a bug to fix here):
       - reference genotypes get a duplicated self/edge row with mutNumTarget=0.
     """
     # binary presence matrix: genotype x mutants, 1 if freq>0 for that pair.
@@ -248,6 +284,15 @@ def hap_network_gen(haplocounts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
     ref_edges["mutNumTarget"] = 0
 
     single_steps = pd.concat([ss, self_steps, ref_edges], ignore_index=True)
+    if not self_edges:
+        # Filter the RESULT, not its inputs. Self-loops arrive by two routes:
+        # self_steps, and the reference's own ref_edges row (the R quirk noted
+        # above re-points a 1-mutation self-step at "reference", which for the
+        # reference genotype is itself). Omitting self_steps from the concat
+        # would leave that second one behind.
+        single_steps = single_steps[
+            single_steps["genotype"] != single_steps["target"]
+        ].reset_index(drop=True)
 
     # Rename the source-node column from "genotype" to "source" so Cytoscape
     # auto-detects the source/target roles on import (no manual column mapping).
@@ -321,6 +366,16 @@ def annotate_variants_by_region(variants: list[str], reference: str,
     return table
 
 
+# Columns of the per-mutation annotation table. Named once so both the legacy
+# and the region-aware path produce the same shape -- including when there are
+# no mutations at all, where a bare DataFrame([]) would have no columns and the
+# merge on ["pos", "base"] would fail with KeyError.
+ANNOTATION_COLUMNS = [
+    "pos", "base", "ref.codon", "ref.resPos", "ref.AA",
+    "mut.codon", "mut.resPos", "mut.AA", "subName", "subClass",
+]
+
+
 def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
     """Back-fill the legacy _annot_v3 columns from each mutation's PRIMARY region.
 
@@ -336,9 +391,7 @@ def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
     test_annotate_region_matches_legacy_on_single_cds).
     """
     if region_table.empty:
-        return pd.DataFrame(columns=[
-            "pos", "base", "ref.codon", "ref.resPos", "ref.AA",
-            "mut.codon", "mut.resPos", "mut.AA", "subName", "subClass"])
+        return pd.DataFrame(columns=ANNOTATION_COLUMNS)
 
     primary = region_table.drop_duplicates(subset=["genome_pos", "mut_base"],
                                            keep="first")
@@ -372,15 +425,73 @@ def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
+# Genotype node table (for network visualization)
+# --------------------------------------------------------------------------- #
+NODE_COLUMNS = ["genotype", "genotypeName", "nMutations", "nCells",
+                "genoFreq", "haploFreq"]
+
+
+def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
+    """One row per genotype: the NODE attributes for the network CSVs (pure).
+
+    WHY THIS EXISTS. Both network files are entirely EDGE-level -- source,
+    target, overlap, mutNumSource, mutNumTarget. Cytoscape therefore draws nodes
+    with no attributes at all, so a genotype cannot be sized by how common it is
+    or labelled by what it does to the protein without hand-joining CSVs inside
+    Cytoscape. Every one of those values already exists in the annotated table;
+    it just never reached a file keyed by genotype.
+
+    `genotype` matches the source/target values in the network CSVs exactly,
+    including the "reference" node, so Cytoscape can key a node-table import on
+    it directly (File -> Import -> Table from File).
+
+    genotypeName carries the amino-acid-level name ("R5S", "D3V_R5S"), which is
+    what makes a rendered network readable -- and which is frame-correct and
+    region-aware when annotate ran with a GFF, so a node can read "5UTR:A121C"
+    rather than a bare nucleotide token.
+    """
+    if annotated.empty:
+        return pd.DataFrame(columns=NODE_COLUMNS)
+
+    rows = []
+    for genotype, group in annotated.groupby("genotype", dropna=False):
+        name = group["genotypeName"].dropna()
+        # Reference cells have no substitutions, so no amino-acid name; label the
+        # node by what it is rather than leaving the field blank.
+        label = name.iloc[0] if len(name) and name.iloc[0] else None
+        if genotype == "reference" or not label:
+            label = "reference" if genotype == "reference" else str(genotype)
+
+        # Mutation count from the genotype string itself, so it agrees with the
+        # network's mutNumSource/mutNumTarget rather than being recomputed from
+        # a different source.
+        n_mutations = 0 if genotype == "reference" else len(str(genotype).split("_"))
+
+        rows.append({
+            "genotype": genotype,
+            "genotypeName": label,
+            "nMutations": n_mutations,
+            "nCells": group["CBC_ID"].nunique(),
+            "genoFreq": group["genoFreq"].iloc[0] if "genoFreq" in group else None,
+            "haploFreq": group["haploFreq"].iloc[0] if "haploFreq" in group else None,
+        })
+
+    return (pd.DataFrame(rows, columns=NODE_COLUMNS)
+            .sort_values(["nMutations", "genotype"]).reset_index(drop=True))
+
+
+# --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
 def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
-        network: bool = True, gff: str | None = None) -> dict:
+        network: bool = True, gff: str | None = None,
+        self_edges: bool = False) -> dict:
     """Read genotype table + reference, annotate, optionally build network, write CSVs.
 
     Outputs (matching the R naming):
       {out_prefix}_annot_v3.csv
       {out_prefix}_epistaticNetwork.csv, {out_prefix}_genotypeNetwork.csv (if network)
+      {out_prefix}_genotypeNodes.csv                                      (if network)
       {out_prefix}_regionAnnotations.csv                                  (if gff)
 
     TWO MODES, and the default is the old one:
@@ -404,6 +515,25 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     # not be (see io.read_reference_sequence).
     reference = read_reference_sequence(reference_file).upper()
     cons = pd.read_csv(filt_consensus_csv)
+
+    # No cells at all is a failed run, not an empty one, and writing a set of
+    # empty CSVs would hide that. It happens when every barcode was too sparse
+    # to reach the consensus stage's depth thresholds -- common on a small slice
+    # of a real run, where the reads spread thinly over thousands of barcodes.
+    if cons.empty:
+        raise ValueError(
+            f"{filt_consensus_csv} contains no cells, so there is nothing to "
+            f"annotate.\n"
+            f"  Every barcode was filtered out before this point. The usual "
+            f"causes, in order:\n"
+            f"    - too few reads overall (are you running on a subsample?)\n"
+            f"    - cons_min_depth too high: a cell needs that much coverage at "
+            f"a position\n"
+            f"      for sam2consensus to call it at all\n"
+            f"    - depth_min too high: it drops whole cells below that "
+            f"coverage\n"
+            f"  Lower those thresholds, or use more reads.")
+
     cons["genotype"] = cons["genotype"].fillna("")
 
     haplocounts = haplo_analysis(cons)
@@ -427,7 +557,11 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
             "mut.AA": a["mut"]["AA"] if a["mut"] else None,
             "subName": a["subName"], "subClass": a["subClass"],
         } for a in annos]
-        anno = pd.DataFrame(anno_rows)
+        # columns= matters when anno_rows is empty, which happens whenever no
+        # variant was called: a single surviving cell (nothing to differ from),
+        # or several cells identical to the reference. Both are real results,
+        # not errors, so they must flow through rather than raise.
+        anno = pd.DataFrame(anno_rows, columns=ANNOTATION_COLUMNS)
     else:
         region_table = annotate_variants_by_region(variants, reference, gff)
         anno = _legacy_rows_from_regions(region_table)
@@ -435,8 +569,23 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     merged = haplocounts.merge(anno, how="left", on=["pos", "base"])
 
     # genotypeName = "_".join(unique subName) per genotype; geno/haplo freqs
-    merged["genotypeName"] = merged.groupby("genotype")["subName"].transform(
-        lambda s: "_".join(pd.unique(s.dropna())))
+    # genotypeName joins the per-mutation names in GENOME-POSITION order.
+    #
+    # The port previously joined them in the order the tokens happened to appear
+    # in the genotype string, so "13A_8T" became "R5S_D3V" where the R produced
+    # "D3V_R5S". Same genotype, different label. Nothing caught it because the
+    # golden test compares only the per-mutation (subName, subClass) calls, not
+    # this derived column. Sorting by position matches the R and reads along the
+    # genome, which is what you want on a network node.
+    #
+    # Missing names collapse to "" rather than NaN, exactly as the old transform
+    # did: reference cells have no substitutions, and genoFreq groups on this
+    # column, so NaN here would silently drop those rows out of the frequency.
+    _names = (merged.dropna(subset=["subName"])
+                    .sort_values("pos", kind="stable")
+                    .groupby("genotype")["subName"]
+                    .apply(lambda s: "_".join(pd.unique(s))))
+    merged["genotypeName"] = merged["genotype"].map(_names).fillna("")
     merged["genoFreq"] = merged.groupby("genotypeName")["CBC_ID"].transform("nunique") / merged["total"]
     merged["haploFreq"] = merged.groupby("genotype")["CBC_ID"].transform("nunique") / merged["total"]
 
@@ -447,11 +596,20 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
         region_table.to_csv(f"{out_prefix}_regionAnnotations.csv", index=False)
         written["regions"] = f"{out_prefix}_regionAnnotations.csv"
 
+    nodes = None
     if network:
-        single_steps, all_entries = hap_network_gen(haplocounts)
+        single_steps, all_entries = hap_network_gen(haplocounts,
+                                                    self_edges=self_edges)
         single_steps.to_csv(f"{out_prefix}_epistaticNetwork.csv", index=False)
         all_entries.to_csv(f"{out_prefix}_genotypeNetwork.csv", index=False)
         written["epistatic"] = f"{out_prefix}_epistaticNetwork.csv"
         written["genotype"] = f"{out_prefix}_genotypeNetwork.csv"
 
-    return {"annot": merged, "regions": region_table, "written": written}
+        # Node attributes for the two edge tables above. Written with them
+        # because it is only useful alongside them.
+        nodes = genotype_nodes(merged)
+        nodes.to_csv(f"{out_prefix}_genotypeNodes.csv", index=False)
+        written["nodes"] = f"{out_prefix}_genotypeNodes.csv"
+
+    return {"annot": merged, "regions": region_table, "nodes": nodes,
+            "written": written}

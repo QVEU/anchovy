@@ -51,6 +51,7 @@ trimmed region), then trim to [start:end].
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -178,9 +179,18 @@ def _column_consensus(sequences: list[str]) -> str:
     return "".join(out)
 
 
+# A variant call requires a definite base on both sides. Everything else that
+# sam2consensus can emit at a position -- an IUPAC ambiguity code (R, Y, S...),
+# its lowercase form (a gap or N was among the observed bases), or N itself --
+# records UNCERTAINTY, not a difference.
+CALLED_BASES = frozenset("ACGT")
+
+
 def genotype_summary(sequences: list[str], reference: str | None = None,
                      window: tuple[int, int] | None = None,
-                     skip_gaps: bool = False) -> tuple[list[str], str]:
+                     skip_gaps: bool = False,
+                     skip_ambiguous: bool = False,
+                     stats: dict | None = None) -> tuple[list[str], str]:
     """Call per-sequence genotypes against a reference (PURE, the core).
 
     This is the unified replacement for the original's if/else. When `reference`
@@ -200,6 +210,10 @@ def genotype_summary(sequences: list[str], reference: str | None = None,
             the sequences as given, so a window never renumbers anything.
         skip_gaps: when True, never emit a token at a column where either the
             sequence or the reference holds a '-'. See the note below.
+        skip_ambiguous: when True, never emit a token where either side is not
+            a definite A/C/G/T. See the second note below.
+        stats: optional dict, populated with counts of what was skipped, so a
+            caller can report it rather than dropping data in silence.
 
     Returns:
         (genotypes, reference_used) where genotypes[i] is the "_"-joined mutation
@@ -209,6 +223,31 @@ def genotype_summary(sequences: list[str], reference: str | None = None,
     A variant site is any column where at least one sequence differs from the
     reference, so a mutation FIXED across every cell is still reported. Positions
     are 1-based over the input columns.
+
+    WHY skip_ambiguous EXISTS
+    -------------------------
+    sam2consensus does not only emit A/C/G/T. Where a position's reads disagree
+    it emits an IUPAC ambiguity code -- R for A-or-G, Y for C-or-T, and so on --
+    and a lowercase form of it when a gap or an N was among the observed bases.
+    Those record that the cell's reads DISAGREED, not that the cell carries a
+    mutation.
+
+    Treated as variants they are actively misleading, because the genotype
+    machinery works on token identity: two cells both reading R at position 3185
+    are grouped as sharing a mutation, when what they share is uncertainty. On a
+    real run that mattered -- 6 of 11 distinct tokens were ambiguity codes, so
+    over half the genotype network was built from positions nobody had called.
+
+    They are also self-inflicted at low coverage: at 3-5x a single discordant
+    read can stop any base reaching the consensus threshold. More reads, not a
+    different threshold, is what resolves them -- raising the threshold emits
+    MORE ambiguity, since the algorithm accumulates bases until their combined
+    coverage reaches it.
+
+    Dropping them is the conservative reading and the default in
+    whole-reference mode. It does discard any genuine within-cell mixed
+    population, which for a viral quasispecies could be real signal, so the
+    count is reported rather than silently absorbed, and it can be turned off.
 
     WHY skip_gaps EXISTS (whole-reference mode only, hence default False)
     --------------------------------------------------------------------
@@ -253,6 +292,7 @@ def genotype_summary(sequences: list[str], reference: str | None = None,
     variant_sites = [i for i in range(lo, hi)
                      if any(seq[i] != ref[i] for seq in sequences)]
 
+    n_gap = n_ambiguous = 0
     genotypes = []
     for seq in sequences:
         tokens = []
@@ -260,9 +300,19 @@ def genotype_summary(sequences: list[str], reference: str | None = None,
             if seq[i] == ref[i]:
                 continue
             if skip_gaps and (seq[i] == "-" or ref[i] == "-"):
+                n_gap += 1
+                continue
+            if skip_ambiguous and not (seq[i] in CALLED_BASES
+                                       and ref[i] in CALLED_BASES):
+                n_ambiguous += 1
                 continue
             tokens.append(f"{i + 1}{seq[i]}")
         genotypes.append("_".join(tokens))
+
+    if stats is not None:
+        stats["gap_calls_skipped"] = n_gap
+        stats["ambiguous_calls_skipped"] = n_ambiguous
+
     return genotypes, ref
 
 
@@ -270,7 +320,8 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
         reference: str | None = None,
         config: ConsensusConfig | None = None,
         out_prefix: str | None = None,
-        trim: bool = True) -> dict:
+        trim: bool = True,
+        keep_ambiguous: bool = False) -> dict:
     """Full consensus stage: read, filter (trim), genotype, and write outputs.
 
     Args:
@@ -281,6 +332,12 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
         config: ConsensusConfig; defaults to ConsensusConfig().
         out_prefix: base path for outputs; defaults to the fasta path with
             '_allConsensus.fasta' stripped (matching the original's naming).
+        keep_ambiguous: whole-reference mode only. By default a position is
+            called only where both the cell and the reference hold a definite
+            A/C/G/T, so IUPAC ambiguity codes do not become mutations. Set True
+            to keep them -- relevant if you are after genuine within-cell mixed
+            populations rather than clean per-cell genotypes. How many calls
+            this dropped is reported in the return value and printed.
         trim: True (default) keeps the legacy behavior exactly -- cut every
             sequence to [start:end] and number genotype tokens from 1 within that
             region. False selects WHOLE-REFERENCE MODE: sequences stay full
@@ -301,12 +358,41 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
     records = parse_consensus_fasta(fasta)
     kept = select_sequences(records, start, end, config, trim=trim)
 
+    stats: dict = {}
     if trim:
         genotypes, ref_used = genotype_summary([r.seq for r in kept], reference)
     else:
         window = (start, end) if start is not None and end is not None else None
         genotypes, ref_used = genotype_summary(
-            [r.seq for r in kept], reference, window=window, skip_gaps=True)
+            [r.seq for r in kept], reference, window=window, skip_gaps=True,
+            skip_ambiguous=not keep_ambiguous, stats=stats)
+
+    # Say what was dropped. Filtering ambiguity codes is the right default, but
+    # a variant quietly missing from a table is the kind of thing that costs
+    # someone an afternoon, so the number is never left implicit.
+    if stats.get("ambiguous_calls_skipped"):
+        print(f"Skipped {stats['ambiguous_calls_skipped']} call(s) at positions "
+              "with an ambiguous base (IUPAC code, N, or lowercase). These are "
+              "positions where the reads disagreed, not called mutations; pass "
+              "keep_ambiguous to retain them.")
+
+    # A COMPUTED reference needs at least two cells to mean anything. With one,
+    # the per-column consensus IS that cell, so no position can differ from it
+    # and the genotype is empty by construction -- not because the cell matches
+    # the virus, but because there was nothing to compare it against. Say so,
+    # because an empty genotype column otherwise reads as a biological result.
+    if reference is None and len(kept) < 2:
+        warnings.warn(
+            f"only {len(kept)} cell(s) passed filtering, and no reference was "
+            f"supplied.\n"
+            f"  The reference is computed as the consensus ACROSS cells, so with "
+            f"fewer than two\n"
+            f"  there is nothing to compare against and every genotype comes out "
+            f"empty.\n"
+            f"  Either lower depth_min to keep more cells, or pass an explicit "
+            f"--reference\n"
+            f"  (the genome FASTA) so each cell is called against that instead.",
+            stacklevel=2)
 
     rows = [{
         ConsensusColumns.CBC_ID: r.cbc_id,
@@ -331,4 +417,5 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
         writer.writerows(rows)
     written["csv"] = csv_path
 
-    return {"reference": ref_used, "records": rows, "written": written}
+    return {"reference": ref_used, "records": rows, "written": written,
+            "stats": stats}

@@ -1,0 +1,103 @@
+# examples/eva71_sra/config.yaml
+#
+# Settings for the EV-A71 / SRR28178313 example. Run examples/eva71_sra/fetch.sh
+# first -- it downloads the data and prints the two values you have to fill in
+# below. Then:
+#
+#   snakemake -s workflow/Snakefile --configfile examples/eva71_sra/config.yaml --cores 8
+
+# --- Sample and input location --------------------------------------------- #
+# The workflow expects the mapped reads at {data_dir}/{sample}.sam, which is
+# exactly what fetch.sh produces.
+sample: "SRR28178313"
+data_dir: "examples/eva71_sra/data"
+
+# --- 10X barcode whitelist -------------------------------------------------- #
+# Downloaded by fetch.sh from 10X's open-source supernova repository, so there
+# is nothing to install. Point this elsewhere to use a local copy -- the
+# identical file ships with Cell Ranger as
+# cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt.
+whitelist: "examples/eva71_sra/data/737K-august-2016.txt"
+
+# The 10X signature searched for in each read. The N-run is the barcode+UMI
+# region: 26 Ns = 16 nt barcode + 10 nt UMI, which is the v2 layout, matching
+# the whitelist above. This is the default anchovy ships with and the one the
+# original AnchovyJob.sh used. (v3 would need 28 Ns and the v3 whitelist.)
+signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
+
+# --- Reference -------------------------------------------------------------- #
+# Downloaded by fetch.sh. reference_name must match the name after ">" in the
+# FASTA, because sam2consensus prefixes its per-cell output files with it --
+# fetch.sh prints the right value when it finishes.
+template: "examples/eva71_sra/data/AF304458.fasta"
+
+# Call genotypes against the genome itself, rather than against the consensus of
+# whatever cells survived filtering.
+#
+# This matters more than it looks. Unset, the reference is computed ACROSS
+# cells, which answers "who differs from the crowd" and needs a crowd -- with
+# one surviving cell that reference IS the cell, so every genotype comes out
+# empty no matter what the cell carries. Set, each cell is compared to EV-A71
+# itself, so a single cell can carry variants and mutations fixed across the
+# whole population are reported instead of being absorbed into the reference.
+#
+# Same file as `template`: the genome the reads were mapped to. It has to be,
+# since positions are compared by index.
+reference: "examples/eva71_sra/data/AF304458.fasta"
+# fetch.sh prints the exact value when it finishes -- copy it rather than
+# assuming the version suffix, which can be .1 or .2 depending on the record.
+reference_name: "AF304458.1"
+
+# --- Region-aware annotation ------------------------------------------------ #
+# Derived by fetch.sh from the reference's own GenBank annotation, so the
+# coordinates are not hand-copied. For a picornavirus this gives you the
+# polyprotein CDS plus a mature_protein_region per cleavage product (VP1-VP4,
+# 2A-2C, 3A-3D), which is the overlapping-region case: a mutation in VP1 is
+# reported twice, numbered within VP1 and within the polyprotein.
+#
+# Setting this also switches the consensus stage to whole-reference mode, so
+# positions stay genome coordinates.
+gff: "examples/eva71_sra/data/AF304458.gff3"
+
+# --- Analysis window (optional) --------------------------------------------- #
+# In whole-reference mode orf_start/orf_end do not trim anything; they only say
+# which columns to call variants over, which is how you exclude ragged,
+# poorly-covered ends. Left unset here because the right window depends on where
+# THIS run actually has coverage -- look at the per-cell consensuses from a first
+# pass, then set it. 0-based, half-open.
+#
+# orf_start: 700
+# orf_end: 7300
+
+# --- Thresholds -------------------------------------------------------------- #
+# sam2consensus: minimum depth and the consensus-calling threshold per position.
+cons_threshold: 0.5
+# A cell needs this much coverage AT A POSITION for sam2consensus to call it.
+# Cells that never reach it produce no consensus at all and are dropped -- which
+# is intended, but is the other reason a cell count can come out low.
+cons_min_depth: 3
+
+# Minimum per-cell coverage to keep a cell in the consensus stage.
+#
+# Set to 3 rather than the package default of 10, because this example is meant
+# to produce something to look at. On a real run most barcodes carry few reads,
+# and at 10 a subsample can leave a single cell standing -- which runs fine and
+# tells you nothing. Raise it for a deeply sequenced run, where you can afford
+# to demand more evidence per cell.
+#
+# If you end up with far fewer cells than you expected, this and cons_min_depth
+# below are the two knobs that dropped them.
+depth_min: 3
+
+# Treat IUPAC ambiguity codes (R, Y, S...) as mutations. Off by default: those
+# mark positions where a cell's reads DISAGREED, not bases anyone called, and as
+# genotype tokens they group cells by shared uncertainty. At the low depths this
+# example runs at they are common -- the consensus stage prints how many calls it
+# dropped. Turn this on only if you are after genuine within-cell mixed
+# populations. Note that raising cons_threshold produces MORE of them, not fewer;
+# more reads per cell is the fix.
+# keep_ambiguous: true
+
+# Keep each genotype's self-edge in the epistatic network (the original R
+# behavior). Off by default -- Cytoscape draws them as a loop on every node.
+# self_edges: true

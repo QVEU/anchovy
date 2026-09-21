@@ -42,11 +42,13 @@ the required programs; the second installs anchovy itself into it.
 Navigate to your `anchovy/` directory, where `environment.yml` lives and run:
 
 ```bash
-# 1. create the environment (this may take a few minutes)
 conda env create -f environment.yml
 conda activate anchovy
+```
 
-# 2. install anchovy
+That first command may take a few minutes. Then install anchovy itself into it:
+
+```bash
 pip install -e .
 ```
 
@@ -55,6 +57,15 @@ Check that it worked:
 ```bash
 anchovy --version
 snakemake --version
+```
+
+**Already have an anchovy environment from an earlier version?** New releases
+sometimes add programs to `environment.yml`, and an environment created before
+that won't have them — you'd see a "command not found" for something the
+pipeline expects. Bring yours up to date with:
+
+```bash
+conda env update -f environment.yml --prune
 ```
 
 If you have pytest installed you can also run: 
@@ -228,6 +239,14 @@ A few things worth knowing:
 - If you want genome positions but don't have a GFF3, use `whole_reference: true`
   on its own.
 
+### A complete worked example
+
+`examples/eva71_sra/` runs the whole pipeline on real public data, starting from
+nothing but an SRA accession: it downloads an enterovirus A71 single-cell run and
+its reference genome, builds the region file from the reference's own GenBank
+annotation, and hands everything to the workflow. It's written to be copied and
+pointed at your own virus. See the README in that folder.
+
 ## Running one step at a time
 
 If you'd rather run steps individually instead of the full pipeline, each is its
@@ -257,6 +276,8 @@ other as a network:
 - `<sample>_genotypeNetwork.csv` — all the relationships between genotypes
 - `<sample>_epistaticNetwork.csv` — just the "single-step" links (genotypes that
   differ by exactly one mutation), plus links back to the reference
+- `<sample>_genotypeNodes.csv` — one row per genotype, describing the genotypes
+  themselves rather than the links between them
 
 You can explore these visually in **Cytoscape**, a free tool for viewing and
 analyzing networks that's widely used in biology. Download it from
@@ -271,12 +292,45 @@ To load an anchovy network:
    draw the network — no manual setup needed. The other columns (`overlap`,
    `mutNumSource`, `count`, and so on) come in as **edge attributes**, properties
    of each link you can use for styling: for example, make links thicker when
-   more mutations are shared, or color nodes by how many mutations a genotype
-   carries.
+   more mutations are shared.
+3. Then choose **File → Import → Table from File** and pick
+   `<sample>_genotypeNodes.csv`. Cytoscape matches its `genotype` column to the
+   genotypes already in your network and attaches the rest as **node
+   attributes**.
 
 Each point (node) in the resulting picture is a genotype; each line (edge) is a
 relationship between two genotypes. This is a quick way to see, for instance,
 which mutations tend to build on one another.
+
+### Making the picture readable
+
+That third file is what turns the network from a set of unlabeled dots into
+something you can interpret. Each row describes one genotype:
+
+| Column | What it is |
+|--------|------------|
+| `genotype` | The genotype's identifier — this is what Cytoscape matches on |
+| `genotypeName` | The amino acid change(s), like `R5S` or `D3V_R5S`. If you annotated with a GFF3, non-coding changes appear here too, like `5UTR:A121C` |
+| `nMutations` | How many mutations the genotype carries |
+| `nCells` | How many cells carry it |
+| `genoFreq`, `haploFreq` | What fraction of cells that is |
+
+Once it's imported, the useful moves in Cytoscape's **Style** panel are:
+
+- Set node **Label** to `genotypeName`, so each point is named by the amino acid
+  change rather than an internal identifier.
+- Map node **Size** to `nCells` or `genoFreq` (continuous mapping), so common
+  genotypes are visibly bigger.
+- Map node **Fill Color** to `nMutations` (continuous mapping), so how far a
+  genotype has drifted from the reference reads at a glance.
+
+**A note on the two network files.** In the epistatic network, links from a
+genotype to itself are left out — they'd draw as a small loop on every point and
+tell you nothing. The genotype network keeps them, because there they do carry
+information: a genotype that shares no mutation with any other appears *only* as
+its own self-link, so removing them would make it vanish from the picture
+entirely. If you want the original R behavior in both, add `self_edges: true` to
+your settings file.
 
 ## For developers
 
