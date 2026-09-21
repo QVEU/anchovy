@@ -24,6 +24,12 @@ from Bio.SeqFeature import SeqFeature, SimpleLocation
 from Bio.SeqRecord import SeqRecord
 
 from anchovy.regions import annotate_mutation, parse_gff3, validate_regions
+import random as _random
+from Bio import SeqIO as _SeqIO
+from Bio.Seq import Seq as _Seq
+from Bio.SeqFeature import SeqFeature as _Feature
+from Bio.SeqFeature import SimpleLocation as _Loc
+from Bio.SeqRecord import SeqRecord as _Record
 
 SCRIPT = Path(__file__).resolve().parent.parent / "examples" / "eva71_sra" / "genbank_to_gff3.py"
 
@@ -220,3 +226,121 @@ def test_multi_record_file_is_refused(converter, tmp_path, capsys):
 
     assert converter.main(["genbank_to_gff3", str(gb), str(tmp_path / "o.gff3")]) == 1
     assert "single reference" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# --transfer-from: mature peptides carried across by alignment
+# --------------------------------------------------------------------------- #
+# AF304458 (EV-A71 Tainan/4643/98) annotates only the polyprotein CDS, so the
+# example's region model came out with a single region and every mutation was
+# numbered against the 2194-residue polyprotein. Transferring the cleavage sites
+# from an annotated relative fixes that WITHOUT hand-typed coordinates.
+_CODONS = ["GCT", "TGT", "GAT", "GAA", "TTT", "GGT", "CAT", "ATT", "AAA", "TTA",
+           "ATG", "AAT", "CCT", "CAA", "CGT", "TCT", "ACT", "GTT", "TGG", "TAT"]
+_PEPTIDES = [("VP4", 0, 70), ("VP2", 70, 150), ("VP3", 150, 220), ("VP1", 220, 300)]
+
+
+def _synthetic(tmp_path, name, *, seed, utr5=60, peptides=(), mutations=0):
+    """A small single-CDS genome, optionally with mat_peptides."""
+    rng = _random.Random(seed)
+    cds = "".join(rng.choice(_CODONS) for _ in range(300)) + "TAA"
+    seq = list(("A" * utr5) + cds + ("T" * 40))
+    for _ in range(mutations):
+        i = rng.randrange(utr5, utr5 + len(cds) - 3)
+        seq[i] = rng.choice("ACGT")
+    record = _Record(_Seq("".join(seq)), id=name, name=name, description="test")
+    record.annotations["molecule_type"] = "RNA"
+    record.features.append(_Feature(
+        _Loc(utr5, utr5 + len(cds), strand=1), type="CDS",
+        qualifiers={"product": ["polyprotein"], "codon_start": ["1"]}))
+    for pep_name, aa_start, aa_end in peptides:
+        record.features.append(_Feature(
+            _Loc(utr5 + aa_start * 3, utr5 + aa_end * 3, strand=1),
+            type="mat_peptide", qualifiers={"product": [pep_name]}))
+    path = tmp_path / f"{name}.gb"
+    _SeqIO.write([record], str(path), "genbank")
+    return path
+
+
+def test_transfer_places_peptides_at_the_targets_own_cds_offset(tmp_path):
+    """The donor's CDS offset must not leak into the target's coordinates."""
+    from examples.eva71_sra.genbank_to_gff3 import transfer_mat_peptides
+
+    donor = _SeqIO.read(str(_synthetic(tmp_path, "donor", seed=1,
+                                       peptides=_PEPTIDES)), "genbank")
+    # Same virus, 25 extra bases of 5'UTR, so every CDS coordinate shifts.
+    target = _SeqIO.read(str(_synthetic(tmp_path, "target", seed=1, utr5=85,
+                                        mutations=20)), "genbank")
+
+    features, report = transfer_mat_peptides(donor, target)
+
+    assert report["identity"] > 0.9
+    assert [f["name"] for f in features] == ["VP4", "VP2", "VP3", "VP1"]
+
+    # VP4 starts at the target's CDS (1-based 86), not the donor's (61).
+    assert features[0]["start"] == 86
+    # Each peptide spans its residue count exactly, and they abut.
+    for feature, (_, aa_start, aa_end) in zip(features, _PEPTIDES):
+        assert feature["end"] - feature["start"] + 1 == (aa_end - aa_start) * 3
+        assert feature["start"] == 86 + aa_start * 3
+
+
+def test_transfer_refuses_an_unrelated_donor(tmp_path):
+    """A wrong donor must fail loudly, not renumber everything quietly."""
+    from examples.eva71_sra.genbank_to_gff3 import transfer_mat_peptides
+
+    donor = _SeqIO.read(str(_synthetic(tmp_path, "other", seed=424242,
+                                       peptides=_PEPTIDES)), "genbank")
+    target = _SeqIO.read(str(_synthetic(tmp_path, "target2", seed=1)), "genbank")
+
+    with pytest.raises(ValueError, match="identical"):
+        transfer_mat_peptides(donor, target)
+
+
+def test_transfer_refuses_a_donor_without_mature_peptides(tmp_path):
+    from examples.eva71_sra.genbank_to_gff3 import transfer_mat_peptides
+
+    donor = _SeqIO.read(str(_synthetic(tmp_path, "bare", seed=1)), "genbank")
+    target = _SeqIO.read(str(_synthetic(tmp_path, "target3", seed=1)), "genbank")
+
+    with pytest.raises(ValueError, match="no mat_peptide"):
+        transfer_mat_peptides(donor, target)
+
+
+def test_transferred_regions_are_marked_in_the_gff3(tmp_path):
+    """Provenance belongs in the file, not only in the terminal that made it."""
+    from examples.eva71_sra.genbank_to_gff3 import convert, transfer_mat_peptides
+
+    donor = _SeqIO.read(str(_synthetic(tmp_path, "donor4", seed=1,
+                                       peptides=_PEPTIDES)), "genbank")
+    target = _SeqIO.read(str(_synthetic(tmp_path, "target4", seed=1)), "genbank")
+
+    features, _ = transfer_mat_peptides(donor, target)
+    lines = convert(target, transferred=features)
+    rows = [ln for ln in lines if not ln.startswith("#")]
+
+    assert sum("transferred_by_alignment" in r for r in rows) == 4
+    assert sum(r.split("\t")[2] == "CDS" for r in rows) == 1
+
+
+def test_transferred_gff3_is_readable_by_anchovys_region_model(tmp_path):
+    """The output has to work as input to the thing it is built for."""
+    from anchovy import regions as regions_mod
+    from examples.eva71_sra.genbank_to_gff3 import convert, transfer_mat_peptides
+
+    donor = _SeqIO.read(str(_synthetic(tmp_path, "donor5", seed=1,
+                                       peptides=_PEPTIDES)), "genbank")
+    target = _SeqIO.read(str(_synthetic(tmp_path, "target5", seed=1)), "genbank")
+
+    features, _ = transfer_mat_peptides(donor, target)
+    gff = tmp_path / "regions.gff3"
+    gff.write_text("\n".join(convert(target, transferred=features)) + "\n")
+
+    parsed = regions_mod.parse_gff3(str(gff))
+    assert len(parsed) == 5
+
+    # A position inside VP1 must now land in TWO regions: the polyprotein and
+    # VP1 itself. That overlap is the entire point of the transfer.
+    vp1 = [r for r in parsed if r.name == "VP1"][0]
+    containing = regions_mod.classify(parsed, vp1.start + 3)
+    assert {r.name for r in containing} == {"polyprotein", "VP1"}

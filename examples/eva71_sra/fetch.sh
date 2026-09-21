@@ -28,6 +28,14 @@ SRR="${SRR:-SRR28178313}"
 # NCBI nucleotide accession. AF304458 = enterovirus A71 Tainan/4643/98.
 REFERENCE_ACC="${REFERENCE_ACC:-AF304458}"
 
+# AF304458 annotates only the polyprotein CDS, so without this every mutation
+# is numbered against the 2194-residue polyprotein and nothing finer. Set an
+# accession that DOES carry mat_peptide features and the cleavage sites are
+# transferred onto the reference by protein alignment, giving VP1/2A/3D-level
+# numbering as well. The transfer refuses donors below 80% identity, and prints
+# what it moved. Set to empty to skip.
+MATPEP_DONOR_ACC="${MATPEP_DONOR_ACC:-NC_001612}"
+
 # minimap2 preset. map-hifi for PacBio (incl. .ccs), map-ont for Nanopore.
 # The wrong preset does not fail; it silently costs alignments.
 MINIMAP_PRESET="${MINIMAP_PRESET:-map-hifi}"
@@ -144,7 +152,21 @@ if [ -s "$REF_GFF" ]; then
     echo "    $REF_GFF exists, skipping."
 else
     curl -fsSL "${EFETCH}&rettype=gb&retmode=text" -o "$REF_GB"
-    python examples/eva71_sra/genbank_to_gff3.py "$REF_GB" "$REF_GFF"
+
+    TRANSFER=""
+    if [ -n "$MATPEP_DONOR_ACC" ] && ! grep -q "     mat_peptide" "$REF_GB"; then
+        echo "    $REFERENCE_ACC has no mat_peptide features;"
+        echo "    fetching $MATPEP_DONOR_ACC to transfer cleavage sites from"
+        DONOR_GB="$DATA_DIR/${MATPEP_DONOR_ACC}.gb"
+        [ -s "$DONOR_GB" ] || curl -fsSL \
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=${MATPEP_DONOR_ACC}&rettype=gb&retmode=text" \
+            -o "$DONOR_GB"
+        TRANSFER="--transfer-from $DONOR_GB"
+    fi
+
+    # Unquoted on purpose: empty must expand to no argument at all.
+    # shellcheck disable=SC2086
+    python examples/eva71_sra/genbank_to_gff3.py "$REF_GB" "$REF_GFF" $TRANSFER
 fi
 
 # --------------------------------------------------------------------------- #
