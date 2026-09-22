@@ -154,6 +154,13 @@ rule extract:
         whitelist=WHITELIST,
     output:
         DATA_DIR + "/" + SAMPLE + "_anchovy.csv",
+    # extract runs its own multiprocessing Pool, which is NOT snakemake's
+    # --cores: that governs how many JOBS run at once, and extract is one job.
+    # Without this the pool sits at the CLI default of 16 however large the
+    # node is. Declared as `threads` rather than a bare param so the scheduler
+    # reserves the cores rather than oversubscribing them, and so snakemake
+    # scales it down when --cores is smaller.
+    threads: config.get("extract_threads", 16)
     params:
         sig=SIGNATURE,
         # How wrong the SIGNATURE match may be before a read is discarded.
@@ -172,7 +179,7 @@ rule extract:
             if "max_barcode_errors" in config else ""),
     shell:
         "anchovy extract {input.sam} {input.whitelist} "
-        "--signature {params.sig} -o {output} "
+        "--signature {params.sig} -o {output} --threads {threads} "
         "{params.max_distance} {params.max_barcode_errors}"
 
 
