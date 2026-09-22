@@ -171,3 +171,41 @@ def test_run_warns_on_a_mismatched_reference(tmp_path):
     fasta.write_text(">a ref coverage:50 length:4\nACGT\n")
     with pytest.warns(UserWarning, match="Positions are compared by index"):
         run(str(fasta), reference="ACG", out_prefix=str(tmp_path / "o"))
+
+
+# --------------------------------------------------------------------------- #
+# insertion-shifted records must not vote
+# --------------------------------------------------------------------------- #
+# Found on real data: rows where tens of cells called an allele that ZERO reads
+# supported. sam2consensus emits a called insertion as an extra column, so the
+# record is longer than the reference and every position after the insertion
+# refers to the wrong coordinate. The consensus stage guards this; this stage
+# reads the FASTA directly and so has to guard it again.
+def test_insertion_shifted_records_are_excluded_from_the_population_table(tmp_path):
+    fasta = tmp_path / "x_allConsensus.fasta"
+    fasta.write_text(
+        ">clean ref coverage:50 length:4\nAAAA\n"
+        ">clean2 ref coverage:50 length:4\nAAAA\n"
+        # One inserted column: every base after it is off by one, so this record
+        # would otherwise vote 'T' at position 2 having never called it there.
+        ">shifted ref coverage:50 length:5\nATAAA\n")
+    result = run(str(fasta), reference="AAAA", out_prefix=str(tmp_path / "o"))
+    assert result["stats"]["dropped_length_mismatch"] == 1
+    assert result["stats"]["cells_in_population_table"] == 2
+    # No phantom allele survives: the two clean cells are pure reference.
+    assert result["population"] == []
+
+
+def test_shifted_records_still_contribute_their_reads(tmp_path):
+    """Their pileup is keyed by position, so it never shifts and stays valid."""
+    fasta = tmp_path / "x_allConsensus.fasta"
+    fasta.write_text(">shifted|c50 ref coverage:50 length:5\nATAAA\n")
+    counts = tmp_path / "counts"
+    counts.mkdir()
+    (counts / "ref__shifted_counts.tsv").write_text(
+        "position\tA\tC\tG\tT\tN\tgap\n1\t6\t0\t0\t2\t0\t0\n")
+    result = run(str(fasta), reference="AAAA", out_prefix=str(tmp_path / "o"),
+                 counts_dir=str(counts), reference_name="ref")
+    assert result["stats"]["dropped_length_mismatch"] == 1
+    assert len(result["per_cell"]) == 1          # reads survive the exclusion
+    assert result["per_cell"][0]["reads"] == 2

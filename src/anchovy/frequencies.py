@@ -134,6 +134,13 @@ def population_rows(records, reference: str, subset_ids: set[str] | None = None,
     a read behind it, which keeps the table to observed mutations instead of the
     error spectrum.
 
+    EVERY RECORD MUST ALREADY BE REFERENCE LENGTH -- see run(), which filters
+    them. A consensus carrying a called insertion is longer, and since a base is
+    read by index, every position after that insertion refers to the wrong
+    coordinate: the cell then votes for alleles it never saw, at positions it
+    never called them. Truncating such a record (the earlier behaviour here)
+    does not help, because the damage is the shift, not the overhang.
+
     DENOMINATORS ARE PER POSITION AND EXCLUDE UNCALLED BASES. A cell whose
     consensus holds a gap (no coverage) or an IUPAC code (reads disagreed) at a
     position is counted in neither numerator nor denominator there: it has no
@@ -141,7 +148,7 @@ def population_rows(records, reference: str, subset_ids: set[str] | None = None,
     position by the number of cells that simply did not resolve it.
     """
     subset_ids = subset_ids if subset_ids is not None else set()
-    ncols = min(len(reference), min((len(r.seq) for r in records), default=0))
+    ncols = len(reference)
     rows: list[dict] = []
 
     for i in range(ncols):
@@ -240,6 +247,27 @@ def run(fasta: str, reference: str, out_prefix: str,
                 f"  not a trimmed _consensus_reference.txt from an earlier run.",
                 stacklevel=2)
 
+    # DROP INSERTION-SHIFTED RECORDS BEFORE THEY VOTE. Same hazard the consensus
+    # stage guards, and it has to be guarded again here because this stage reads
+    # the FASTA directly rather than going through select_sequences.
+    #
+    # sam2consensus emits a called insertion as an extra column, so the record
+    # is longer than the reference and every position after the insertion is
+    # off by the insertion's length. Bases are compared by index, so such a cell
+    # contributes votes at coordinates it never called -- and they are invisible
+    # in the output, because a phantom allele looks exactly like a real one.
+    #
+    # It showed up on real data as rows where tens of cells called an allele
+    # that ZERO reads supported: the read columns are keyed by true reference
+    # position from the pileup and so stayed correct, while the cell columns
+    # drifted. That disagreement is the only reason it was catchable at all,
+    # which is an argument for reporting both.
+    #
+    # Per-cell rows are unaffected and keep every cell: they are computed from
+    # the pileup, which is keyed by position and never shifts.
+    population_records = [r for r in records if len(r.seq) == len(reference)]
+    n_shifted = len(records) - len(population_records)
+
     subset_ids: set[str] = set()
     if subset_csv:
         with open(subset_csv) as handle:
@@ -272,7 +300,7 @@ def run(fasta: str, reference: str, out_prefix: str,
                     total[base] += col[base]
 
     pop_rows = population_rows(
-        records, reference, subset_ids=subset_ids,
+        population_records, reference, subset_ids=subset_ids,
         read_totals=read_totals or None, regions=regions, min_cells=min_cells)
 
     written = {"population": _write(
@@ -285,6 +313,8 @@ def run(fasta: str, reference: str, out_prefix: str,
 
     stats = {
         "cells": len(records),
+        "cells_in_population_table": len(population_records),
+        "dropped_length_mismatch": n_shifted,
         "cells_in_subset": len(subset_ids),
         "cells_with_counts": cells_with_counts,
         "population_rows": len(pop_rows),
