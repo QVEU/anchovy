@@ -153,6 +153,12 @@ def _cmd_frequencies(args: argparse.Namespace) -> int:
     stats = result["stats"]
     print(f"{stats['cells']} cells, {stats['cells_in_subset']} in the subset, "
           f"{stats['cells_with_counts']} with pileup counts.")
+    if stats.get("dropped_length_mismatch"):
+        print(f"Excluded {stats['dropped_length_mismatch']} cell(s) from the "
+              f"population table: their consensus is not the reference length, "
+              f"so a called insertion shifts every position after it and the "
+              f"cell would vote at coordinates it never called. Their reads "
+              f"still count -- the pileup is keyed by position.")
     if args.counts_dir and stats["cells_with_counts"] == 0:
         print("warning: --counts-dir was given but no counts file matched any "
               "cell. Check --reference-name matches the sam2consensus output "
