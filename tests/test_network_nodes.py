@@ -278,3 +278,64 @@ def test_wild_type_cells_still_count_toward_the_reference_node(tmp_path):
     nodes = result["nodes"].set_index("genotype")
     assert nodes.loc["reference", "nCells"] == 1
     assert nodes.loc["reference", "genoFreq"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# Self-edges: dropping them must not delete a node
+# --------------------------------------------------------------------------- #
+# A genotype with no single-step neighbour appears in the epistatic network
+# ONLY as its own self-edge, so stripping self-edges removes the genotype from
+# the file rather than tidying it. The docstring used to claim otherwise,
+# generalising from the fully-connected fixture. On the EV-A71 run it cost 69
+# of 300 genotypes carrying 74 of 544 cells -- the isolated lineages.
+def _network(tmp_path, genotypes, **kw):
+    import pandas as pd
+    from anchovy import annotate
+
+    ref = tmp_path / "reference.txt"
+    # Length a multiple of 3: a partial trailing codon makes Biopython warn on
+    # every translate, which is noise rather than signal for a network test.
+    ref.write_text("ACG" * 100)
+    cons = tmp_path / "filtConsensus.csv"
+    pd.DataFrame([{"CBC_ID": f"c{i}", "genotype": g, "sequence": "",
+                   "description": "coverage:50"}
+                  for i, g in enumerate(genotypes)]).to_csv(cons, index=False)
+    out = tmp_path / "out"
+    annotate.run(str(cons), str(ref), str(out), network=True, **kw)
+    ep = pd.read_csv(f"{out}_epistaticNetwork.csv")
+    nodes = pd.read_csv(f"{out}_genotypeNodes.csv")
+    return ep, nodes
+
+
+# "5T" and "5T_9A" are one step apart; "100G_200C" shares nothing with either.
+ISOLATED_CASE = ["5T", "5T_9A", "100G_200C"]
+
+
+def test_isolated_genotype_keeps_its_self_edge(tmp_path):
+    ep, _ = _network(tmp_path, ISOLATED_CASE)
+    endpoints = set(ep["source"].astype(str)) | set(ep["target"].astype(str))
+    assert "100G_200C" in endpoints, (
+        "a genotype with no single-step neighbour was dropped from the "
+        "epistatic network along with its self-edge")
+
+
+def test_connected_genotypes_still_lose_their_self_edges(tmp_path):
+    # The clutter the default exists to avoid must still be avoided: only the
+    # node that would otherwise vanish keeps its loop.
+    ep, _ = _network(tmp_path, ISOLATED_CASE)
+    loops = set(ep[ep["source"] == ep["target"]]["source"].astype(str))
+    assert loops == {"100G_200C"}
+
+
+def test_node_table_joins_completely_against_the_epistatic_network(tmp_path):
+    """The property the Cytoscape workflow actually depends on."""
+    ep, nodes = _network(tmp_path, ISOLATED_CASE)
+    endpoints = set(ep["source"].astype(str)) | set(ep["target"].astype(str))
+    assert set(nodes["genotype"].astype(str)) == endpoints
+
+
+def test_self_edges_true_keeps_every_loop(tmp_path):
+    # Unchanged: the opt-in still reproduces the R, loops on everything.
+    ep, _ = _network(tmp_path, ISOLATED_CASE, self_edges=True)
+    loops = set(ep[ep["source"] == ep["target"]]["source"].astype(str))
+    assert {"5T", "5T_9A", "100G_200C"} <= loops

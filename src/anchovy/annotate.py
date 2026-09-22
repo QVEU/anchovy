@@ -193,25 +193,38 @@ def hap_network_gen(haplocounts: pd.DataFrame,
     Args:
         haplocounts: the long table from haplo_analysis().
         self_edges: whether to keep edges from a genotype to ITSELF in the
-            single-step (epistatic) network. Default False, since Cytoscape
-            draws each one as a loop on the node and they carry no information
-            there. Pass True for output byte-comparable with the R.
+            single-step (epistatic) network. Default False, which drops them
+            only where the genotype has another edge to be reached by -- a
+            genotype with no single-step neighbour keeps its self-edge, because
+            that row is the only thing putting it in the file. Pass True to
+            keep every one, for output byte-comparable with the R.
 
-    SELF-EDGES, and why only the epistatic network drops them
-    ---------------------------------------------------------
+    SELF-EDGES, and the one case where dropping them costs a node
+    -------------------------------------------------------------
     The pairwise traversal compares every genotype with itself, so each one
-    gets an i == j row. In the epistatic network those are pure decoration:
-    every genotype is also reachable by a step edge or by the reference edge
-    below, so dropping them loses no node. Measured on the annotation fixture:
-    6 of 10 rows are self-edges and removing them loses nothing.
+    gets an i == j row. For a genotype that also has a step edge or a reference
+    edge, that row is pure decoration -- Cytoscape draws it as a loop and it
+    says nothing the other edges do not.
 
-    In all_entries they are LOAD-BEARING and are therefore always kept. A
-    genotype sharing no mutation with any other appears there ONLY as its own
-    self-edge, so dropping them deletes it from the graph outright -- on the
-    same fixture that is 3 of 5 genotypes, including the reference. If you want
-    a self-edge-free genotype network, take the node list from
-    {prefix}_genotypeNodes.csv, which is complete either way, and filter the
-    edges yourself knowing what it costs.
+    BUT NOT EVERY GENOTYPE HAS ONE. A genotype with no single-step neighbour
+    appears in this network ONLY as its own self-edge, so stripping self-edges
+    deletes it from the file outright. This docstring used to claim the
+    opposite -- "dropping them loses no node", generalised from the 10-row
+    annotation fixture, where it happens to hold. On the EV-A71 run it cost 69
+    of 300 genotypes, carrying 74 of 544 cells: exactly the isolated lineages
+    with no close relative, which are often the ones worth looking at.
+
+    The reasoning was already right for all_entries just below, where self-
+    edges are always kept because a genotype sharing no mutation with any
+    other appears there only as its own. The epistatic network has the same
+    problem on a WEAKER condition -- no single-step neighbour, rather than no
+    shared mutation -- so it bites more genotypes, not fewer.
+
+    So self_edges=False now drops a self-edge only where the genotype has
+    another edge to be reached by. Connected nodes stay uncluttered, isolated
+    ones stay in the file, and {prefix}_genotypeNodes.csv joins completely
+    against either network. Pass self_edges=True to keep every one, which is
+    what reproduces the R byte for byte.
 
     THE `count` COLUMN is the number of cells carrying that genotype, despite
     being computed the R's roundabout way as
@@ -299,8 +312,18 @@ def hap_network_gen(haplocounts: pd.DataFrame,
         # above re-points a 1-mutation self-step at "reference", which for the
         # reference genotype is itself). Omitting self_steps from the concat
         # would leave that second one behind.
+        loops = single_steps["genotype"] == single_steps["target"]
+
+        # A genotype is reachable if it appears on any edge that is NOT its own
+        # loop -- as either endpoint, since an edge annotates both nodes.
+        reachable = set(single_steps.loc[~loops, "genotype"]).union(
+            single_steps.loc[~loops, "target"])
+
+        # Drop a loop only where the node survives without it. Where it does
+        # not, the loop is the node's only row and dropping it deletes the
+        # genotype from the file rather than tidying it -- see the docstring.
         single_steps = single_steps[
-            single_steps["genotype"] != single_steps["target"]
+            ~loops | ~single_steps["genotype"].isin(reachable)
         ].reset_index(drop=True)
 
     # Rename the source-node column from "genotype" to "source" so Cytoscape
