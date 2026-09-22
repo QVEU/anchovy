@@ -65,6 +65,21 @@ dependencies:
   - bioconductor-decipher
   - r-purrr
 
+  # --- R packages for visualization/anchovy_report.rmd, the QC/results
+  #     report rendered from a run's output directory. igraph/ggraph are
+  #     optional -- the report's network panel degrades gracefully without
+  #     them -- but the rest are required for the report to render at all. ---
+  - r-rmarkdown
+  - r-ggplot2
+  - r-dplyr
+  - r-tidyr
+  - r-readr
+  - r-scales
+  - r-tibble
+  - r-knitr
+  - r-igraph
+  - r-ggraph
+
   # pip section runs LAST (conda builds it after all conda packages). We do NOT
   # put the editable anchovy install here -- see the two-step setup above.
   # Left empty intentionally; every runtime dep is conda-provided.
