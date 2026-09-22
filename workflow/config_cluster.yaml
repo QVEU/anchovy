@@ -8,22 +8,36 @@
 # real run: an `rm -rf anchovy/` there costs the mapped SAM as well as the code.
 # Set DATA_DIR when you fetch, and point these at the same place.
 #
+# Both steps, with these paths already filled in:
+#
+#   bash examples/eva71_sra/run_cluster.sh
+#   DRY_RUN=1 bash examples/eva71_sra/run_cluster.sh     # plan only
+#
+# That maps the reads where they live and runs the workflow. It also checks
+# that its DATA_DIR matches data_dir below, since a mismatch means the workflow
+# hunts for a SAM that was just written somewhere else.
+#
+# By hand, if you prefer:
+#
 #   DATA=/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run
-#
-#   FASTQ=/data/lvd_qve/Sequencing_Data/QVEU_Seq_0065_PacBio_NDAS_SearchSeq-EVA71Passage/\
-#   Analysis_r54242Ue_20230322_183435_8_H01/Sample_5_EVA71_6h_P5/5_EVA71_6h_P5.ccs.fastq \
-#     DATA_DIR="$DATA" THREADS=64 bash examples/eva71_sra/fetch.sh
-#
+#   FASTQ=<the reads: source below> DATA_DIR="$DATA" THREADS=64 \
+#     bash examples/eva71_sra/fetch.sh
 #   snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml \
-#     --cores 64
+#     --cores 64 -n
 #
-# Add -n first: the map_cell count is the surviving barcode count, and dividing
+# The -n first: the map_cell count is the surviving barcode count, and dividing
 # by --group-components gives the number of SLURM submissions if you submit.
 
 # --- paths ---------------------------------------------------------------- #
 # Reads are taken from {data_dir}/{sample}.sam. fetch.sh derives this name from
 # the FASTQ's basename; run it with SAMPLE=5_EVA71_6h_P5 to drop the .ccs.
 sample: "5_EVA71_6h_P5.ccs"
+
+# Where the reads came from. Not read by the workflow -- its input is the SAM
+# that fetch.sh maps from here -- but recorded so the provenance of a results
+# directory is answerable from the config that produced it. run_cluster.sh maps
+# straight from this path; the FASTQ is never copied or staged.
+reads: "/data/lvd_qve/Sequencing_Data/QVEU_Seq_0065_PacBio_NDAS_SearchSeq-EVA71Passage/Analysis_r54242Ue_20230322_183435_8_H01/Sample_5_EVA71_6h_P5/5_EVA71_6h_P5.ccs.fastq"
 data_dir: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run"
 
 # Genome the reads were mapped to.

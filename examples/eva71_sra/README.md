@@ -82,6 +82,27 @@ FASTQ=/path/to/5_EVA71_6h_P5.ccs.fastq bash examples/eva71_sra/fetch.sh
 
 `fetch.sh` prints the exact config lines to use when it finishes.
 
+### A run with the paths already filled in
+
+`run_cluster.sh` holds the reads path, the data directory and the thread count
+for the QVEU EV-A71 6h P5 dataset, so the whole thing is one command:
+
+```bash
+bash examples/eva71_sra/run_cluster.sh
+DRY_RUN=1 bash examples/eva71_sra/run_cluster.sh     # plan only
+```
+
+It checks that its `DATA_DIR` matches `data_dir` in the config *before* it maps
+anything, since discovering that mismatch after five minutes of minimap2 is a
+waste, and it `cd`s to the repo root so `results/` lands there rather than
+wherever you happened to be.
+
+The reads are **mapped where they live** — `fetch.sh` never copies the FASTQ,
+so there is no reason to stage an 11 GB file next to the checkout.
+
+`fetch.sh` itself stays generic: `FASTQ` unset is what makes it download the
+public SRA example, so a lab-specific path cannot be its default.
+
 ### Keep real-run data outside the repository
 
 `DATA_DIR` defaults to `examples/eva71_sra/data`, **inside the checkout**. That
