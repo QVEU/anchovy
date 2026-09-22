@@ -220,7 +220,16 @@ def test_one_surviving_cell_is_enough(tmp_path):
     result = annotate.run(str(cons), str(reference), str(tmp_path / "out"),
                           network=True)
     assert len(result["annot"]) == 1
-    assert len(result["nodes"]) == 1
+
+    # TWO nodes for one cell, and that is right. The cell's single mutation
+    # makes hap_network_gen emit one edge, 5G -> "reference", so the network
+    # names a node no cell carries. It needs a row here or Cytoscape draws the
+    # edge into a node with no attributes. This assertion used to read == 1,
+    # which encoded the omission rather than testing for it.
+    nodes = result["nodes"]
+    assert sorted(nodes["genotype"]) == ["5G", "reference"]
+    assert nodes.set_index("genotype").loc["reference", "nCells"] == 0
+    assert nodes.set_index("genotype").loc["5G", "nCells"] == 1
 
 
 # --------------------------------------------------------------------------- #

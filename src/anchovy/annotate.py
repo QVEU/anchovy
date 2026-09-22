@@ -28,6 +28,7 @@ exactly as before, which is why the R-frozen goldens still pass.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
@@ -439,7 +440,8 @@ NODE_COLUMNS = ["genotype", "genotypeName", "nMutations", "nCells",
                 "genoFreq", "haploFreq"]
 
 
-def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
+def genotype_nodes(annotated: pd.DataFrame,
+                   edge_genotypes: Iterable[str] | None = None) -> pd.DataFrame:
     """One row per genotype: the NODE attributes for the network CSVs (pure).
 
     WHY THIS EXISTS. Both network files are entirely EDGE-level -- source,
@@ -457,11 +459,22 @@ def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
     what makes a rendered network readable -- and which is frame-correct and
     region-aware when annotate ran with a GFF, so a node can read "5UTR:A121C"
     rather than a bare nucleotide token.
-    """
-    if annotated.empty:
-        return pd.DataFrame(columns=NODE_COLUMNS)
 
+    `edge_genotypes` NAMES EVERY NODE THE EDGE TABLES REFER TO, and any that no
+    cell carries still gets a row here, with nCells 0.
+
+    That is not hypothetical bookkeeping. hap_network_gen re-points every
+    single-mutation self-step at "reference", so "reference" is an edge endpoint
+    whenever any cell carries exactly one mutation -- whether or not any cell IS
+    wild-type. Those are different conditions: on a passaged population with a
+    mutation fixed relative to the supplied genome, no cell is wild-type, yet
+    the hub every one-step edge points at is still "reference". Without this the
+    node table simply had no row for it, so Cytoscape drew the hub unlabelled
+    and unsized, and a node-table import silently skipped the one node the
+    layout is organised around.
+    """
     rows = []
+    seen: set = set()
     for genotype, group in annotated.groupby("genotype", dropna=False):
         name = group["genotypeName"].dropna()
         # Reference cells have no substitutions, so no amino-acid name; label the
@@ -475,6 +488,7 @@ def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
         # a different source.
         n_mutations = 0 if genotype == "reference" else len(str(genotype).split("_"))
 
+        seen.add(genotype)
         rows.append({
             "genotype": genotype,
             "genotypeName": label,
@@ -484,6 +498,27 @@ def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
             "haploFreq": group["haploFreq"].iloc[0] if "haploFreq" in group else None,
         })
 
+    # Nodes the edges name that no cell carries -- see the note above. The
+    # frequencies are 0.0 rather than blank because they are counts over cells
+    # and the count really is zero; Cytoscape sizes on them, and a blank there
+    # renders as a missing value rather than a small node.
+    for genotype in (edge_genotypes or ()):
+        if genotype in seen or pd.isna(genotype):
+            continue
+        seen.add(genotype)
+        rows.append({
+            "genotype": genotype,
+            "genotypeName": ("reference" if genotype == "reference"
+                             else str(genotype)),
+            "nMutations": (0 if genotype == "reference"
+                           else len(str(genotype).split("_"))),
+            "nCells": 0,
+            "genoFreq": 0.0,
+            "haploFreq": 0.0,
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=NODE_COLUMNS)
     return (pd.DataFrame(rows, columns=NODE_COLUMNS)
             .sort_values(["nMutations", "genotype"]).reset_index(drop=True))
 
@@ -616,7 +651,16 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
 
         # Node attributes for the two edge tables above. Written with them
         # because it is only useful alongside them.
-        nodes = genotype_nodes(merged)
+        #
+        # The edges' own endpoints are passed in so a node the network refers to
+        # but no cell carries still gets a row -- "reference", when nothing is
+        # wild-type. Read defensively: an empty network can come back without
+        # these columns at all.
+        endpoints = [f[col] for f in (single_steps, all_entries)
+                     for col in ("source", "target") if col in f.columns]
+        edge_genotypes = (pd.unique(pd.concat(endpoints, ignore_index=True))
+                          if endpoints else [])
+        nodes = genotype_nodes(merged, edge_genotypes=edge_genotypes)
         nodes.to_csv(f"{out_prefix}_genotypeNodes.csv", index=False)
         written["nodes"] = f"{out_prefix}_genotypeNodes.csv"
 
