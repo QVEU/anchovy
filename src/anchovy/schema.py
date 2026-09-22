@@ -82,6 +82,71 @@ class ConsensusColumns:
     ORDER = [CBC_ID, GENOTYPE, SEQUENCE, DESCRIPTION]
 
 
+class CellAlleleColumns:
+    """Columns in the per-cell pileup table (frequencies.py).
+
+    One row per (cell, position, non-reference allele) with read support. This
+    is a WITHIN-CELL frequency: reads carrying the allele over read depth at
+    that position, in that cell. It answers whether a cell is mixed at a site.
+    """
+    CBC_ID = "CBC_ID"
+    POSITION = "position"        # 1-based genome coordinate
+    REF_BASE = "ref_base"
+    ALLELE = "allele"
+    READS = "reads"              # reads carrying ALLELE in this cell
+    DEPTH = "depth"              # reads covering POSITION in this cell
+    FREQ = "freq"                # READS / DEPTH
+
+    ORDER = [CBC_ID, POSITION, REF_BASE, ALLELE, READS, DEPTH, FREQ]
+
+
+class AlleleFrequencyColumns:
+    """Columns in the population allele-frequency table (frequencies.py).
+
+    One row per (position, non-reference allele) observed in any cell's
+    consensus. THE DENOMINATORS ARE PER POSITION, which is the point: a cell
+    that covers part of the CDS counts where it has data and is simply absent
+    where it does not, so partial cells contribute without being discarded and
+    without inflating any denominator they cannot speak to.
+
+    Three views of the same allele, deliberately side by side:
+
+      *_cells    one cell, one vote, over every mapped cell. The population
+                 frequency -- what fraction of cells carry this mutation.
+      *_subset   the same over the cells that passed filtering (the ones the
+                 genotype network is built from), so the subset can be checked
+                 for bias against the full population rather than assumed
+                 representative.
+      *_reads    reads carrying the allele over reads covering the position,
+                 summed across cells. NOTE this weights each cell by its depth,
+                 and within a cell reads are amplification copies of a few
+                 templates -- so it is a sequencing-level summary, not an
+                 independent-observation frequency. Use *_cells for population
+                 claims.
+    """
+    POSITION = "position"        # 1-based genome coordinate
+    REGION = "region"            # GFF region name(s) containing POSITION
+    REF_BASE = "ref_base"
+    ALLELE = "allele"
+
+    CELLS_ALT = "cells_alt"
+    CELLS_CALLED = "cells_called"
+    FREQ_CELLS = "freq_cells"
+
+    CELLS_ALT_SUBSET = "cells_alt_subset"
+    CELLS_CALLED_SUBSET = "cells_called_subset"
+    FREQ_CELLS_SUBSET = "freq_cells_subset"
+
+    READS_ALT = "reads_alt"
+    READS_DEPTH = "reads_depth"
+    FREQ_READS = "freq_reads"
+
+    ORDER = [POSITION, REGION, REF_BASE, ALLELE,
+             CELLS_ALT, CELLS_CALLED, FREQ_CELLS,
+             CELLS_ALT_SUBSET, CELLS_CALLED_SUBSET, FREQ_CELLS_SUBSET,
+             READS_ALT, READS_DEPTH, FREQ_READS]
+
+
 # The 10X signature and description-field conventions were previously hardcoded
 # as string literals in multiple files. Centralize the structural constants here;
 # the *tunable* ones (cutoffs, thresholds) live in config.py instead.

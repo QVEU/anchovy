@@ -52,6 +52,7 @@ trimmed region), then trim to [start:end].
 from __future__ import annotations
 
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,7 +119,8 @@ def parse_consensus_fasta(path: str | Path) -> list[ConsensusRecord]:
 def select_sequences(records: list[ConsensusRecord], start: int | None = None,
                      end: int | None = None,
                      config: ConsensusConfig | None = None,
-                     trim: bool = True) -> list[ConsensusRecord]:
+                     trim: bool = True,
+                     stats: dict | None = None) -> list[ConsensusRecord]:
     """Filter (and in legacy mode trim) records to the target region (pure).
 
     (was: selectSeqs)
@@ -142,17 +144,79 @@ def select_sequences(records: list[ConsensusRecord], start: int | None = None,
     uncovered flanks. Applying max_gaps to that count filters out every cell. The
     filter is therefore applied only when a window is actually given -- which is
     the point of having a window: it names the covered core to judge cells on.
+
+    BREADTH AND DEPTH-WHERE-CALLED (config.min_breadth / min_depth_called)
+    ---------------------------------------------------------------------
+    Optional, off unless set, and applied in addition to depth_min. They exist
+    because depth_min tests a number that conflates depth with breadth -- see
+    the long note on ConsensusConfig for why that silently discards deep cells
+    that happen to span less of the genome.
+
+    Both are derived from what is already on hand, so nothing needs recomputing
+    upstream. With `ncols = len(r.seq)` (the full alignment length, which is
+    what sam2consensus divided by):
+
+        n_called     = positions holding a real base, i.e. not '-'
+        breadth      = n_called / ncols       (over the WINDOW when given)
+        depth_called = coverage * ncols / n_called
+
+    The second identity holds because `coverage * ncols` recovers sam2consensus'
+    `sumcov` -- the summed depth it accumulated. NOTE IT IS A SLIGHT
+    OVERESTIMATE: sumcov accumulates at every position with AT LEAST ONE read,
+    while n_called counts only positions that reached cons_min_depth, so depth
+    from the 1..cons_min_depth-1 positions lands in the numerator while those
+    positions are excluded from the denominator. The bias is upward and small
+    (those positions are shallow by construction), and it is stated here rather
+    than papered over because the alternative -- the true covered-position
+    count -- does not survive into the FASTA and cannot be recovered from it.
+
+    Breadth is restricted to [start, end) when a window is given, matching the
+    gap filter above -- see the comment at the computation. depth_called never
+    is: `coverage` is a whole-reference number and the per-position depths that
+    would let it be windowed are not recoverable from the FASTA, so windowing
+    only its denominator would compare incomparable scales.
     """
     config = config or ConsensusConfig()
     has_window = start is not None and end is not None
+    check_shape = (config.min_breadth is not None
+                   or config.min_depth_called is not None)
+    n_low_depth = n_narrow = n_shallow = n_gappy = 0
     kept: list[ConsensusRecord] = []
     for r in records:
         depth = r.coverage if r.coverage is not None else 0
         if depth <= config.depth_min:
+            n_low_depth += 1
             continue
+        if check_shape:
+            ncols = len(r.seq)
+            # BREADTH IS WINDOW-CONDITIONAL, for the same reason the gap filter
+            # below is: a whole-genome count is dominated by the ragged
+            # uncovered flanks that every amplicon run has, so "fully covered"
+            # over the full reference is a bar essentially no cell clears.
+            # Given a window it means fully covered ACROSS THE CORE, which is
+            # the question worth asking and the point of naming a window.
+            lo, hi = (start, end) if has_window else (0, ncols)
+            span = hi - lo
+            n_in_window = sum(1 for i in range(lo, hi) if r.seq[i] != "-")
+            breadth = (n_in_window / span) if span else 0.0
+            # DEPTH-CALLED IS NOT, and cannot be: `coverage` is sumcov over the
+            # FULL length, and the per-position depths needed to restrict it to
+            # a window do not survive into the FASTA. So it stays a
+            # whole-sequence number even when breadth is windowed.
+            # coverage == sumcov / ncols, so sumcov == depth * ncols.
+            n_called = sum(1 for ch in r.seq if ch != "-")
+            depth_called = (depth * ncols / n_called) if n_called else 0.0
+            if config.min_breadth is not None and breadth < config.min_breadth:
+                n_narrow += 1
+                continue
+            if (config.min_depth_called is not None
+                    and depth_called < config.min_depth_called):
+                n_shallow += 1
+                continue
         if has_window:
             gaps_in_region = sum(1 for i in range(start, end) if r.seq[i] == "-")
             if gaps_in_region >= config.max_gaps_in_region:
+                n_gappy += 1
                 continue
         kept.append(ConsensusRecord(
             cbc_id=r.cbc_id,
@@ -161,6 +225,11 @@ def select_sequences(records: list[ConsensusRecord], start: int | None = None,
             coverage=r.coverage,
             length=r.length,
         ))
+    if stats is not None:
+        stats["dropped_low_depth"] = n_low_depth
+        stats["dropped_narrow"] = n_narrow
+        stats["dropped_shallow_called"] = n_shallow
+        stats["dropped_gappy"] = n_gappy
     return kept
 
 
@@ -356,9 +425,40 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
     """
     config = config or ConsensusConfig()
     records = parse_consensus_fasta(fasta)
-    kept = select_sequences(records, start, end, config, trim=trim)
-
     stats: dict = {}
+    kept = select_sequences(records, start, end, config, trim=trim, stats=stats)
+    stats["input_records"] = len(records)
+
+    # EQUAL LENGTH IS ASSUMED EVERYWHERE BELOW AND GUARANTEED BY NOTHING.
+    # sam2consensus appends insertion columns to the consensus it emits, so a
+    # cell carrying a called insertion comes out LONGER than the reference.
+    # Genotypes are called by index against ref[i], so every position after
+    # that insertion is shifted, and the shift reads as a run of substitutions
+    # covering the whole rest of the genome.
+    #
+    # Nothing caught it. The only length check compares the reference against
+    # sequences[0], so whether a run raised ValueError or silently mis-called
+    # depended on the length of whichever cell happened to come first -- and
+    # annotate's max_mutations_per_cell cap then discarded the shifted cells as
+    # "hypermutated", which is precisely what a frame shift looks like. The
+    # failure was therefore invisible from the outputs: the cells did not
+    # appear, and nothing said why.
+    #
+    # Insertion columns cannot be identified from the FASTA alone (sam2consensus
+    # does not mark them), so a shifted cell cannot be repaired here -- only
+    # recognised. Coordinates that cannot be trusted must not produce
+    # genotypes, so those cells are dropped, counted, and reported.
+    #
+    # When every length already agrees this is a no-op, which is why the
+    # goldens are untouched.
+    if kept:
+        expected = (len(reference) if reference is not None
+                    else Counter(len(r.seq) for r in kept).most_common(1)[0][0])
+        conformant = [r for r in kept if len(r.seq) == expected]
+        stats["expected_length"] = expected
+        stats["dropped_length_mismatch"] = len(kept) - len(conformant)
+        kept = conformant
+    stats["kept"] = len(kept)
     if trim:
         genotypes, ref_used = genotype_summary([r.seq for r in kept], reference)
     else:
@@ -366,6 +466,27 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
         genotypes, ref_used = genotype_summary(
             [r.seq for r in kept], reference, window=window, skip_gaps=True,
             skip_ambiguous=not keep_ambiguous, stats=stats)
+
+    # Loud, because the old behaviour here was to lose these cells without a
+    # word -- as a ValueError with an unrelated message, or as silent
+    # hypermutants two stages downstream.
+    if stats.get("dropped_length_mismatch"):
+        print(f"Dropped {stats['dropped_length_mismatch']} cell(s) whose consensus "
+              f"is not {stats['expected_length']} nt. sam2consensus emits called "
+              f"insertions as extra columns, which shift every position after "
+              f"them out of genome coordinates, so these cells cannot be "
+              f"genotyped by position. Raise cons_min_depth if the insertions "
+              f"are low-depth artifacts.")
+
+    # Same reasoning as the ambiguity report below: a filter that silently
+    # halves the cell count is the kind of thing that gets mistaken for a
+    # biological result, so each cutoff reports its own toll separately rather
+    # than leaving one aggregate "kept N" to be reverse-engineered.
+    if stats.get("dropped_narrow") or stats.get("dropped_shallow_called"):
+        print(f"Filtered {stats['input_records']} consensus sequences to "
+              f"{stats['kept']}: {stats['dropped_low_depth']} below depth_min, "
+              f"{stats['dropped_narrow']} below min_breadth, "
+              f"{stats['dropped_shallow_called']} below min_depth_called.")
 
     # Say what was dropped. Filtering ambiguity codes is the right default, but
     # a variant quietly missing from a table is the kind of thing that costs

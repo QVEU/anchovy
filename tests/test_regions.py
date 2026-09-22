@@ -286,3 +286,51 @@ def test_readme_gff3_examples_parse():
         # check -- it is what people copy as a starting point.
         assert validate_regions(regions) == [], (
             f"README GFF3 example {i} triggers a validation warning")
+
+
+# --------------------------------------------------------------------------- #
+# cds_window -- GFF CDS bounds as a 0-based half-open analysis window
+# --------------------------------------------------------------------------- #
+# The conversion this exists to get right: GFF3 is 1-based inclusive, the window
+# indexes the consensus string directly. Transcribing by hand needs an
+# off-by-one on the start only, and a wrong one shifts silently.
+import pytest
+
+from anchovy.regions import cds_window
+
+
+def test_cds_window_converts_to_zero_based_half_open():
+    lo, hi = cds_window("tests/data/mapping/regions.gff3")
+    assert (lo, hi) == (149, 500)          # GFF says 150-500 inclusive
+    assert hi - lo == 500 - 150 + 1        # width survives the conversion
+
+
+def test_cds_window_ignores_non_cds_features(tmp_path):
+    # The fixture's UTRs must not widen the window, and mature peptides -- which
+    # parse as coding too -- must not be mistaken for the CDS.
+    gff = tmp_path / "r.gff3"
+    gff.write_text(
+        "##gff-version 3\n"
+        "r\tx\tfive_prime_UTR\t1\t99\t.\t+\t.\tID=u\n"
+        "r\tx\tCDS\t100\t400\t.\t+\t0\tID=c\n"
+        "r\tx\tmature_protein_region\t100\t200\t.\t+\t0\tID=vp4\n"
+        "r\tx\tthree_prime_UTR\t401\t500\t.\t+\t.\tID=t\n")
+    assert cds_window(str(gff)) == (99, 400)
+
+
+def test_cds_window_rejects_a_gff_with_no_cds(tmp_path):
+    gff = tmp_path / "r.gff3"
+    gff.write_text("##gff-version 3\nr\tx\tfive_prime_UTR\t1\t99\t.\t+\t.\tID=u\n")
+    with pytest.raises(ValueError, match="no CDS feature"):
+        cds_window(str(gff))
+
+
+def test_cds_window_rejects_multiple_cds(tmp_path):
+    # Guessing between them would be exactly the coordinate error this avoids.
+    gff = tmp_path / "r.gff3"
+    gff.write_text(
+        "##gff-version 3\n"
+        "r\tx\tCDS\t100\t400\t.\t+\t0\tID=a\n"
+        "r\tx\tCDS\t500\t900\t.\t+\t0\tID=b\n")
+    with pytest.raises(ValueError, match="2 CDS features"):
+        cds_window(str(gff))
