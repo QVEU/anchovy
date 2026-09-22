@@ -82,6 +82,31 @@ FASTQ=/path/to/5_EVA71_6h_P5.ccs.fastq bash examples/eva71_sra/fetch.sh
 
 `fetch.sh` prints the exact config lines to use when it finishes.
 
+### Keep real-run data outside the repository
+
+`DATA_DIR` defaults to `examples/eva71_sra/data`, **inside the checkout**. That
+suits the example, whose inputs are all re-downloadable, and is a trap for a
+real run: the mapped SAM lands there too, so an `rm -rf anchovy/` or a fresh
+clone takes 11 GB of mapping with it. For anything you would rather not redo,
+point it beside the repo and set the config to match:
+
+```bash
+DATA=/path/to/project/anchovy_run
+FASTQ=/path/to/reads.fastq DATA_DIR="$DATA" THREADS=64 \
+  bash examples/eva71_sra/fetch.sh
+```
+
+`workflow/config_cluster.yaml` is already written that way. Note `results/` is
+still relative to wherever you run snakemake from, so run it from the repo root
+or the outputs will follow you around.
+
+### Use the whole machine
+
+`snakemake --cores N` sets how many **jobs** run at once. It does not size the
+pool inside `extract`, which is one job doing its own multiprocessing — that is
+`extract_threads` in the config, and it sits at 16 unless you set it. On a
+64-core node, leaving it unset costs roughly four hours on this dataset.
+
 Then see what the workflow plans to do:
 
 ```bash

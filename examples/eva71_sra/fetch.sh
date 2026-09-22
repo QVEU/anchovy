@@ -56,6 +56,10 @@ else
     SAMPLE="${SAMPLE:-$SRR}"
 fi
 
+# Defaults INSIDE the repo, which suits the example and not a real run: the
+# reference, whitelist and the mapped SAM all land here, so deleting or
+# re-cloning the checkout takes them with it. Point DATA_DIR somewhere beside
+# the repo for anything you would rather not re-download and re-map.
 DATA_DIR="${DATA_DIR:-examples/eva71_sra/data}"
 THREADS="${THREADS:-4}"
 
