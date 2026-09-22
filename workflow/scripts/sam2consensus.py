@@ -101,6 +101,14 @@ def main():
 		help="Character for padding regions not covered in the reference, default= - (gap)")
 	parser.add_argument("-d", "--maxdel", action="store", dest="maxdel", default=150,
 		help="Ignore deletions longer than this value, default=150")
+	# ANCHOVY ADDITION. The per-position base counts this script builds are
+	# exactly a pileup, but they are consumed to call a consensus and never
+	# written out, so downstream stages can only ever see one base per position
+	# and cannot compute allele frequencies. This writes them before they are
+	# destroyed. Off by default; nothing changes unless asked for.
+	parser.add_argument("--counts", action="store_true", dest="counts",
+		help="Also write per-position base counts to "
+		     "<outfolder>/<reference>__<prefix>_counts.tsv (anchovy addition)")
 	args = parser.parse_args()
 
 
@@ -228,6 +236,30 @@ def main():
 	mapfile.close()
 
 
+
+	# ANCHOVY ADDITION -- must run BEFORE the reformatting loop below, which
+	# replaces sequences[refname][pos] with a count-keyed inversion built for
+	# consensus calling and throws the per-base counts away.
+	#
+	# Only positions with at least one read are written: a cell covering part of
+	# the genome would otherwise emit a full reference-length row set that is
+	# mostly zeroes, and at hundreds of cells that dominates the output size.
+	# An absent position therefore means no coverage, which is what the reader
+	# assumes.
+	if args.counts:
+		for refname in sequences:
+			countfile = open(outfolder+refname+"__"+prefix+"_counts.tsv", "w")
+			countfile.write("position\tA\tC\tG\tT\tN\tgap\n")
+			for pos in range(len(sequences[refname])):
+				counts = sequences[refname][pos]
+				if sum(counts.values()) == 0:
+					continue
+				countfile.write("\t".join([str(pos+1), str(counts["A"]), str(counts["C"]),
+					str(counts["G"]), str(counts["T"]), str(counts["N"]),
+					str(counts["-"])])+"\n")
+			countfile.close()
+			print("Per-position base counts saved for "+refname+" in: "+
+				  outfolder+refname+"__"+prefix+"_counts.tsv")
 
 	# Reformat dictionaries and get them ready for consensus calculation
 	for refname in sequences:

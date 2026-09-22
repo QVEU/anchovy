@@ -151,8 +151,13 @@ def test_workflow_touches_the_consensus_output():
     snakefile = (Path(__file__).resolve().parent.parent
                  / "workflow" / "Snakefile").read_text()
     rule = snakefile.split("rule cell_consensus:")[1].split("\nrule ")[0]
-    assert "touch {output.fasta}" in rule, (
-        "cell_consensus no longer touches its output; a cell whose coverage "
+    # `{output}` rather than `{output.fasta}`: the rule gained a second, optional
+    # output (the pileup counts for the frequencies stage), and a sparse cell
+    # writes neither file. Touching the whole output set covers both, and keeps
+    # covering any output added later -- naming one field would silently stop
+    # protecting the others.
+    assert "touch {output}" in rule, (
+        "cell_consensus no longer touches its outputs; a cell whose coverage "
         "never reaches --min-depth will abort the whole run")
 
 

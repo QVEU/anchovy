@@ -138,6 +138,30 @@ def _cmd_annotate(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
+def _cmd_frequencies(args: argparse.Namespace) -> int:
+    from anchovy import frequencies
+    from anchovy.io import read_reference_sequence
+
+    reference = read_reference_sequence(args.reference)
+    result = frequencies.run(
+        fasta=args.fasta, reference=reference, out_prefix=args.out_prefix,
+        counts_dir=args.counts_dir, reference_name=args.reference_name,
+        subset_csv=args.subset, gff=args.gff,
+        min_alt_reads=args.min_alt_reads, min_alt_freq=args.min_alt_freq,
+        min_cells=args.min_cells,
+    )
+    stats = result["stats"]
+    print(f"{stats['cells']} cells, {stats['cells_in_subset']} in the subset, "
+          f"{stats['cells_with_counts']} with pileup counts.")
+    if args.counts_dir and stats["cells_with_counts"] == 0:
+        print("warning: --counts-dir was given but no counts file matched any "
+              "cell. Check --reference-name matches the sam2consensus output "
+              "names; the read columns will be empty.", file=sys.stderr)
+    for key, path in result["written"].items():
+        print(f"Wrote {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="anchovy",
@@ -147,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
                         version=f"%(prog)s {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True,
-                                metavar="{extract,fasta,consensus}")
+                                metavar="{extract,fasta,consensus,annotate,frequencies}")
 
     # --- extract ---
     p_extract = sub.add_parser(
@@ -252,6 +276,48 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Drop cells carrying this many called mutations "
                               "or more, as likely artifacts (default: 200).")
     p_annot.set_defaults(func=_cmd_annotate)
+
+    # --- frequencies ---
+    p_freq = sub.add_parser(
+        "frequencies",
+        help="Allele frequencies over all mapped cells, with per-position "
+             "denominators.")
+    p_freq.add_argument("fasta", help="Path to <NAME>_allConsensus.fasta.")
+    p_freq.add_argument("--reference", required=True,
+                        help="Reference genome, as FASTA or a raw sequence file.")
+    p_freq.add_argument("--out-prefix", dest="out_prefix", required=True,
+                        help="Output path prefix.")
+    p_freq.add_argument("--counts-dir", dest="counts_dir",
+                        help="Directory of per-cell <ref>__<cell>_counts.tsv "
+                             "files from `sam2consensus --counts`. Without it "
+                             "the cell-vote columns are still produced and only "
+                             "the read columns are left empty.")
+    p_freq.add_argument("--reference-name", dest="reference_name", default="",
+                        help="Reference name as it appears in the counts "
+                             "filenames (the SAM's reference). Required to "
+                             "locate them when --counts-dir is given.")
+    p_freq.add_argument("--subset", dest="subset",
+                        help="filtConsensus.csv naming the cells the genotype "
+                             "network is built from. Their counts are reported "
+                             "alongside the full population's, so the subset "
+                             "can be checked for bias rather than assumed "
+                             "representative.")
+    p_freq.add_argument("--gff", dest="gff",
+                        help="GFF3 for region names on each position.")
+    p_freq.add_argument("--min-alt-reads", type=int, dest="min_alt_reads",
+                        default=2,
+                        help="Per-cell table: minimum reads carrying an allele "
+                             "to report it (default: 2). Every covered position "
+                             "carries singleton error reads, so 1 reports the "
+                             "error spectrum rather than the variants.")
+    p_freq.add_argument("--min-alt-freq", type=float, dest="min_alt_freq",
+                        default=0.0,
+                        help="Per-cell table: minimum within-cell allele "
+                             "fraction to report (default: 0.0).")
+    p_freq.add_argument("--min-cells", type=int, dest="min_cells", default=1,
+                        help="Population table: minimum cells calling an allele "
+                             "for it to get a row (default: 1).")
+    p_freq.set_defaults(func=_cmd_frequencies)
 
     return parser
 

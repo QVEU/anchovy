@@ -126,6 +126,45 @@ cons_min_depth: 3
 # Leave at 0.5. Raising it emits MORE IUPAC ambiguity codes, not fewer.
 cons_threshold: 0.5
 
+# --- allele frequencies --------------------------------------------------- #
+# A SECOND ANALYSIS OVER ALL MAPPED CELLS, not the subset above.
+#
+# The genotype network needs comparable genotype strings, which is why the
+# filters above demand a complete coding sequence. A frequency does not, and
+# filtering for it actively hurts: what a frequency needs is an honest
+# denominator, so this stage takes one PER POSITION. A cell covering part of
+# the CDS counts where it has data and is absent where it does not, so nothing
+# is discarded for partial coverage and no cell inflates a denominator it
+# cannot speak to.
+#
+# Produces two tables:
+#   <sample>_alleleFrequencies.csv  one row per position and non-reference
+#       allele. Reports the frequency over all mapped cells (one cell, one
+#       vote), over the network's subset, and over summed reads -- side by
+#       side, so the subset can be checked for bias rather than assumed
+#       representative.
+#   <sample>_cellAlleleFreq.csv     one row per cell, position and allele:
+#       reads carrying it over depth there. This is the within-cell
+#       quasispecies view, and it sees mixtures the consensus hides -- a cell
+#       at 25% variant calls pure reference in its own consensus.
+#
+# PREFER THE CELL COLUMNS FOR POPULATION CLAIMS. Reads within a cell are RT/PCR
+# copies of a few templates, so the read columns weight each cell by its depth:
+# a 200-read cell outvotes a 20-read cell tenfold there, and not at all in the
+# cell columns.
+#
+# Costs one extra file per cell (the pileup) and one pass over them.
+allele_frequencies: true
+
+# Per-cell table: minimum reads carrying an allele before it gets a row, and
+# minimum within-cell fraction. Every covered position carries singleton error
+# reads, so 1 reports the error spectrum rather than the variants.
+# min_alt_reads: 2
+# min_alt_freq: 0.0
+
+# Population table: minimum cells calling an allele before it gets a row.
+# min_cells_per_allele: 1
+
 # --- optional ------------------------------------------------------------- #
 # How many errors the assigned BARCODE may carry before the read is dropped.
 #

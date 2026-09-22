@@ -129,6 +129,20 @@ ANNOTATE_FLAGS  = f"--gff {GFF}" if GFF else ""
 if config.get("self_edges", False):
     ANNOTATE_FLAGS = (ANNOTATE_FLAGS + " --self-edges").strip()
 
+# --------------------------------------------------------------------------- #
+# Allele frequencies (optional)
+# --------------------------------------------------------------------------- #
+# Opt-in because it makes sam2consensus write a second file per cell (the
+# per-position pileup), which on a real run is one more output per barcode.
+# The frequency stage answers a different question from the genotype network
+# and deliberately does NOT use the network's cell subset: its denominators are
+# per position, so a cell covering part of the CDS counts where it has data and
+# is absent elsewhere. See src/anchovy/frequencies.py.
+FREQUENCIES = bool(config.get("allele_frequencies", False))
+
+ALLELE_FREQUENCIES = RESULTS + "/" + SAMPLE + "_alleleFrequencies.csv"
+CELL_ALLELE_FREQ   = RESULTS + "/" + SAMPLE + "_cellAlleleFreq.csv"
+
 REGION_ANNOTATIONS = RESULTS + "/" + SAMPLE + "_regionAnnotations.csv"
 GENOTYPE_NODES     = RESULTS + "/" + SAMPLE + "_genotypeNodes.csv"
 
@@ -155,6 +169,12 @@ def aggregate_cell_consensuses(wildcards):
     return expand(WORK + "/" + REFNAME + "__{cell}_BC.fasta", cell=cells)
 
 
+def aggregate_cell_counts(wildcards):
+    """Per-cell pileup TSVs, one per discovered cell (frequencies stage only)."""
+    cells = _discover_cells(wildcards)
+    return expand(WORK + "/" + REFNAME + "__{cell}_BC_counts.tsv", cell=cells)
+
+
 # --------------------------------------------------------------------------- #
 # Default target
 # --------------------------------------------------------------------------- #
@@ -165,6 +185,7 @@ rule all:
         # Region annotations are only produced (and only requested) when the
         # config supplies a GFF3.
         *([REGION_ANNOTATIONS] if GFF else []),
+        *([ALLELE_FREQUENCIES, CELL_ALLELE_FREQ] if FREQUENCIES else []),
 
 
 # --------------------------------------------------------------------------- #
@@ -289,16 +310,21 @@ rule cell_consensus:
         script="workflow/scripts/sam2consensus.py",
     output:
         fasta=WORK + "/" + REFNAME + "__{cell}_BC.fasta",
+        # Same load-bearing touch as the FASTA below: a cell whose reads never
+        # reach min-depth writes neither file, and snakemake requires both.
+        **({"counts": WORK + "/" + REFNAME + "__{cell}_BC_counts.tsv"}
+           if FREQUENCIES else {}),
     params:
         cons_threshold=config.get("cons_threshold", 0.5),
         min_depth=config.get("cons_min_depth", 5),
         outfolder=WORK,
+        counts="--counts" if FREQUENCIES else "",
     group:
         "cell"
     shell:
         "python {input.script} -c {params.cons_threshold} -m {params.min_depth} "
-        "--outfolder {params.outfolder} -i {input.sam} && "
-        "touch {output.fasta}"
+        "{params.counts} --outfolder {params.outfolder} -i {input.sam} && "
+        "touch {output}"
 
 
 # --------------------------------------------------------------------------- #
@@ -402,3 +428,42 @@ rule annotate:
     shell:
         "anchovy annotate {input.csv} {input.reference} {params.out_prefix} "
         "{params.flags} {params.max_mutations}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 8: frequencies  (all cells -> allele frequency tables)  -- OPTIONAL
+# --------------------------------------------------------------------------- #
+# Runs over EVERY mapped cell, not the filtered subset the network is built
+# from. That is the point of the split: a frequency needs an honest per-position
+# denominator, not a comparable genotype string, so partial cells contribute
+# where they have data instead of being discarded. The filtered CSV is still an
+# input -- its cells are reported as their own columns, so the subset can be
+# checked for bias against the full population rather than assumed
+# representative.
+rule frequencies:
+    input:
+        fasta=ALL_CONSENSUS,
+        counts=aggregate_cell_counts,
+        reference=config["template"],
+        subset=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
+        **({"gff": GFF} if GFF else {}),
+    output:
+        population=ALLELE_FREQUENCIES,
+        per_cell=CELL_ALLELE_FREQ,
+    params:
+        out_prefix=RESULTS + "/" + SAMPLE,
+        counts_dir=WORK,
+        refname=REFNAME,
+        gff=f"--gff {GFF}" if GFF else "",
+        min_alt_reads=(f"--min-alt-reads {config['min_alt_reads']}"
+                       if "min_alt_reads" in config else ""),
+        min_alt_freq=(f"--min-alt-freq {config['min_alt_freq']}"
+                      if "min_alt_freq" in config else ""),
+        min_cells=(f"--min-cells {config['min_cells_per_allele']}"
+                   if "min_cells_per_allele" in config else ""),
+    shell:
+        "anchovy frequencies {input.fasta} --reference {input.reference} "
+        "--out-prefix {params.out_prefix} --counts-dir {params.counts_dir} "
+        "--reference-name {params.refname} --subset {input.subset} "
+        "{params.gff} {params.min_alt_reads} {params.min_alt_freq} "
+        "{params.min_cells}"
