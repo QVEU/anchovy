@@ -36,6 +36,7 @@ from anchovy import barcodes
 from anchovy.config import ExtractConfig
 from anchovy.io import read_sam, read_whitelist
 from anchovy.schema import (SamColumns, AnchovyColumns,
+                            SIGNATURE_NON_UMI_LEN,
                             SIGNATURE_PREFIX_LEN, SIGNATURE_UMI_START)
 
 
@@ -67,13 +68,14 @@ _ASSIGN_STATE: dict = {}
 
 
 def _assign_init(whitelist, barcode_blocks, barcode_index,
-                 umi_start, umi_end_trim) -> None:
+                 umi_start, umi_end_trim, max_barcode_errors=None) -> None:
     """Pool initializer: publish the shared read-only state to this worker."""
     _ASSIGN_STATE["whitelist"] = whitelist
     _ASSIGN_STATE["barcode_blocks"] = barcode_blocks
     _ASSIGN_STATE["barcode_index"] = barcode_index
     _ASSIGN_STATE["umi_start"] = umi_start
     _ASSIGN_STATE["umi_end_trim"] = umi_end_trim
+    _ASSIGN_STATE["max_barcode_errors"] = max_barcode_errors
 
 
 def _assign_worker(payload: tuple) -> tuple:
@@ -94,9 +96,13 @@ def _assign_worker(payload: tuple) -> tuple:
     umi_end_trim = _ASSIGN_STATE["umi_end_trim"]
 
     read_seq = full_seq[offset:read_len]
-    barcode, min_d, min_pos, matchblock = barcodes.assign_barcode(
-        matchseq, barcode_blocks, whitelist, barcode_index=barcode_index
+    assigned = barcodes.assign_barcode(
+        matchseq, barcode_blocks, whitelist, barcode_index=barcode_index,
+        max_barcode_errors=_ASSIGN_STATE["max_barcode_errors"],
     )
+    if assigned is None:
+        return None          # barcode beyond the limit; dropped by the caller
+    barcode, min_d, min_pos, matchblock = assigned
     umi = barcodes.extract_umi(matchseq, umi_start, umi_end_trim)
 
     # Order must match AnchovyColumns.ORDER:
@@ -166,17 +172,63 @@ def assign_barcodes(sam: pd.DataFrame, query: str, whitelist: pd.DataFrame,
     total = len(payloads)
     if total:
         print("\n2. Identifying Cell Barcodes...")
-        print("   {}/{} reads ({:.1%}) match a whitelist barcode exactly; "
-              "the rest fall back to the full scan."
-              .format(exact, total, exact / total))
+        rest = ("the rest are resolved within {} error(s) or dropped"
+                .format(config.max_barcode_errors)
+                if config.max_barcode_errors is not None
+                else "the rest fall back to the full scan")
+        print("   {:,}/{:,} reads ({:.1%}) match a whitelist barcode exactly; {}."
+              .format(exact, total, exact / total, rest))
 
     with Pool(config.nthreads, initializer=_assign_init,
               initargs=(whitelist, barcode_blocks, barcode_index,
-                        config.umi_start_offset, config.umi_end_trim)) as pool:
+                        config.umi_start_offset, config.umi_end_trim,
+                        config.max_barcode_errors)) as pool:
         results = pool.map(_assign_worker, payloads)
 
+    # Reads whose barcode exceeded the limit come back as None. They were
+    # never scanned -- that is the point of bounding the search rather than
+    # filtering after it.
+    if config.max_barcode_errors is not None:
+        kept_results = [r for r in results if r is not None]
+        dropped = len(results) - len(kept_results)
+        print("   dropped {:,} read(s) ({:.1%}) whose barcode carried more than "
+              "{} error(s); {:,} remain."
+              .format(dropped, dropped / max(len(results), 1),
+                      config.max_barcode_errors, len(kept_results)))
+        results = kept_results
+
     out = pd.DataFrame(results, columns=AnchovyColumns.ORDER)
+
+    # A perfect barcode still scores the UMI width, because every block is
+    # padded with one N per UMI base and an N never matches a real base. So
+    # that width is the floor, and anything above it is error in the barcode.
+    _report_barcode_distances(out[AnchovyColumns.MIN_DISTANCE],
+                              len(query) - SIGNATURE_NON_UMI_LEN)
     return out
+
+
+def _report_barcode_distances(distances, baseline: int) -> None:
+    """Print how well the assigned barcodes actually matched.
+
+    Worth printing unprompted: the search returns the NEAREST whitelist entry
+    whatever the distance, so without this a read whose barcode was unreadable
+    is indistinguishable downstream from one that matched perfectly. The shape
+    of this distribution is what says whether the cell assignments mean
+    anything.
+    """
+    if len(distances) == 0:
+        return
+    exact = int((distances == baseline).sum())
+    one = int((distances == baseline + 1).sum())
+    two = int((distances == baseline + 2).sum())
+    worse = int((distances > baseline + 2).sum())
+    total = len(distances)
+
+    print("   barcode match quality (a perfect barcode scores {}):"
+          .format(baseline))
+    for label, count in (("exact", exact), ("1 error", one),
+                         ("2 errors", two), ("3+ errors", worse)):
+        print("     {:<10} {:>9,} ({:5.1%})".format(label, count, count / total))
 
 
 # --------------------------------------------------------------------------- #

@@ -40,6 +40,7 @@ def _cmd_extract(args: argparse.Namespace) -> int:
         nthreads=args.threads if args.threads is not None else defaults.nthreads,
         min_distance_cutoff=(args.max_distance if args.max_distance is not None
                              else defaults.min_distance_cutoff),
+        max_barcode_errors=args.max_barcode_errors,
     )
 
     df = extract.run(sam=args.sam, whitelist=args.whitelist,
@@ -153,7 +154,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_extract.add_argument("--signature", help="10X signature (default: v2/v3 3').")
     p_extract.add_argument("--threads", type=int, help="Worker processes (default: 16).")
     p_extract.add_argument("--max-distance", type=int, dest="max_distance",
-                           help="Max Levenshtein distance to keep a read (default: 42).")
+                           help="Max Levenshtein distance for the SIGNATURE match "
+                                "to keep a read (default: 42).")
+    p_extract.add_argument("--max-barcode-errors", type=int,
+                           dest="max_barcode_errors",
+                           help="Drop reads whose assigned barcode carries more "
+                                "than this many errors. Unset, every read is "
+                                "assigned to its nearest whitelist barcode with "
+                                "no floor, however poorly it matched. 0 admits "
+                                "only exact barcodes, 1 allows one substitution.")
     p_extract.set_defaults(func=_cmd_extract)
 
     # --- fasta ---

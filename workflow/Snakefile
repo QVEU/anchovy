@@ -156,9 +156,24 @@ rule extract:
         DATA_DIR + "/" + SAMPLE + "_anchovy.csv",
     params:
         sig=SIGNATURE,
+        # How wrong the SIGNATURE match may be before a read is discarded.
+        # The default of 42 is very permissive on a 58-character signature.
+        max_distance=(f"--max-distance {config['max_distance']}"
+                      if "max_distance" in config else ""),
+        # How wrong the assigned BARCODE may be. Unset, every read that clears
+        # the signature filter is assigned to its nearest whitelist entry with
+        # no floor however poorly it matched, and those assignments become
+        # cells, consensus sequences and genotypes indistinguishable from good
+        # ones. Setting it also makes the stage far faster, because a bounded
+        # search can answer "is anything within k errors" by enumerating the
+        # neighbourhood instead of scanning all 737,280 entries.
+        max_barcode_errors=(
+            f"--max-barcode-errors {config['max_barcode_errors']}"
+            if "max_barcode_errors" in config else ""),
     shell:
         "anchovy extract {input.sam} {input.whitelist} "
-        "--signature {params.sig} -o {output}"
+        "--signature {params.sig} -o {output} "
+        "{params.max_distance} {params.max_barcode_errors}"
 
 
 # --------------------------------------------------------------------------- #

@@ -202,8 +202,29 @@ def build_barcode_index(barcodes) -> dict[str, int]:
     return index
 
 
+def _substitution_neighbours(barcode: str, errors: int):
+    """Every barcode within `errors` substitutions, nearest radius first.
+
+    48 strings at one error, 1,080 at two -- against 737,280 Levenshtein
+    computations for the same question.
+    """
+    from itertools import combinations, product
+
+    for radius in range(1, errors + 1):
+        for positions in combinations(range(len(barcode)), radius):
+            originals = [barcode[i] for i in positions]
+            for replacements in product("ACGT", repeat=radius):
+                if any(r == o for r, o in zip(replacements, originals)):
+                    continue
+                candidate = list(barcode)
+                for i, base in zip(positions, replacements):
+                    candidate[i] = base
+                yield radius, "".join(candidate)
+
+
 def assign_barcode(matchseq: str, barcode_blocks: np.ndarray, whitelist,
-                   barcode_index: dict[str, int] | None = None):
+                   barcode_index: dict[str, int] | None = None,
+                   max_barcode_errors: int | None = None):
     """Assign a read's matched signature to its closest whitelist barcode.
 
     The pure core of the original cellMatch: given the read's matched signature
@@ -254,6 +275,27 @@ def assign_barcode(matchseq: str, barcode_blocks: np.ndarray, whitelist,
             return (whitelist.iat[position, 0],
                     int(Levenshtein.distance(block, matchseq)),
                     position, block)
+
+        if max_barcode_errors is not None:
+            # BOUNDED SEARCH. With a limit on how wrong a barcode may be, the
+            # exhaustive scan is answering a question nobody asked: it finds
+            # the nearest entry however far away it is, and the caller then
+            # discards it. Enumerating the neighbourhood answers the real
+            # question -- is there a whitelist barcode within the limit --
+            # and enumerating it costs 48 lookups at one error.
+            best = None
+            for _, neighbour in _substitution_neighbours(candidate,
+                                                         max_barcode_errors):
+                hit = barcode_index.get(neighbour)
+                # Lowest index among equals, matching argmin's tie-breaking.
+                if hit is not None and (best is None or hit < best):
+                    best = hit
+            if best is None:
+                return None            # beyond the limit: the caller drops it
+            block = barcode_blocks[best]
+            return (whitelist.iat[best, 0],
+                    int(Levenshtein.distance(block, matchseq)),
+                    best, block)
 
     min_d, min_pos, matchblock = min_distance_block(barcode_blocks, matchseq)
     barcode = whitelist.iat[min_pos, 0]
