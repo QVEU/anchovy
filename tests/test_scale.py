@@ -597,3 +597,46 @@ def test_substitution_neighbourhood_sizes_and_exclusivity():
     assert len(one) == 16 * 3 == len(set(one))
     assert "A" * 16 not in one, "the unchanged barcode is not a neighbour"
     assert all(len(n) == 16 for n in one)
+
+
+# --------------------------------------------------------------------------- #
+# The extract CSV must be complete or absent, never half-written
+# --------------------------------------------------------------------------- #
+def test_anchovy_csv_is_written_atomically(tmp_path):
+    """A crash mid-write must not leave a plausible-looking truncated file.
+
+    to_csv streams in chunks straight to the destination, so a run killed
+    partway -- OOM, wall clock -- left a partial CSV at exactly the name the
+    fasta stage reads. Snakemake usually removes a failed job's outputs, but a
+    SIGKILL gives it no opportunity.
+    """
+    from unittest.mock import patch
+
+    from anchovy.io import write_anchovy_csv
+    from anchovy.schema import AnchovyColumns
+
+    frame = pd.DataFrame(
+        [["AAACCCAAGAAACACT", 10, 0, 5, 0, "q", "m", "r1", "ACGT", "TTTT"]],
+        columns=AnchovyColumns.ORDER)
+    target = tmp_path / "sample_anchovy.csv"
+
+    # A write that dies partway through, as an OOM kill would.
+    real_to_csv = pd.DataFrame.to_csv
+
+    def die_midway(self, path_or_buf=None, **kwargs):
+        real_to_csv(self, path_or_buf, **kwargs)     # leave bytes behind
+        raise MemoryError("killed mid-write")
+
+    with patch.object(pd.DataFrame, "to_csv", die_midway):
+        with pytest.raises(MemoryError):
+            write_anchovy_csv(frame, str(target))
+
+    assert not target.exists(), (
+        "a failed write left a file where the next stage expects a complete one")
+    assert not list(tmp_path.glob("*.partial")), "temp file was not cleaned up"
+
+    # And the ordinary path still produces a readable, correctly ordered file.
+    write_anchovy_csv(frame, str(target))
+    assert target.exists()
+    written = pd.read_csv(target)
+    assert list(written.columns)[1:] == AnchovyColumns.ORDER

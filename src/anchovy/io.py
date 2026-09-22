@@ -26,6 +26,7 @@ clearly-labeled commits, validated against the golden tests.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -197,7 +198,22 @@ def write_anchovy_csv(df: pd.DataFrame, path: str, chunksize: int = 50000) -> No
     original's OOM-avoidance setting.
     """
     df = df[AnchovyColumns.ORDER]
-    df.to_csv(path, chunksize=chunksize)
+
+    # Write beside the target, then rename. to_csv streams in chunks straight
+    # to the destination, so a run that dies partway -- an OOM kill, a wall
+    # clock limit -- leaves a truncated but entirely plausible-looking CSV at
+    # exactly the name the next stage reads. Snakemake usually deletes a failed
+    # job's outputs, but a SIGKILL gives it no chance to. os.replace within the
+    # same directory is atomic on POSIX, so the file is either complete or
+    # absent, never half.
+    target = Path(path)
+    tmp = target.with_name(target.name + ".partial")
+    try:
+        df.to_csv(tmp, chunksize=chunksize)
+        os.replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def read_anchovy_csv(path: str) -> pd.DataFrame:

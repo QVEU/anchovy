@@ -1,40 +1,64 @@
 # Full-scale cluster run. Paths below match what fetch.sh prints when it
 # finishes -- copy them from its output rather than assuming.
 #
-#   FASTQ=/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/5_EVA71_6h_P5.ccs.fastq \
-#     THREADS=16 bash examples/eva71_sra/fetch.sh
+# KEEP RUN DATA OUT OF THE REPOSITORY. Every path here points at a directory
+# beside the checkout, not inside it, so that deleting or re-cloning the repo
+# cannot take the data with it. The default in fetch.sh writes into
+# examples/eva71_sra/data, which is convenient for the example and wrong for a
+# real run: an `rm -rf anchovy/` there costs the mapped SAM as well as the code.
+# Set DATA_DIR when you fetch, and point these at the same place.
 #
+# Both steps, with these paths already filled in:
+#
+#   bash examples/eva71_sra/run_cluster.sh
+#   DRY_RUN=1 bash examples/eva71_sra/run_cluster.sh     # plan only
+#
+# That maps the reads where they live and runs the workflow. It also checks
+# that its DATA_DIR matches data_dir below, since a mismatch means the workflow
+# hunts for a SAM that was just written somewhere else.
+#
+# By hand, if you prefer:
+#
+#   DATA=/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run
+#   FASTQ=<the reads: source below> DATA_DIR="$DATA" THREADS=64 \
+#     bash examples/eva71_sra/fetch.sh
 #   snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml \
-#     --executor slurm --jobs 200 --group-components cell=200
+#     --cores 64 -n
 #
-# Add -n first: the map_cell count is the surviving barcode count, and dividing
-# by --group-components gives the number of SLURM submissions.
+# The -n first: the map_cell count is the surviving barcode count, and dividing
+# by --group-components gives the number of SLURM submissions if you submit.
 
 # --- paths ---------------------------------------------------------------- #
 # Reads are taken from {data_dir}/{sample}.sam. fetch.sh derives this name from
 # the FASTQ's basename; run it with SAMPLE=5_EVA71_6h_P5 to drop the .ccs.
 sample: "5_EVA71_6h_P5.ccs"
-data_dir: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data"
+
+# Where the reads came from. Not read by the workflow -- its input is the SAM
+# that fetch.sh maps from here -- but recorded so the provenance of a results
+# directory is answerable from the config that produced it. run_cluster.sh maps
+# straight from this path; the FASTQ is never copied or staged.
+reads: "/data/lvd_qve/Sequencing_Data/QVEU_Seq_0065_PacBio_NDAS_SearchSeq-EVA71Passage/Analysis_r54242Ue_20230322_183435_8_H01/Sample_5_EVA71_6h_P5/5_EVA71_6h_P5.ccs.fastq"
+data_dir: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run"
 
 # Genome the reads were mapped to.
-template: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/AF304458.fasta"
+template: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run/AF304458.fasta"
 
 # Call genotypes against the genome, not the consensus across cells. Unset,
 # anything fixed in the population is absorbed into the reference and vanishes.
 # Must be the same file as `template`.
-reference: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/AF304458.fasta"
+reference: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run/AF304458.fasta"
 
 # Must match the name after ">" in `template`.
 reference_name: "AF304458.1"
 
 # 10X v2 (737,280 barcodes).
-whitelist: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/737K-august-2016.txt"
+whitelist: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run/737K-august-2016.txt"
 
 # 26 Ns = 16 nt barcode + 10 nt UMI. v3 is 28 Ns and the v3 whitelist.
 signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
 
 # Region model. Also switches genotype positions to genome coordinates.
-gff: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/AF304458.gff3"
+gff: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run/AF304458.gff3"
 
 # --- filters -------------------------------------------------------------- #
 # Reads a barcode needs to become two jobs (map_cell + cell_consensus).
@@ -42,6 +66,14 @@ gff: "/data/lvd_qve/GitHub/anchovy/examples/eva71_sra/data/AF304458.gff3"
 # could never have passed. Raise it to cut the job count -- a cell realistically
 # needs depth_min x genome_length / mean_read_length reads.
 min_reads: 20
+
+# Worker processes for the extract stage's own multiprocessing Pool.
+#
+# NOT snakemake's --cores, which governs how many JOBS run at once; extract is
+# a single job whose pool is sized separately. Left unset it is 16 however
+# large the node, which is what made this stage take four hours on a 64-core
+# machine.
+extract_threads: 64
 
 # Per-cell mean coverage to enter the consensus stage.
 depth_min: 20
@@ -53,6 +85,29 @@ cons_min_depth: 10
 cons_threshold: 0.5
 
 # --- optional ------------------------------------------------------------- #
+# How many errors the assigned BARCODE may carry before the read is dropped.
+#
+# Unset, every read is assigned to its NEAREST whitelist entry with no floor,
+# so a read whose barcode was unreadable still becomes a cell, a consensus and
+# a genotype. On this dataset 43.7% of reads had no exact whitelist barcode and
+# were all assigned anyway.
+#
+# 2 is the ceiling worth allowing. The whitelist is 0.017% of 16-mer space, so
+# the expected number of whitelist barcodes within a given distance is:
+#
+#     1 error   0.008   effectively always unique
+#     2 errors  0.194   usually unique
+#     3 errors  2.789   AMBIGUOUS -- "nearest" is a coin flip
+#
+# Setting this also makes the stage far faster, because a bounded search
+# enumerates the neighbourhood (1,128 lookups at 2 errors) instead of scanning
+# all 737,280 entries. Reads beyond the limit are never scanned at all.
+#
+# Note it switches assignment from nearest-neighbour Levenshtein to exact-or-
+# within-k substitutions, which is what 10X's own correction does. A barcode
+# carrying an indel is dropped rather than assigned to an arbitrary neighbour.
+max_barcode_errors: 2
+
 # Keep IUPAC codes as genotype tokens. Off by default: they mark positions where
 # reads disagreed, not mutations. Worth one run with it on at full depth.
 # keep_ambiguous: true
