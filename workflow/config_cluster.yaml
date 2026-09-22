@@ -76,7 +76,36 @@ min_reads: 20
 extract_threads: 64
 
 # Per-cell mean coverage to enter the consensus stage.
+#
+# CAUTION: this is NOT a depth. sam2consensus computes the `coverage:` field it
+# writes as (summed depth over positions with reads) / (FULL reference length),
+# so it falls whenever a cell spans less of the genome, however deep those
+# reads were. On this dataset it dropped 382 of 832 cells -- and 122 of those
+# had >20x where they actually called a base AND covered >=50% of the genome.
+# See min_breadth / min_depth_called below for the unconflated version.
 depth_min: 20
+
+# The two halves of depth_min, separated. Off unless set.
+#
+#   min_breadth       fraction of the reference the cell actually calls (0-1)
+#   min_depth_called  mean depth at the positions it does call
+#
+# Turning these on means setting depth_min: 0, since depth_min is roughly their
+# product and would otherwise re-impose the conflated cutoff underneath them.
+# The settings below reproduce this run's quality bar without the breadth
+# penalty, and recover ~122 cells (450 -> ~572):
+#
+# depth_min: 0
+# min_breadth: 0.5
+# min_depth_called: 20
+#
+# WHICH WAY TO GO IS A SCIENTIFIC CALL, not a tuning one. Lowering min_breadth
+# admits deep partial cells, which is right when you want variant evidence at
+# particular sites. It is WRONG for the genotype and epistatic networks: a cell
+# covering half the genome emits a short token list indistinguishable from a
+# fully covered cell that is clean in the missing half, so genotype identity
+# starts encoding what got sequenced. Keep min_breadth high when the networks
+# are the output you care about.
 
 # Per-position depth for sam2consensus to call a position; below it, gap-filled.
 cons_min_depth: 10

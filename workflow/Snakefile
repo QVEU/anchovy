@@ -332,10 +332,17 @@ rule consensus:
         out_prefix=RESULTS + "/" + SAMPLE,
         reference=f"--reference {REFERENCE}" if REFERENCE else "",
         ambiguous="--keep-ambiguous" if KEEP_AMBIGUOUS else "",
+        # Omitted entirely when unset, so the CLI sees None and leaves the
+        # filter off -- passing a default here would turn it silently on.
+        breadth=(f"--min-breadth {config['min_breadth']}"
+                 if "min_breadth" in config else ""),
+        depth_called=(f"--min-depth-called {config['min_depth_called']}"
+                      if "min_depth_called" in config else ""),
     shell:
         "anchovy consensus {input.fasta} {params.window} {params.flags} "
         "--depth-min {params.depth_min} --out-prefix {params.out_prefix} "
-        "{params.reference} {params.ambiguous}"
+        "{params.reference} {params.ambiguous} "
+        "{params.breadth} {params.depth_called}"
 
 
 # --------------------------------------------------------------------------- #

@@ -225,3 +225,77 @@ def test_consensus_matches_golden(data_dir, golden_dir, tmp_run_dir):
 
     got = {r["CBC_ID"]: r["genotype"] for r in result["records"]}
     assert got == expected
+
+
+# --------------------------------------------------------------------------- #
+# select_sequences -- breadth / depth-where-called (the unconflated filters)
+# --------------------------------------------------------------------------- #
+# The case that motivated them: `coverage` is (summed depth over covered
+# positions) / (full length), so a deep-but-partial cell scores LOWER than a
+# shallow-but-complete one. Each test below pins one half of that apart.
+def test_breadth_and_depth_called_are_off_by_default():
+    # Half-covered but deep. Nothing is set, so only depth_min applies and the
+    # record survives exactly as it did before these filters existed.
+    recs = [_rec("partial", "AAAAA-----", 20)]
+    assert [r.cbc_id for r in select_sequences(recs, config=ConsensusConfig(
+        depth_min=10))] == ["partial"]
+
+
+def test_min_breadth_drops_narrow_cells():
+    cfg = ConsensusConfig(depth_min=0, min_breadth=0.5)
+    recs = [
+        _rec("narrow", "AAA-------", 20),   # 30% called -> dropped
+        _rec("wide", "AAAAAA----", 20),     # 60% called -> kept
+    ]
+    assert [r.cbc_id for r in select_sequences(recs, config=cfg)] == ["wide"]
+
+
+def test_min_depth_called_undoes_the_breadth_penalty():
+    """The whole point: judge a cell on depth where it called, not on average.
+
+    Both cells have the same genome-wide `coverage` of 16, so depth_min alone
+    cannot tell them apart. Factoring breadth out separates them cleanly:
+      deep    16 * 10/4 = 40x over the 4 positions it called
+      shallow 16 * 10/10 = 16x across all 10
+    """
+    cfg = ConsensusConfig(depth_min=0, min_depth_called=20)
+    recs = [
+        _rec("deep", "AAAA------", 16),
+        _rec("shallow", "AAAAAAAAAA", 16),
+    ]
+    assert [r.cbc_id for r in select_sequences(recs, config=cfg)] == ["deep"]
+
+
+def test_depth_min_would_have_kept_exactly_the_wrong_one():
+    # The inverse of the test above, proving the old filter is not merely
+    # coarser but actively inverted on this pair: it keeps the 16x-everywhere
+    # cell and discards the 40x-where-called one.
+    recs = [
+        _rec("deep", "AAAA------", 16),      # 40x where called
+        _rec("shallow", "AAAAAAAAAA", 21),   # 21x everywhere
+    ]
+    kept = select_sequences(recs, config=ConsensusConfig(depth_min=20))
+    assert [r.cbc_id for r in kept] == ["shallow"]
+
+
+def test_filters_compose_and_report_their_own_tolls():
+    cfg = ConsensusConfig(depth_min=5, min_breadth=0.5, min_depth_called=20)
+    recs = [
+        _rec("low", "AAAAAAAAAA", 4),        # under depth_min
+        _rec("narrow", "AAA-------", 30),    # 30% called
+        _rec("shallow", "AAAAAAAAAA", 10),   # 10x where called
+        _rec("good", "AAAAAAAA--", 20),      # 80% called, 25x where called
+    ]
+    stats: dict = {}
+    kept = select_sequences(recs, config=cfg, stats=stats)
+    assert [r.cbc_id for r in kept] == ["good"]
+    assert stats["dropped_low_depth"] == 1
+    assert stats["dropped_narrow"] == 1
+    assert stats["dropped_shallow_called"] == 1
+
+
+def test_fully_gapped_record_does_not_divide_by_zero():
+    # An all-gap consensus reaches the filter when depth_min is lowered, and
+    # n_called is then 0. It must be dropped, not raise.
+    cfg = ConsensusConfig(depth_min=0, min_breadth=0.1, min_depth_called=1)
+    assert select_sequences([_rec("empty", "----------", 1)], config=cfg) == []

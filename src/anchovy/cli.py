@@ -81,6 +81,10 @@ def _cmd_consensus(args: argparse.Namespace) -> int:
         depth_min=args.depth_min if args.depth_min is not None else defaults.depth_min,
         max_gaps_in_region=(args.max_gaps if args.max_gaps is not None
                             else defaults.max_gaps_in_region),
+        # Left as None when unset, which is what switches these filters off --
+        # so no default is substituted here the way it is above.
+        min_breadth=args.min_breadth,
+        min_depth_called=args.min_depth_called,
     )
 
     reference = None
@@ -208,6 +212,19 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Minimum coverage to keep a sequence (default: 10).")
     p_cons.add_argument("--max-gaps", type=int, dest="max_gaps",
                         help="Max gaps allowed in region (default: 3).")
+    p_cons.add_argument("--min-breadth", type=float, dest="min_breadth",
+                        help="Minimum fraction of the reference a cell must "
+                             "actually call (0-1) to be kept. Off by default. "
+                             "Unlike --depth-min this measures only how much of "
+                             "the genome the cell saw, which is what keeps "
+                             "genotype strings comparable between cells.")
+    p_cons.add_argument("--min-depth-called", type=float, dest="min_depth_called",
+                        help="Minimum mean depth at the positions a cell "
+                             "actually called. Off by default. This is the "
+                             "quality half of --depth-min, with the breadth "
+                             "half factored out, so a deep cell spanning less "
+                             "of the genome is no longer penalised for its "
+                             "uncovered flanks.")
     p_cons.set_defaults(func=_cmd_consensus)
 
     # --- annotate ---

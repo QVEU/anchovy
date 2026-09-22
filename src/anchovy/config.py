@@ -147,6 +147,52 @@ class ConsensusConfig:
     # comprehension: sum(... == "-" ...) < 3)
     max_gaps_in_region: int = 3
 
+    # --- breadth and depth-where-called (the unconflated filters) ----------- #
+    # WHY THESE EXIST. `depth_min` is applied to the `coverage:` field that
+    # sam2consensus writes into each consensus header, and that number is
+    #
+    #     (sum of depth over positions WITH READS) / (FULL reference length)
+    #
+    # -- the numerator skips uncovered positions, the denominator does not. So
+    # it is not a depth at all but a PRODUCT of two different things: how deep
+    # the reads were, and how much of the genome they spanned. A cell with 40x
+    # over 40% of the genome scores 16 and is dropped; a cell with 21x across
+    # the whole genome scores 21 and is kept -- despite having worse calls at
+    # every position it calls.
+    #
+    # That is not a hypothetical. On the EV-A71 passage run, of 382 cells cut
+    # by depth_min: 20, a full 122 had BOTH >20x where they called a base AND
+    # >=50% of the genome covered. They were discarded for an averaging
+    # artifact, not for quality -- a 27% loss of the usable population.
+    #
+    # Nor does depth_min protect anything the pipeline needs protecting from:
+    # cons_min_depth already gap-fills any position under its threshold, so
+    # every CALLED base is backed by real reads, and genotype_summary runs with
+    # skip_gaps=True in whole-reference mode, so uncovered positions cannot
+    # manufacture a variant in either direction.
+    #
+    # Splitting the metric lets each half be set for what it actually protects:
+    #
+    #   min_depth_called -- call quality WHERE a base was called.
+    #   min_breadth      -- how much of the genome the cell saw. This is the
+    #                       half that matters for the genotype and epistatic
+    #                       NETWORKS: a cell covering 40% emits a short token
+    #                       list that is indistinguishable from a fully covered
+    #                       cell which happens to be clean in the missing
+    #                       regions, so admitting cells of wildly different
+    #                       breadth makes genotype identity partly an artifact
+    #                       of what got sequenced. Keep this high when the
+    #                       networks are the output you care about; lower it
+    #                       when you are hunting variants at particular sites
+    #                       and a deep partial cell is still evidence.
+    #
+    # Both default to None (off), so every existing config behaves exactly as
+    # it did. Turning them on usually means setting `depth_min: 0`, since
+    # depth_min is roughly their product and would otherwise re-impose the
+    # conflated cutoff underneath the two clean ones.
+    min_breadth: float | None = None
+    min_depth_called: float | None = None
+
 
 @dataclass(frozen=True)
 class AnnotationConfig:
