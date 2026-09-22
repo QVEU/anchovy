@@ -299,3 +299,35 @@ def test_fully_gapped_record_does_not_divide_by_zero():
     # n_called is then 0. It must be dropped, not raise.
     cfg = ConsensusConfig(depth_min=0, min_breadth=0.1, min_depth_called=1)
     assert select_sequences([_rec("empty", "----------", 1)], config=cfg) == []
+
+
+def test_min_breadth_is_measured_over_the_window_when_given():
+    """Ragged flanks must not count against a cell that covers the core.
+
+    The motivating case: amplicon reads never reach the extreme ends, so every
+    real cell carries gap flanks. Judged whole-genome this cell is 50% covered
+    and fails; judged over the core it named, it is complete and passes.
+    """
+    cfg = ConsensusConfig(depth_min=0, min_breadth=1.0)
+    rec = _rec("flanked", "-----AAAAAAAAAA-----", 20)
+    assert select_sequences([rec], config=cfg) == []
+    kept = select_sequences([rec], start=5, end=15, config=cfg, trim=False)
+    assert [r.cbc_id for r in kept] == ["flanked"]
+
+
+def test_window_breadth_still_rejects_a_hole_in_the_core():
+    # The window must not become a rubber stamp: a gap INSIDE it still fails,
+    # which is the whole point of asking for full coverage of the core.
+    cfg = ConsensusConfig(depth_min=0, min_breadth=1.0)
+    rec = _rec("holed", "-----AAAA-AAAAA-----", 20)
+    assert select_sequences([rec], start=5, end=15, config=cfg, trim=False) == []
+
+
+def test_depth_called_stays_whole_sequence_under_a_window():
+    # depth_called cannot be windowed (the per-position depths are gone), so a
+    # window must not silently change its denominator. Coverage 10 over a
+    # 20-col record with 10 called positions is 20x called, window or not.
+    cfg = ConsensusConfig(depth_min=0, min_depth_called=20)
+    rec = _rec("half", "-----AAAAAAAAAA-----", 10)
+    assert [r.cbc_id for r in select_sequences(
+        [rec], start=5, end=15, config=cfg, trim=False)] == ["half"]

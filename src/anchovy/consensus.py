@@ -156,7 +156,7 @@ def select_sequences(records: list[ConsensusRecord], start: int | None = None,
     what sam2consensus divided by):
 
         n_called     = positions holding a real base, i.e. not '-'
-        breadth      = n_called / ncols
+        breadth      = n_called / ncols       (over the WINDOW when given)
         depth_called = coverage * ncols / n_called
 
     The second identity holds because `coverage * ncols` recovers sam2consensus'
@@ -169,9 +169,11 @@ def select_sequences(records: list[ConsensusRecord], start: int | None = None,
     than papered over because the alternative -- the true covered-position
     count -- does not survive into the FASTA and cannot be recovered from it.
 
-    These are whole-sequence metrics in both modes: they are computed over the
-    full record, not the window, because `coverage` itself is a whole-reference
-    number and mixing the two scales would compare incomparable denominators.
+    Breadth is restricted to [start, end) when a window is given, matching the
+    gap filter above -- see the comment at the computation. depth_called never
+    is: `coverage` is a whole-reference number and the per-position depths that
+    would let it be windowed are not recoverable from the FASTA, so windowing
+    only its denominator would compare incomparable scales.
     """
     config = config or ConsensusConfig()
     has_window = start is not None and end is not None
@@ -186,9 +188,22 @@ def select_sequences(records: list[ConsensusRecord], start: int | None = None,
             continue
         if check_shape:
             ncols = len(r.seq)
-            n_called = sum(1 for ch in r.seq if ch != "-")
-            breadth = (n_called / ncols) if ncols else 0.0
+            # BREADTH IS WINDOW-CONDITIONAL, for the same reason the gap filter
+            # below is: a whole-genome count is dominated by the ragged
+            # uncovered flanks that every amplicon run has, so "fully covered"
+            # over the full reference is a bar essentially no cell clears.
+            # Given a window it means fully covered ACROSS THE CORE, which is
+            # the question worth asking and the point of naming a window.
+            lo, hi = (start, end) if has_window else (0, ncols)
+            span = hi - lo
+            n_in_window = sum(1 for i in range(lo, hi) if r.seq[i] != "-")
+            breadth = (n_in_window / span) if span else 0.0
+            # DEPTH-CALLED IS NOT, and cannot be: `coverage` is sumcov over the
+            # FULL length, and the per-position depths needed to restrict it to
+            # a window do not survive into the FASTA. So it stays a
+            # whole-sequence number even when breadth is windowed.
             # coverage == sumcov / ncols, so sumcov == depth * ncols.
+            n_called = sum(1 for ch in r.seq if ch != "-")
             depth_called = (depth * ncols / n_called) if n_called else 0.0
             if config.min_breadth is not None and breadth < config.min_breadth:
                 n_narrow += 1
