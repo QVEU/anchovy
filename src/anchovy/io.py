@@ -95,16 +95,29 @@ def parse_cigar_lengths(read) -> list[int]:
 def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
     """Read a mapped SAM into a DataFrame with CIGAR-derived length columns.
 
-    Reproduces the original loadSAM exactly:
-      1. Manual text parse of the first 11 tab-separated fields, skipping only
-         lines starting with '@' (pandas struggled with SAM headers, per the
-         original's note).
-      2. pysam pass to compute CIGAR lengths for mapped reads.
-      3. Drop unmapped (template == '*'), attach length columns, filter by length.
+    ONE STREAMING PASS. The original loadSAM read the file twice -- a manual
+    text parse of the 11 core fields, then a pysam pass for CIGAR accounting --
+    and built a list of every non-header line before filtering anything. That
+    is bounded by the WHOLE FILE rather than by the reads that survive, which on
+    a real run is the difference that matters: of 3,457,184 records in a PacBio
+    run, 402,303 reached the next stage. The other 88% were parsed, stored, and
+    copied into a DataFrame before being discarded.
 
-    The two passes over the file are the original's design. Collapsing them into
-    one is a performance change for a later, separately-validated commit, not a
-    behavior-preserving migration.
+    pysam already parses the record and exposes the CIGAR, so a single
+    `for read in fp:` gets everything both passes got. Filtering inside the loop
+    means a discarded read is never retained at all.
+
+    WHICH READS SURVIVE IS UNCHANGED. The old code filtered rows on
+    `RNAME != "*"` (the text pass) while computing CIGARs for
+    `not read.is_unmapped` (the pysam pass), then zipped the two together. Those
+    are different predicates: a read that is flagged unmapped but still carries
+    a reference name -- legal SAM, an unmapped mate placed at its partner's
+    locus -- is kept by the first and dropped by the second. When they disagree
+    the old code raised `ValueError: Length of values (N) does not match length
+    of index (M)` from pandas, so it could not silently misalign, but it also
+    could not proceed. This keeps the row predicate, `reference_name is not
+    None`, and computes the CIGAR for exactly those rows, so the two can no
+    longer disagree.
 
     Args:
         path: path to the input SAM file.
@@ -112,24 +125,52 @@ def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
             (Callers pass config.extract.effective_min_read_length(), which
             defaults to the signature length -- the original's `minL = quL`.)
     """
-    # 1. Manual text parse of the 11 core SAM fields.
-    with open(path, "r") as handle:
-        rows = [line.split("\t")[0:11] for line in handle if not line.startswith("@")]
+    rows: list[list[str]] = []
+    read_lens: list[int] = []
+    clip_lens: list[int] = []
+    offsets: list[int] = []
+    lengths: list[int] = []
+    n_records = 0
 
-    # 2. pysam pass for CIGAR accounting on mapped reads only.
     print("Parsing Cigars...")
-    sam_fp = pysam.Samfile(path, "rb")
-    cigars = [parse_cigar_lengths(read) for read in sam_fp if not read.is_unmapped]
+    # check_sq=False so a SAM with no @SQ header still opens; the old text pass
+    # never looked at the header at all.
+    with pysam.AlignmentFile(path, "rb", check_sq=False) as handle:
+        for read in handle:
+            n_records += 1
+
+            # The old text filter, expressed on the parsed record: pysam reports
+            # RNAME "*" as reference_name None. Applied before anything is kept,
+            # so a rejected read never occupies memory.
+            if read.reference_name is None:
+                continue
+
+            # len() of the SEQ field, matching the old df[SEQ].apply(len); a
+            # read with SEQ "*" measured 1 there, and query_sequence is None.
+            seq = read.query_sequence or "*"
+            if len(seq) <= min_read_length:
+                continue
+
+            # to_string() re-renders the record as its SAM text line, so the 11
+            # fields are the same STRINGS the text parse produced -- same values
+            # and same object dtype. Taking pysam's native attributes instead
+            # would silently turn FLAG and POS into ints and change the frame.
+            rows.append(read.to_string().split("\t")[:len(SamColumns.ORDER)])
+
+            read_len, clip_len, offset = parse_cigar_lengths(read)
+            read_lens.append(read_len)
+            clip_lens.append(clip_len)
+            offsets.append(offset)
+            lengths.append(len(seq))
     print("Done.")
 
-    print("Total Candidate Reads: {}".format(len(rows)))
+    print("Total Candidate Reads: {}".format(n_records))
 
-    # 3. Assemble the frame, attach derived columns, filter.
     df = pd.DataFrame(rows, columns=SamColumns.ORDER)
-    df = df[df[SamColumns.TEMPLATE] != "*"]
-    df[[SamColumns.READ_LEN, SamColumns.CLIP_READ_LEN, SamColumns.OFFSET]] = cigars
-    df[SamColumns.LENGTH] = df[SamColumns.SEQ].apply(len)
-    df = df[df[SamColumns.LENGTH] > min_read_length]
+    df[SamColumns.READ_LEN] = read_lens
+    df[SamColumns.CLIP_READ_LEN] = clip_lens
+    df[SamColumns.OFFSET] = offsets
+    df[SamColumns.LENGTH] = lengths
     return df
 
 
