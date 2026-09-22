@@ -510,3 +510,90 @@ def test_lookup_path_is_actually_taken():
                                 barcode_index=index)
     assert result[0] == wl.CBC[5]
     assert result[2] == 5
+
+
+# --------------------------------------------------------------------------- #
+# Bounding the barcode search, rather than filtering after it
+# --------------------------------------------------------------------------- #
+# Without a limit the search returns the NEAREST whitelist entry however far
+# away it is, so a read whose barcode is unreadable still becomes a cell. The
+# obvious fix -- assign, then discard by distance -- pays the full scan for
+# every read it throws away. With a limit the question changes from "which is
+# nearest" to "is anything within k errors", which the neighbourhood answers.
+def test_bounded_and_unbounded_agree_when_bounded_answers():
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    for i in (3, 44, 120):
+        exact = _read_block(wl.CBC[i])
+        one_off = _read_block(("T" if wl.CBC[i][0] != "T" else "A") + wl.CBC[i][1:])
+        for block in (exact, one_off):
+            bounded = assign_barcode(block, blocks, wl, barcode_index=index,
+                                     max_barcode_errors=1)
+            if bounded is not None:
+                assert bounded == assign_barcode(block, blocks, wl,
+                                                 barcode_index=index)
+
+
+def test_a_barcode_beyond_the_limit_is_dropped_without_scanning():
+    """The whole point: no exhaustive scan for a read that cannot pass."""
+    from unittest.mock import patch
+
+    from anchovy import barcodes
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    junk = _read_block("TTTTTTTTTTTTTTTT")
+    assert "TTTTTTTTTTTTTTTT" not in index
+
+    with patch.object(barcodes, "min_distance_block",
+                      side_effect=AssertionError("scanned a read it will drop")):
+        assert assign_barcode(junk, blocks, wl, barcode_index=index,
+                              max_barcode_errors=1) is None
+
+
+def test_zero_errors_admits_only_exact_barcodes():
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    assert assign_barcode(_read_block(wl.CBC[8]), blocks, wl,
+                          barcode_index=index, max_barcode_errors=0)[0] == wl.CBC[8]
+
+    one_off = ("T" if wl.CBC[8][0] != "T" else "A") + wl.CBC[8][1:]
+    assert assign_barcode(_read_block(one_off), blocks, wl,
+                          barcode_index=index, max_barcode_errors=0) is None
+
+
+def test_unset_limit_leaves_the_original_behaviour():
+    """No limit means the scan, and an answer for every read."""
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    junk = _read_block("TTTTTTTTTTTTTTTT")
+    assert assign_barcode(junk, blocks, wl, barcode_index=index) is not None
+    assert assign_barcode(junk, blocks, wl) is not None
+
+
+def test_substitution_neighbourhood_sizes_and_exclusivity():
+    from anchovy.barcodes import _substitution_neighbours
+
+    one = [n for _, n in _substitution_neighbours("A" * 16, 1)]
+    assert len(one) == 16 * 3 == len(set(one))
+    assert "A" * 16 not in one, "the unchanged barcode is not a neighbour"
+    assert all(len(n) == 16 for n in one)
