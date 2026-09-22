@@ -75,40 +75,53 @@ min_reads: 20
 # machine.
 extract_threads: 64
 
-# Per-cell mean coverage to enter the consensus stage.
+# THE CELL FILTER: a cell counts if the CODING SEQUENCE is complete at depth.
 #
-# CAUTION: this is NOT a depth. sam2consensus computes the `coverage:` field it
-# writes as (summed depth over positions with reads) / (FULL reference length),
-# so it falls whenever a cell spans less of the genome, however deep those
-# reads were. On this dataset it dropped 382 of 832 cells -- and 122 of those
-# had >20x where they actually called a base AND covered >=50% of the genome.
-# See min_breadth / min_depth_called below for the unconflated version.
-depth_min: 20
+# depth_min is off because the number it tests is not a depth. sam2consensus
+# computes the `coverage:` field it writes as (summed depth over positions with
+# reads) / (FULL reference length), so it falls whenever a cell spans less of
+# the genome however deep its reads were. On this dataset it cut 382 of 832
+# cells, 122 of which had >20x where they called a base AND >=50% of the genome
+# -- and it kept cells covering 20% of the genome over cells with twice the
+# depth. Zero disables it; min_breadth and the window below replace it.
+depth_min: 0
 
-# The two halves of depth_min, separated. Off unless set.
+# Take the analysis window from the GFF's CDS rather than hand-written bounds.
+# The window is 0-based half-open and GFF3 is 1-based inclusive, so copying CDS
+# coordinates by hand needs an off-by-one on the start only -- and a wrong one
+# shifts which positions are called and which cells count as complete, without
+# failing. Set orf_start/orf_end instead to name a different window.
+window: cds
+
+# Every position in that window must be called. Combined with cons_min_depth
+# below, THIS IS THE RULE: complete coding sequence at the depth floor.
 #
-#   min_breadth       fraction of the reference the cell actually calls (0-1)
-#   min_depth_called  mean depth at the positions it does call
+# 1.0 is a real boundary here, not a round number. Gaps arrive as runs, not
+# scattered bases, so cells either tile the window or miss a stretch of it: of
+# 832 cells, 160 had zero gaps across the polyprotein and only 9 more had
+# between 1 and 10. There is no population sitting just below the bar.
 #
-# Turning these on means setting depth_min: 0, since depth_min is roughly their
-# product and would otherwise re-impose the conflated cutoff underneath them.
-# The settings below reproduce this run's quality bar without the breadth
-# penalty, and recover ~122 cells (450 -> ~572):
-#
-# depth_min: 0
-# min_breadth: 0.5
+# NOTE this is measured over the window, so the ragged 5'/3' flanks every
+# amplicon run has do not count against a cell. Whole-genome, ZERO of the 832
+# cells are gap-free -- 1.0 without a window empties the table.
+min_breadth: 1.0
+
+# Optional second bar: mean depth at the positions actually called. Off, since
+# min_breadth + cons_min_depth already state the rule; set it to also require
+# the covered positions be deep on average, not merely present.
 # min_depth_called: 20
-#
-# WHICH WAY TO GO IS A SCIENTIFIC CALL, not a tuning one. Lowering min_breadth
-# admits deep partial cells, which is right when you want variant evidence at
-# particular sites. It is WRONG for the genotype and epistatic networks: a cell
-# covering half the genome emits a short token list indistinguishable from a
-# fully covered cell that is clean in the missing half, so genotype identity
-# starts encoding what got sequenced. Keep min_breadth high when the networks
-# are the output you care about.
 
-# Per-position depth for sam2consensus to call a position; below it, gap-filled.
-cons_min_depth: 10
+# THE DEPTH FLOOR, and with min_breadth: 1.0 above the other half of the rule:
+# every position in the CDS must reach this many reads or the cell is dropped.
+#
+# 3 is permissive. Two things to check on the first run at this setting, both
+# reported by the consensus stage: insertions get easier to call at low depth,
+# and a cell carrying one is no longer reference length, so it cannot be
+# genotyped by position and is dropped (counted, and named in the output);
+# ambiguity codes also multiply, and an ambiguous position is not a gap -- it
+# passes min_breadth but is skipped when genotypes are called. If either count
+# is large, this floor is too low and 5 is the next thing to try.
+cons_min_depth: 3
 
 # Leave at 0.5. Raising it emits MORE IUPAC ambiguity codes, not fewer.
 cons_threshold: 0.5
@@ -141,7 +154,7 @@ max_barcode_errors: 2
 # reads disagreed, not mutations. Worth one run with it on at full depth.
 # keep_ambiguous: true
 
-# Restrict which positions variants are called over. Renumbers nothing.
+# Explicit window, overriding `window: cds` above. Renumbers nothing.
 # orf_start: 700
 # orf_end: 7300
 

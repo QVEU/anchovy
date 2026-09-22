@@ -162,6 +162,62 @@ def parse_gff3(path: str) -> list[Region]:
     return regions
 
 
+def cds_window(path: str) -> tuple[int, int]:
+    """The CDS feature's bounds, as a 0-based half-open analysis window.
+
+    WHY THIS IS NOT LEFT TO THE USER. The window (orf_start/orf_end) is 0-based
+    half-open because it indexes the consensus string directly, while GFF3 is
+    1-based inclusive. Copying CDS bounds from an annotation into a config by
+    hand therefore needs an off-by-one applied to one end and not the other --
+    and getting it wrong does not fail, it silently shifts which positions are
+    called and which cells are judged complete. That is the same class of error
+    genbank_to_gff3.py exists to prevent, so the conversion is done once, here.
+
+    Takes the CDS specifically rather than the union of coding regions: the
+    mature peptides parse as coding too, and a record missing some of them
+    would quietly yield a shorter window than the coding sequence.
+
+    Raises ValueError if the GFF has no CDS, or more than one -- a multi-CDS
+    record has no single coding sequence to take a window from, and guessing
+    between them would be a coordinate error of exactly the kind above.
+    """
+    spans: list[tuple[int, int]] = []
+    with open(path) as handle:
+        for lineno, raw in enumerate(handle, 1):
+            line = raw.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            if len(cols) < 5 or cols[2].strip() != "CDS":
+                continue
+            try:
+                spans.append((int(cols[3]), int(cols[4])))
+            except ValueError:
+                raise ValueError(
+                    f"{path}:{lineno}: CDS row has non-integer coordinates "
+                    f"({cols[3]!r}, {cols[4]!r})") from None
+
+    if not spans:
+        raise ValueError(
+            f"{path} has no CDS feature, so there is no coding sequence to take "
+            f"an analysis window from. Give explicit orf_start/orf_end instead, "
+            f"or use a GFF3 that annotates the CDS.")
+    if len(spans) > 1:
+        listed = ", ".join(f"{a}-{b}" for a, b in sorted(spans))
+        raise ValueError(
+            f"{path} has {len(spans)} CDS features ({listed}). A window must "
+            f"name one coding sequence; with several there is no unambiguous "
+            f"choice, so set orf_start/orf_end explicitly for the one you mean.")
+
+    start, end = spans[0]
+    if start < 1 or end < start:
+        raise ValueError(
+            f"{path}: CDS coordinates {start}-{end} are not a valid 1-based "
+            f"inclusive span.")
+    # 1-based inclusive -> 0-based half-open.
+    return start - 1, end
+
+
 def validate_regions(regions: list[Region]) -> list[str]:
     """Return a list of warning strings for suspicious region definitions.
 
