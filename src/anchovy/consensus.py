@@ -52,6 +52,7 @@ trimmed region), then trim to [start:end].
 from __future__ import annotations
 
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -427,6 +428,36 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
     stats: dict = {}
     kept = select_sequences(records, start, end, config, trim=trim, stats=stats)
     stats["input_records"] = len(records)
+
+    # EQUAL LENGTH IS ASSUMED EVERYWHERE BELOW AND GUARANTEED BY NOTHING.
+    # sam2consensus appends insertion columns to the consensus it emits, so a
+    # cell carrying a called insertion comes out LONGER than the reference.
+    # Genotypes are called by index against ref[i], so every position after
+    # that insertion is shifted, and the shift reads as a run of substitutions
+    # covering the whole rest of the genome.
+    #
+    # Nothing caught it. The only length check compares the reference against
+    # sequences[0], so whether a run raised ValueError or silently mis-called
+    # depended on the length of whichever cell happened to come first -- and
+    # annotate's max_mutations_per_cell cap then discarded the shifted cells as
+    # "hypermutated", which is precisely what a frame shift looks like. The
+    # failure was therefore invisible from the outputs: the cells did not
+    # appear, and nothing said why.
+    #
+    # Insertion columns cannot be identified from the FASTA alone (sam2consensus
+    # does not mark them), so a shifted cell cannot be repaired here -- only
+    # recognised. Coordinates that cannot be trusted must not produce
+    # genotypes, so those cells are dropped, counted, and reported.
+    #
+    # When every length already agrees this is a no-op, which is why the
+    # goldens are untouched.
+    if kept:
+        expected = (len(reference) if reference is not None
+                    else Counter(len(r.seq) for r in kept).most_common(1)[0][0])
+        conformant = [r for r in kept if len(r.seq) == expected]
+        stats["expected_length"] = expected
+        stats["dropped_length_mismatch"] = len(kept) - len(conformant)
+        kept = conformant
     stats["kept"] = len(kept)
     if trim:
         genotypes, ref_used = genotype_summary([r.seq for r in kept], reference)
@@ -435,6 +466,17 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
         genotypes, ref_used = genotype_summary(
             [r.seq for r in kept], reference, window=window, skip_gaps=True,
             skip_ambiguous=not keep_ambiguous, stats=stats)
+
+    # Loud, because the old behaviour here was to lose these cells without a
+    # word -- as a ValueError with an unrelated message, or as silent
+    # hypermutants two stages downstream.
+    if stats.get("dropped_length_mismatch"):
+        print(f"Dropped {stats['dropped_length_mismatch']} cell(s) whose consensus "
+              f"is not {stats['expected_length']} nt. sam2consensus emits called "
+              f"insertions as extra columns, which shift every position after "
+              f"them out of genome coordinates, so these cells cannot be "
+              f"genotyped by position. Raise cons_min_depth if the insertions "
+              f"are low-depth artifacts.")
 
     # Same reasoning as the ambiguity report below: a filter that silently
     # halves the cell count is the kind of thing that gets mistaken for a

@@ -331,3 +331,61 @@ def test_depth_called_stays_whole_sequence_under_a_window():
     rec = _rec("half", "-----AAAAAAAAAA-----", 10)
     assert [r.cbc_id for r in select_sequences(
         [rec], start=5, end=15, config=cfg, trim=False)] == ["half"]
+
+
+# --------------------------------------------------------------------------- #
+# run() -- consensus sequences that are not reference length
+# --------------------------------------------------------------------------- #
+# sam2consensus appends called insertions as extra columns, so a cell can come
+# out LONGER than the reference. Genotyping compares by index, so such a cell is
+# shifted from the insertion onward. It used to be caught only by a check
+# against sequences[0] -- i.e. by luck -- and then vanish into annotate's
+# hypermutant cap.
+def _write_fasta(tmp_path, entries):
+    p = tmp_path / "x_allConsensus.fasta"
+    p.write_text("".join(
+        f">{name} ref coverage:{cov} length:{len(seq)}\n{seq}\n"
+        for name, seq, cov in entries))
+    return p
+
+
+def test_run_drops_insertion_shifted_cells(tmp_path, capsys):
+    ref = "ACGTACGTAC"
+    fasta = _write_fasta(tmp_path, [
+        ("normal", "ACGTACGTAC", 50),
+        ("inserted", "ACGTTACGTAC", 50),      # 11 nt: one inserted column
+        ("normal2", "ACGTACGTAT", 50),
+    ])
+    result = run(str(fasta), reference=ref, trim=False,
+                 out_prefix=str(tmp_path / "out"),
+                 config=ConsensusConfig(depth_min=10))
+    assert [r["CBC_ID"] for r in result["records"]] == ["normal", "normal2"]
+    assert result["stats"]["dropped_length_mismatch"] == 1
+    assert "not 10 nt" in capsys.readouterr().out
+
+
+def test_run_survives_a_shifted_cell_sorting_first(tmp_path):
+    """The old check looked at sequences[0], so this ordering used to raise."""
+    ref = "ACGTACGTAC"
+    fasta = _write_fasta(tmp_path, [
+        ("inserted", "ACGTTACGTAC", 50),      # longer, and FIRST
+        ("normal", "ACGTACGTAC", 50),
+    ])
+    result = run(str(fasta), reference=ref, trim=False,
+                 out_prefix=str(tmp_path / "out"),
+                 config=ConsensusConfig(depth_min=10))
+    assert [r["CBC_ID"] for r in result["records"]] == ["normal"]
+
+
+def test_run_uses_modal_length_when_no_reference_supplied(tmp_path):
+    # With a computed reference there is no external length to trust, so the
+    # majority length is the only defensible answer.
+    fasta = _write_fasta(tmp_path, [
+        ("a", "ACGTACGTAC", 50),
+        ("b", "ACGTACGTAT", 50),
+        ("odd", "ACGTTACGTAC", 50),
+    ])
+    result = run(str(fasta), trim=False, out_prefix=str(tmp_path / "out"),
+                 config=ConsensusConfig(depth_min=10))
+    assert [r["CBC_ID"] for r in result["records"]] == ["a", "b"]
+    assert result["stats"]["dropped_length_mismatch"] == 1
