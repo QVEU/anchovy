@@ -35,7 +35,8 @@ import pandas as pd
 from anchovy import barcodes
 from anchovy.config import ExtractConfig
 from anchovy.io import read_sam, read_whitelist
-from anchovy.schema import SamColumns, AnchovyColumns
+from anchovy.schema import (SamColumns, AnchovyColumns,
+                            SIGNATURE_PREFIX_LEN, SIGNATURE_UMI_START)
 
 
 # --------------------------------------------------------------------------- #
@@ -65,10 +66,12 @@ def _match_worker(seq_query: tuple[str, str]) -> tuple[int, int, str]:
 _ASSIGN_STATE: dict = {}
 
 
-def _assign_init(whitelist, barcode_blocks, umi_start, umi_end_trim) -> None:
+def _assign_init(whitelist, barcode_blocks, barcode_index,
+                 umi_start, umi_end_trim) -> None:
     """Pool initializer: publish the shared read-only state to this worker."""
     _ASSIGN_STATE["whitelist"] = whitelist
     _ASSIGN_STATE["barcode_blocks"] = barcode_blocks
+    _ASSIGN_STATE["barcode_index"] = barcode_index
     _ASSIGN_STATE["umi_start"] = umi_start
     _ASSIGN_STATE["umi_end_trim"] = umi_end_trim
 
@@ -86,12 +89,13 @@ def _assign_worker(payload: tuple) -> tuple:
 
     whitelist = _ASSIGN_STATE["whitelist"]
     barcode_blocks = _ASSIGN_STATE["barcode_blocks"]
+    barcode_index = _ASSIGN_STATE["barcode_index"]
     umi_start = _ASSIGN_STATE["umi_start"]
     umi_end_trim = _ASSIGN_STATE["umi_end_trim"]
 
     read_seq = full_seq[offset:read_len]
     barcode, min_d, min_pos, matchblock = barcodes.assign_barcode(
-        matchseq, barcode_blocks, whitelist
+        matchseq, barcode_blocks, whitelist, barcode_index=barcode_index
     )
     umi = barcodes.extract_umi(matchseq, umi_start, umi_end_trim)
 
@@ -141,6 +145,12 @@ def assign_barcodes(sam: pd.DataFrame, query: str, whitelist: pd.DataFrame,
     """
     barcode_blocks = barcodes.build_barcode_query_blocks(query, whitelist.CBC)
 
+    # Exact-match index over the whitelist. Every block differs from every
+    # other in only the 16 barcode characters, so a read whose barcode region
+    # is a whitelist entry can be resolved by lookup instead of by scanning all
+    # of them. See barcodes.assign_barcode for why that is the same answer.
+    barcode_index = barcodes.build_barcode_index(whitelist.CBC)
+
     kept = sam[sam.minD < config.min_distance_cutoff]
 
     payloads = [
@@ -148,10 +158,21 @@ def assign_barcodes(sam: pd.DataFrame, query: str, whitelist: pd.DataFrame,
         for row in kept.itertuples()
     ]
 
-    with Pool(config.nthreads, initializer=_assign_init,
-              initargs=(whitelist, barcode_blocks,
-                        config.umi_start_offset, config.umi_end_trim)) as pool:
+    # Report the split, because it is what decides this stage's runtime: a
+    # lookup is ~46,000x cheaper than the scan, so the reads that miss are
+    # essentially the whole cost.
+    lo, hi = SIGNATURE_PREFIX_LEN, SIGNATURE_UMI_START
+    exact = sum(1 for p in payloads if p[3][lo:hi] in barcode_index)
+    total = len(payloads)
+    if total:
         print("\n2. Identifying Cell Barcodes...")
+        print("   {}/{} reads ({:.1%}) match a whitelist barcode exactly; "
+              "the rest fall back to the full scan."
+              .format(exact, total, exact / total))
+
+    with Pool(config.nthreads, initializer=_assign_init,
+              initargs=(whitelist, barcode_blocks, barcode_index,
+                        config.umi_start_offset, config.umi_end_trim)) as pool:
         results = pool.map(_assign_worker, payloads)
 
     out = pd.DataFrame(results, columns=AnchovyColumns.ORDER)

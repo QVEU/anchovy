@@ -272,13 +272,15 @@ def test_assign_worker_reads_its_state_from_the_initializer(tmp_path):
     import pandas as pd
 
     from anchovy import extract
-    from anchovy.barcodes import build_barcode_query_blocks
+    from anchovy.barcodes import (build_barcode_index,
+                                  build_barcode_query_blocks)
 
     signature = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
     whitelist = pd.DataFrame({"CBC": ["AAACCCAAGAAACACT", "AAACCCAAGAAACCAT"]})
     blocks = build_barcode_query_blocks(signature, whitelist.CBC)
 
-    extract._assign_init(whitelist, blocks, 38, 10)
+    index = build_barcode_index(whitelist.CBC)
+    extract._assign_init(whitelist, blocks, index, 38, 10)
 
     # A read whose matched block carries the first barcode exactly.
     matchseq = str(blocks[0]).replace("N" * 10, "TGTGTTATCT")
@@ -406,3 +408,105 @@ def test_read_sam_memory_scales_with_survivors_not_file_size(tmp_path):
         f"a file that is 99% rejects peaked at {big/1e6:.1f} MB against "
         f"{small/1e6:.1f} MB for its survivors alone -- rejected reads are "
         f"being retained again")
+
+
+# --------------------------------------------------------------------------- #
+# Barcode assignment: exact-match lookup instead of a 737,280-way scan
+# --------------------------------------------------------------------------- #
+# min_distance_block compares a read against EVERY whitelist block through
+# np.vectorize, which is a Python loop: 0.47s per read against a v2 whitelist,
+# or 52 core-hours for one real run. Every block differs from every other in
+# only the 16 barcode characters, so an exact hit is a dict lookup.
+TEST_SIGNATURE = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+
+
+def _whitelist(n=400, seed=3):
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame({"CBC": ["".join(c) for c in
+                                 rng.choice(list("ACGT"), size=(n, 16))]})
+
+
+def _read_block(barcode, umi="ACGTACGTAC"):
+    return TEST_SIGNATURE[:22] + barcode + umi + TEST_SIGNATURE[-10:]
+
+
+def test_exact_lookup_returns_what_the_full_scan_returns():
+    """Same four-tuple, not merely the same barcode."""
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    for i in (0, 7, 199, len(wl) - 1):
+        block = _read_block(wl.CBC[i])
+        assert (assign_barcode(block, blocks, wl, barcode_index=index)
+                == assign_barcode(block, blocks, wl))
+
+
+def test_exact_lookup_survives_damage_outside_the_barcode():
+    """An error in the UMI or the 5' handle must not change the assignment."""
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    intact = _read_block(wl.CBC[42])
+    damaged_umi = intact[:38] + "TTTTTTTTTT" + intact[48:]
+    damaged_handle = "G" + intact[1:]
+
+    for block in (damaged_umi, damaged_handle):
+        assert (assign_barcode(block, blocks, wl, barcode_index=index)
+                == assign_barcode(block, blocks, wl))
+
+
+def test_damaged_barcode_falls_back_to_the_scan():
+    """No exact hit means the original path, not a wrong answer."""
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    true_bc = wl.CBC[10]
+    mutated = ("T" if true_bc[0] != "T" else "A") + true_bc[1:]
+    assert mutated not in index, "fixture no longer exercises the fallback"
+
+    block = _read_block(mutated)
+    assert (assign_barcode(block, blocks, wl, barcode_index=index)
+            == assign_barcode(block, blocks, wl))
+
+
+def test_barcode_index_first_occurrence_wins():
+    """Ties must break the way argmin breaks them, or the paths diverge."""
+    from anchovy.barcodes import build_barcode_index
+
+    duplicated = pd.DataFrame({"CBC": ["AAAACCCCGGGGTTTT", "ACGTACGTACGTACGT",
+                                       "AAAACCCCGGGGTTTT"]})
+    index = build_barcode_index(duplicated.CBC)
+    assert index["AAAACCCCGGGGTTTT"] == 0, "argmin returns the first match"
+
+
+def test_lookup_path_is_actually_taken():
+    """Guards against the index being accepted and then quietly ignored."""
+    from unittest.mock import patch
+
+    from anchovy import barcodes
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    with patch.object(barcodes, "min_distance_block",
+                      side_effect=AssertionError("scanned despite an exact hit")):
+        result = assign_barcode(_read_block(wl.CBC[5]), blocks, wl,
+                                barcode_index=index)
+    assert result[0] == wl.CBC[5]
+    assert result[2] == 5
