@@ -28,6 +28,7 @@ exactly as before, which is why the R-frozen goldens still pass.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
@@ -192,25 +193,38 @@ def hap_network_gen(haplocounts: pd.DataFrame,
     Args:
         haplocounts: the long table from haplo_analysis().
         self_edges: whether to keep edges from a genotype to ITSELF in the
-            single-step (epistatic) network. Default False, since Cytoscape
-            draws each one as a loop on the node and they carry no information
-            there. Pass True for output byte-comparable with the R.
+            single-step (epistatic) network. Default False, which drops them
+            only where the genotype has another edge to be reached by -- a
+            genotype with no single-step neighbour keeps its self-edge, because
+            that row is the only thing putting it in the file. Pass True to
+            keep every one, for output byte-comparable with the R.
 
-    SELF-EDGES, and why only the epistatic network drops them
-    ---------------------------------------------------------
+    SELF-EDGES, and the one case where dropping them costs a node
+    -------------------------------------------------------------
     The pairwise traversal compares every genotype with itself, so each one
-    gets an i == j row. In the epistatic network those are pure decoration:
-    every genotype is also reachable by a step edge or by the reference edge
-    below, so dropping them loses no node. Measured on the annotation fixture:
-    6 of 10 rows are self-edges and removing them loses nothing.
+    gets an i == j row. For a genotype that also has a step edge or a reference
+    edge, that row is pure decoration -- Cytoscape draws it as a loop and it
+    says nothing the other edges do not.
 
-    In all_entries they are LOAD-BEARING and are therefore always kept. A
-    genotype sharing no mutation with any other appears there ONLY as its own
-    self-edge, so dropping them deletes it from the graph outright -- on the
-    same fixture that is 3 of 5 genotypes, including the reference. If you want
-    a self-edge-free genotype network, take the node list from
-    {prefix}_genotypeNodes.csv, which is complete either way, and filter the
-    edges yourself knowing what it costs.
+    BUT NOT EVERY GENOTYPE HAS ONE. A genotype with no single-step neighbour
+    appears in this network ONLY as its own self-edge, so stripping self-edges
+    deletes it from the file outright. This docstring used to claim the
+    opposite -- "dropping them loses no node", generalised from the 10-row
+    annotation fixture, where it happens to hold. On the EV-A71 run it cost 69
+    of 300 genotypes, carrying 74 of 544 cells: exactly the isolated lineages
+    with no close relative, which are often the ones worth looking at.
+
+    The reasoning was already right for all_entries just below, where self-
+    edges are always kept because a genotype sharing no mutation with any
+    other appears there only as its own. The epistatic network has the same
+    problem on a WEAKER condition -- no single-step neighbour, rather than no
+    shared mutation -- so it bites more genotypes, not fewer.
+
+    So self_edges=False now drops a self-edge only where the genotype has
+    another edge to be reached by. Connected nodes stay uncluttered, isolated
+    ones stay in the file, and {prefix}_genotypeNodes.csv joins completely
+    against either network. Pass self_edges=True to keep every one, which is
+    what reproduces the R byte for byte.
 
     THE `count` COLUMN is the number of cells carrying that genotype, despite
     being computed the R's roundabout way as
@@ -298,8 +312,18 @@ def hap_network_gen(haplocounts: pd.DataFrame,
         # above re-points a 1-mutation self-step at "reference", which for the
         # reference genotype is itself). Omitting self_steps from the concat
         # would leave that second one behind.
+        loops = single_steps["genotype"] == single_steps["target"]
+
+        # A genotype is reachable if it appears on any edge that is NOT its own
+        # loop -- as either endpoint, since an edge annotates both nodes.
+        reachable = set(single_steps.loc[~loops, "genotype"]).union(
+            single_steps.loc[~loops, "target"])
+
+        # Drop a loop only where the node survives without it. Where it does
+        # not, the loop is the node's only row and dropping it deletes the
+        # genotype from the file rather than tidying it -- see the docstring.
         single_steps = single_steps[
-            single_steps["genotype"] != single_steps["target"]
+            ~loops | ~single_steps["genotype"].isin(reachable)
         ].reset_index(drop=True)
 
     # Rename the source-node column from "genotype" to "source" so Cytoscape
@@ -439,7 +463,8 @@ NODE_COLUMNS = ["genotype", "genotypeName", "nMutations", "nCells",
                 "genoFreq", "haploFreq"]
 
 
-def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
+def genotype_nodes(annotated: pd.DataFrame,
+                   edge_genotypes: Iterable[str] | None = None) -> pd.DataFrame:
     """One row per genotype: the NODE attributes for the network CSVs (pure).
 
     WHY THIS EXISTS. Both network files are entirely EDGE-level -- source,
@@ -457,11 +482,22 @@ def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
     what makes a rendered network readable -- and which is frame-correct and
     region-aware when annotate ran with a GFF, so a node can read "5UTR:A121C"
     rather than a bare nucleotide token.
-    """
-    if annotated.empty:
-        return pd.DataFrame(columns=NODE_COLUMNS)
 
+    `edge_genotypes` NAMES EVERY NODE THE EDGE TABLES REFER TO, and any that no
+    cell carries still gets a row here, with nCells 0.
+
+    That is not hypothetical bookkeeping. hap_network_gen re-points every
+    single-mutation self-step at "reference", so "reference" is an edge endpoint
+    whenever any cell carries exactly one mutation -- whether or not any cell IS
+    wild-type. Those are different conditions: on a passaged population with a
+    mutation fixed relative to the supplied genome, no cell is wild-type, yet
+    the hub every one-step edge points at is still "reference". Without this the
+    node table simply had no row for it, so Cytoscape drew the hub unlabelled
+    and unsized, and a node-table import silently skipped the one node the
+    layout is organised around.
+    """
     rows = []
+    seen: set = set()
     for genotype, group in annotated.groupby("genotype", dropna=False):
         name = group["genotypeName"].dropna()
         # Reference cells have no substitutions, so no amino-acid name; label the
@@ -475,6 +511,7 @@ def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
         # a different source.
         n_mutations = 0 if genotype == "reference" else len(str(genotype).split("_"))
 
+        seen.add(genotype)
         rows.append({
             "genotype": genotype,
             "genotypeName": label,
@@ -484,6 +521,27 @@ def genotype_nodes(annotated: pd.DataFrame) -> pd.DataFrame:
             "haploFreq": group["haploFreq"].iloc[0] if "haploFreq" in group else None,
         })
 
+    # Nodes the edges name that no cell carries -- see the note above. The
+    # frequencies are 0.0 rather than blank because they are counts over cells
+    # and the count really is zero; Cytoscape sizes on them, and a blank there
+    # renders as a missing value rather than a small node.
+    for genotype in (edge_genotypes or ()):
+        if genotype in seen or pd.isna(genotype):
+            continue
+        seen.add(genotype)
+        rows.append({
+            "genotype": genotype,
+            "genotypeName": ("reference" if genotype == "reference"
+                             else str(genotype)),
+            "nMutations": (0 if genotype == "reference"
+                           else len(str(genotype).split("_"))),
+            "nCells": 0,
+            "genoFreq": 0.0,
+            "haploFreq": 0.0,
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=NODE_COLUMNS)
     return (pd.DataFrame(rows, columns=NODE_COLUMNS)
             .sort_values(["nMutations", "genotype"]).reset_index(drop=True))
 
@@ -616,7 +674,16 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
 
         # Node attributes for the two edge tables above. Written with them
         # because it is only useful alongside them.
-        nodes = genotype_nodes(merged)
+        #
+        # The edges' own endpoints are passed in so a node the network refers to
+        # but no cell carries still gets a row -- "reference", when nothing is
+        # wild-type. Read defensively: an empty network can come back without
+        # these columns at all.
+        endpoints = [f[col] for f in (single_steps, all_entries)
+                     for col in ("source", "target") if col in f.columns]
+        edge_genotypes = (pd.unique(pd.concat(endpoints, ignore_index=True))
+                          if endpoints else [])
+        nodes = genotype_nodes(merged, edge_genotypes=edge_genotypes)
         nodes.to_csv(f"{out_prefix}_genotypeNodes.csv", index=False)
         written["nodes"] = f"{out_prefix}_genotypeNodes.csv"
 
