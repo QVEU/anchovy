@@ -1,0 +1,332 @@
+---
+title: "anchovy report: `r params$sample`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+    code_folding: hide
+params:
+  # Point this at a run by giving the directory the outputs live in and the
+  # sample prefix (the part before _annot_v3.csv etc.). Everything else is
+  # derived. Override at render time, e.g.:
+  #   rmarkdown::render("anchovy_report.Rmd",
+  #     params = list(results_dir = "results/EVA71", sample = "5_EVA71_6h_P5.ccs"))
+  results_dir: "."
+  sample: "5_EVA71_6h_P5.ccs"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 9, fig.height = 4.5, dpi = 110)
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(scales)
+
+theme_set(theme_minimal(base_size = 12) +
+          theme(panel.grid.minor = element_blank()))
+
+# --- Locate the output files -------------------------------------------------
+# Every panel guards on the file it needs, so a run that skipped a stage (no
+# GFF, no pileup counts) still renders -- the dependent sections just say so
+# rather than erroring.
+P <- function(suffix) file.path(params$results_dir,
+                                paste0(params$sample, suffix))
+
+paths <- list(
+  annot   = P("_annot_v3.csv"),
+  regions = P("_regionAnnotations.csv"),
+  nodes   = P("_genotypeNodes.csv"),
+  epi     = P("_epistaticNetwork.csv"),
+  geno    = P("_genotypeNetwork.csv"),
+  allele  = P("_alleleFrequencies.csv"),
+  cell    = P("_cellAlleleFreq.csv")
+)
+have <- function(key) file.exists(paths[[key]])
+
+# read_csv leaves the frequency columns numeric already, but some are written as
+# very long decimals; the pipeline also writes some numeric-looking fields that
+# arrive as character when a column is all-empty (e.g. `region` with no GFF).
+# Coerce defensively at the point of use rather than trusting the header sniff.
+num <- function(x) suppressWarnings(as.numeric(x))
+```
+
+```{r load}
+annot   <- if (have("annot"))   read_csv(paths$annot,   show_col_types = FALSE) else NULL
+regions <- if (have("regions")) read_csv(paths$regions, show_col_types = FALSE) else NULL
+nodes   <- if (have("nodes"))   read_csv(paths$nodes,   show_col_types = FALSE) else NULL
+epi     <- if (have("epi"))     read_csv(paths$epi,     show_col_types = FALSE) else NULL
+allele  <- if (have("allele"))  read_csv(paths$allele,  show_col_types = FALSE) else NULL
+cellfrq <- if (have("cell"))    read_csv(paths$cell,    show_col_types = FALSE) else NULL
+
+# DEPTH -- the number of cells the whole analysis rests on. `total` in the annot
+# table is that count (it is constant down the column).
+depth <- if (!is.null(annot)) suppressWarnings(max(annot$total, na.rm = TRUE)) else NA
+```
+
+This report summarizes one `anchovy` run: sample **`r params$sample`**, from
+`r params$results_dir`. It has two parts. **Quality control** describes the
+cell population the results rest on -- how many cells, how well covered, how the
+genotype subset compares to the whole. **Results** describes what was found --
+where the mutations are, what they do to the protein, and how the genotypes
+relate.
+
+```{r overview}
+files_present <- vapply(names(paths), have, logical(1))
+tibble::tibble(output = names(paths),
+               file = basename(unlist(paths)),
+               present = ifelse(files_present, "yes", "— not in this run")) |>
+  knitr::kable(caption = "Outputs found for this run")
+```
+
+# Quality control
+
+## How many cells, and how many carried variants
+
+```{r qc-cellcount, fig.height=3}
+if (is.null(annot)) {
+  cat("_No annotation table; cannot summarize the cell population._")
+} else {
+  per_cell <- annot |>
+    distinct(CBC_ID, genotype) |>
+    mutate(kind = ifelse(genotype == "reference" | is.na(genotype) | genotype == "",
+                         "reference (no called variants)", "carries variants"))
+  per_cell |>
+    count(kind) |>
+    ggplot(aes(n, kind, fill = kind)) +
+    geom_col(width = 0.6, show.legend = FALSE) +
+    geom_text(aes(label = comma(n)), hjust = -0.1) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+    labs(x = "cells", y = NULL,
+         title = sprintf("%s cells passed filtering", comma(depth)))
+}
+```
+
+`r if (!is.null(annot)) sprintf("Of %s cells, %s carried at least one called variant.", comma(depth), comma(sum(annot |> distinct(CBC_ID, genotype) |> pull(genotype) |> (\\(g) g != "reference" & !is.na(g) & g != "")())))`
+
+## Mutation load per cell
+
+How many mutations each cell carries. A long right tail can signal artifacts
+(the annotate stage drops cells above `max_mutations_per_cell`); a spike at zero
+is the reference population above.
+
+```{r qc-mutload, fig.height=3.2}
+if (is.null(annot)) {
+  cat("_No annotation table._")
+} else {
+  load_per_cell <- annot |>
+    distinct(CBC_ID, genotype) |>
+    mutate(n_mut = ifelse(genotype == "reference" | is.na(genotype) | genotype == "",
+                          0L, lengths(strsplit(genotype, "_"))))
+  ggplot(load_per_cell, aes(n_mut)) +
+    geom_bar(fill = "steelblue") +
+    scale_x_continuous(breaks = pretty_breaks()) +
+    labs(x = "called mutations in the cell", y = "cells",
+         title = "Mutation load per cell")
+}
+```
+
+## Is the genotype subset representative?
+
+The genotype network is built from a strict, well-covered subset of cells; the
+allele-frequency table reports the whole population. If the subset is biased,
+its per-allele frequencies will pull away from the full population's. Points on
+the diagonal mean the subset represents the whole; systematic departure is worth
+knowing before trusting the network as a population summary.
+
+```{r qc-subset, fig.height=4.5}
+if (is.null(allele) || !all(c("freq_cells","freq_cells_subset") %in% names(allele))) {
+  cat("_No allele-frequency table with subset columns; skipping._")
+} else {
+  d <- allele |>
+    transmute(full = num(freq_cells), subset = num(freq_cells_subset)) |>
+    filter(is.finite(full), is.finite(subset))
+  if (nrow(d) == 0) {
+    cat("_No overlapping alleles between subset and full population._")
+  } else {
+    ggplot(d, aes(full, subset)) +
+      geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey60") +
+      geom_point(alpha = 0.4, colour = "steelblue") +
+      coord_equal() +
+      labs(x = "frequency in all cells", y = "frequency in the genotype subset",
+           title = "Genotype subset vs. full population, per allele")
+  }
+}
+```
+
+# Results
+
+## Where the mutations are
+
+Every called allele laid out along the genome, colored by whether it changes the
+protein. Height is the fraction of cells carrying it (one cell, one vote). A tall
+point is a mutation that swept much of the population; the carpet of low points
+is the standing diversity. Region bands come from the GFF, if one was used.
+
+```{r results-genomemap, fig.height=4.5}
+if (is.null(allele)) {
+  cat("_No allele-frequency table; skipping the genome map._")
+} else {
+  d <- allele |>
+    mutate(position = num(position), freq_cells = num(freq_cells)) |>
+    filter(is.finite(position), is.finite(freq_cells))
+
+  # Classify syn/non-syn from the region annotation if present; the allele table
+  # itself does not carry sub_class, so join it in by genome position + allele.
+  if (!is.null(regions)) {
+    cls <- regions |>
+      filter(region_type == "coding") |>
+      transmute(position = genome_pos, allele = mut_base,
+                sub_class = sub_class) |>
+      distinct(position, allele, .keep_all = TRUE)
+    d <- d |> left_join(cls, by = c("position", "allele")) |>
+      mutate(sub_class = ifelse(is.na(sub_class), "non-coding / unannotated", sub_class))
+  } else {
+    d$sub_class <- "unclassified (no GFF)"
+  }
+
+  pal <- c("Non-Syn" = "#d1495b", "Syn" = "#66a182",
+           "non-coding / unannotated" = "grey55",
+           "unclassified (no GFF)" = "grey55", "X" = "grey80")
+  ggplot(d, aes(position, freq_cells, colour = sub_class)) +
+    geom_point(alpha = 0.7, size = 1.6) +
+    scale_colour_manual(values = pal, name = NULL) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    labs(x = "genome position (nt)", y = "fraction of cells",
+         title = "Allele frequency across the genome") +
+    theme(legend.position = "top")
+}
+```
+
+## Synonymous vs. non-synonymous
+
+The balance of protein-changing to silent mutations, overall and per region.
+A region skewed toward non-synonymous changes is under different selective
+pressure than one that is mostly silent.
+
+```{r results-dnds, fig.height=4}
+if (is.null(regions)) {
+  cat("_No region annotations (no GFF used); skipping syn/non-syn breakdown._")
+} else {
+  d <- regions |>
+    filter(region_type == "coding", sub_class %in% c("Syn", "Non-Syn")) |>
+    # count each distinct genomic mutation once per region it falls in
+    distinct(region, genome_pos, mut_base, sub_class)
+  if (nrow(d) == 0) {
+    cat("_No coding syn/non-syn calls to summarize._")
+  } else {
+    d |>
+      count(region, sub_class) |>
+      ggplot(aes(n, reorder(region, n, sum), fill = sub_class)) +
+      geom_col() +
+      scale_fill_manual(values = c("Non-Syn" = "#d1495b", "Syn" = "#66a182"),
+                        name = NULL) +
+      labs(x = "distinct mutations", y = NULL,
+           title = "Coding mutations by region") +
+      theme(legend.position = "top")
+  }
+}
+```
+
+## Genotype network
+
+Each node is a genotype; size is how many cells carry it, colour is how many
+mutations it carries. Edges connect genotypes differing by a single mutation
+(the epistatic network) -- the paths the population actually took through
+sequence space. Only the connected part is drawn; singletons with no single-step
+neighbour are omitted for legibility (they remain in `genotypeNodes.csv`).
+
+```{r results-network, fig.height=6.5, fig.width=9}
+have_graph <- requireNamespace("igraph", quietly = TRUE) &&
+              requireNamespace("ggraph", quietly = TRUE)
+
+if (is.null(epi) || is.null(nodes)) {
+  cat("_Network or node table missing; skipping._")
+} else if (!have_graph) {
+  cat("_Packages `igraph` and `ggraph` are not installed. Add them with:_\n\n",
+      "```\nconda install -c conda-forge r-igraph r-ggraph\n```\n\n",
+      "_Meanwhile the network CSVs open directly in Cytoscape (see the README)._")
+} else {
+  library(igraph); library(ggraph)
+
+  edges <- epi |>
+    filter(source != target, target != "reference") |>
+    distinct(source, target)
+
+  if (nrow(edges) == 0) {
+    cat("_No genotype-to-genotype single-step edges in this run._")
+  } else {
+    g <- graph_from_data_frame(edges, directed = FALSE,
+                               vertices = NULL)
+    # attach node attributes where we have them
+    nd <- nodes |> filter(genotype %in% V(g)$name)
+    idx <- match(V(g)$name, nd$genotype)
+    V(g)$nCells     <- nd$nCells[idx]
+    V(g)$nMutations <- nd$nMutations[idx]
+    V(g)$nCells[is.na(V(g)$nCells)] <- 1
+    V(g)$nMutations[is.na(V(g)$nMutations)] <- 0
+
+    ggraph(g, layout = "fr") +
+      geom_edge_link(alpha = 0.25) +
+      geom_node_point(aes(size = nCells, colour = nMutations)) +
+      scale_size_continuous(range = c(1.5, 8), name = "cells") +
+      scale_colour_viridis_c(name = "mutations") +
+      labs(title = "Genotype network (single-step edges)") +
+      theme_void(base_size = 12) +
+      theme(legend.position = "right")
+  }
+}
+```
+
+## The most common genotypes
+
+The genotypes carried by the most cells, with their amino-acid-level names.
+A mutation appearing in nearly every genotype is one that had already swept the
+population when it was sampled.
+
+```{r results-topgeno}
+if (is.null(nodes)) {
+  cat("_No node table._")
+} else {
+  nodes |>
+    mutate(nCells = num(nCells), genoFreq = num(genoFreq)) |>
+    arrange(desc(nCells)) |>
+    slice_head(n = 15) |>
+    transmute(genotype = genotypeName, mutations = nMutations,
+              cells = nCells, `freq` = percent(genoFreq, accuracy = 0.1)) |>
+    knitr::kable(caption = "Top 15 genotypes by cell count")
+}
+```
+
+## Within-cell allele frequencies
+
+Where the pileup counts were produced (`sam2consensus --counts`), this shows
+alleles present at intermediate frequency *within* individual cells -- candidate
+mixed infections or within-cell diversity, as opposed to differences between
+cells. Most calls sit near 1.0 (the cell's consensus base); a spread below that
+is the within-cell signal.
+
+```{r results-withincell, fig.height=3.5}
+if (is.null(cellfrq)) {
+  cat("_No per-cell allele table (run `anchovy frequencies --counts-dir` to produce it)._")
+} else {
+  cellfrq |>
+    mutate(freq = num(freq)) |>
+    filter(is.finite(freq)) |>
+    ggplot(aes(freq)) +
+    geom_histogram(bins = 40, fill = "steelblue") +
+    scale_x_continuous(labels = percent_format(accuracy = 1)) +
+    labs(x = "within-cell allele frequency", y = "allele observations",
+         title = "Within-cell allele frequency spectrum")
+}
+```
+
+---
+
+```{r sessioninfo}
+cat("Rendered", format(Sys.time(), "%Y-%m-%d %H:%M"),
+    "\nanchovy report for", params$sample)
+```
