@@ -288,3 +288,121 @@ def test_assign_worker_reads_its_state_from_the_initializer(tmp_path):
     assert result[0] == "AAACCCAAGAAACACT"   # CBC
     assert result[7] == "read0"               # read id
     assert isinstance(np.int64(result[1]), np.integer) or isinstance(result[1], int)
+
+
+# --------------------------------------------------------------------------- #
+# read_sam: one streaming pass, memory bounded by survivors
+# --------------------------------------------------------------------------- #
+# read_sam had no direct test -- the extract golden covered it only end to end.
+# These pin the properties the streaming rewrite had to preserve.
+SAM_HEADER = "@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:ref\tLN:1000\n"
+
+
+def _sam(tmp_path, name, records, read_len=80):
+    """Write a small SAM. Each record is (qname, flag, rname, cigar)."""
+    seq, qual = "ACGT" * (read_len // 4), "I" * read_len
+    lines = [SAM_HEADER]
+    for qname, flag, rname, cigar in records:
+        lines.append(f"{qname}\t{flag}\t{rname}\t1\t60\t{cigar}\t*\t0\t0\t"
+                     f"{seq}\t{qual}\tNM:i:0\n")
+    path = tmp_path / name
+    path.write_text("".join(lines))
+    return path
+
+
+def test_read_sam_drops_unmapped_and_short(tmp_path, capsys):
+    """Survivors are RNAME != '*' then length > min, in that order."""
+    from anchovy.io import read_sam
+
+    path = _sam(tmp_path, "mixed.sam", [
+        ("keep1", 0, "ref", "80M"),
+        ("unmapped", 4, "*", "*"),
+        ("keep2", 0, "ref", "80M"),
+    ])
+    df = read_sam(str(path), 10)
+    assert list(df["read"]) == ["keep1", "keep2"]
+
+    # Every record is still counted, including the ones dropped.
+    assert "Total Candidate Reads: 3" in capsys.readouterr().out
+
+    # The length filter is strictly greater-than, as the original was.
+    assert read_sam(str(path), 80).empty
+    assert len(read_sam(str(path), 79)) == 2
+
+
+def test_read_sam_keeps_sam_fields_as_strings(tmp_path):
+    """Fields stay text, as the old split-based parse produced them.
+
+    pysam exposes FLAG and POS as ints. Taking those natively would change the
+    frame's dtypes without changing any value -- the kind of divergence that
+    looks correct and breaks a downstream comparison.
+    """
+    from anchovy.io import read_sam
+    from anchovy.schema import SamColumns
+
+    df = read_sam(str(_sam(tmp_path, "types.sam", [("r", 0, "ref", "80M")])), 10)
+
+    assert list(df.columns)[:len(SamColumns.ORDER)] == SamColumns.ORDER
+    for column in SamColumns.ORDER:
+        assert pd.api.types.is_string_dtype(df[column]), \
+            f"{column} should stay text, got {df[column].dtype}"
+        assert isinstance(df[column].iloc[0], str)
+    # The two that pysam would hand back as ints if taken natively.
+    assert df[SamColumns.FLAG].iloc[0] == "0"
+    assert df[SamColumns.POS].iloc[0] == "1"
+    for derived in (SamColumns.READ_LEN, SamColumns.CLIP_READ_LEN,
+                    SamColumns.OFFSET, SamColumns.LENGTH):
+        assert derived in df.columns
+
+
+def test_read_sam_handles_an_unmapped_read_carrying_a_reference(tmp_path):
+    """FLAG 4 with an RNAME set: legal SAM, and it used to abort the run.
+
+    The old two passes disagreed here -- the text pass kept the row on
+    RNAME != '*', the pysam pass dropped it on is_unmapped -- and zipping the
+    two raised `ValueError: Length of values (N) does not match length of
+    index (M)`. One pass cannot disagree with itself.
+    """
+    from anchovy.io import read_sam
+
+    path = _sam(tmp_path, "placed.sam", [
+        ("mapped", 0, "ref", "80M"),
+        ("placed_unmapped", 4, "ref", "80M"),
+    ])
+    df = read_sam(str(path), 10)
+    assert list(df["read"]) == ["mapped", "placed_unmapped"]
+
+
+def test_read_sam_memory_scales_with_survivors_not_file_size(tmp_path):
+    """The point of the rewrite: rejected reads are never retained.
+
+    The old version listed every non-header line before filtering anything, so
+    peak memory tracked the whole file. This asserts the shape of the fix --
+    a file that is almost entirely rejects costs little more than its few
+    survivors.
+    """
+    import tracemalloc
+
+    from anchovy.io import read_sam
+
+    survivors = [(f"keep{i}", 0, "ref", "400M") for i in range(20)]
+    rejects = [(f"drop{i}", 4, "*", "*") for i in range(2000)]
+
+    mostly_rejects = _sam(tmp_path, "rejects.sam", survivors + rejects,
+                          read_len=400)
+    just_survivors = _sam(tmp_path, "survivors.sam", survivors, read_len=400)
+
+    assert mostly_rejects.stat().st_size > just_survivors.stat().st_size * 20
+
+    def peak(path):
+        tracemalloc.start()
+        read_sam(str(path), 10)
+        _, high = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        return high
+
+    big, small = peak(mostly_rejects), peak(just_survivors)
+    assert big < small * 3, (
+        f"a file that is 99% rejects peaked at {big/1e6:.1f} MB against "
+        f"{small/1e6:.1f} MB for its survivors alone -- rejected reads are "
+        f"being retained again")
