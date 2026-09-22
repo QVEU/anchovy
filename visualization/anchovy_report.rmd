@@ -105,7 +105,7 @@ if (is.null(annot)) {
 }
 ```
 
-`r if (!is.null(annot)) sprintf("Of %s cells, %s carried at least one called variant.", comma(depth), comma(sum(annot |> distinct(CBC_ID, genotype) |> pull(genotype) |> (\\(g) g != "reference" & !is.na(g) & g != "")())))`
+`r if (!is.null(annot)) sprintf("Of %s cells, %s carried at least one called variant.", comma(depth), comma(sum(annot |> distinct(CBC_ID, genotype) |> pull(genotype) |> (\(g) g != "reference" & !is.na(g) & g != "")())))`
 
 ## Mutation load per cell
 
