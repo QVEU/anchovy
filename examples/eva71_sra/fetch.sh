@@ -48,10 +48,12 @@ WHITELIST="${WHITELIST:-}"
 WHITELIST_URL="${WHITELIST_URL:-https://raw.githubusercontent.com/10XGenomics/supernova/refs/heads/master/tenkit/lib/python/tenkit/barcodes/737K-august-2016.txt}"
 WHITELIST_EXPECTED_BARCODES="${WHITELIST_EXPECTED_BARCODES:-737280}"
 
-# Output name. Defaults to the FASTQ's basename, or the accession.
+# Output name. Defaults to the FASTQ's basename, or the accession. The
+# derivation lives in sample_name.sh because run_cluster.sh needs the SAME
+# answer to tell the workflow which SAM to read -- see the note there.
+. "$(dirname "${BASH_SOURCE[0]}")/sample_name.sh"
 if [ -n "$FASTQ" ]; then
-    _base=$(basename "$FASTQ"); _base="${_base%.gz}"
-    SAMPLE="${SAMPLE:-${_base%.fastq}}"; SAMPLE="${SAMPLE%.fq}"
+    SAMPLE="${SAMPLE:-$(sample_name_from_fastq "$FASTQ")}"
 else
     SAMPLE="${SAMPLE:-$SRR}"
 fi
