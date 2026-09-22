@@ -29,14 +29,25 @@
 # by --group-components gives the number of SLURM submissions if you submit.
 
 # --- paths ---------------------------------------------------------------- #
-# Reads are taken from {data_dir}/{sample}.sam. fetch.sh derives this name from
-# the FASTQ's basename; run it with SAMPLE=5_EVA71_6h_P5 to drop the .ccs.
+# Reads are taken from {data_dir}/{sample}.sam.
+#
+# THIS VALUE IS A DEFAULT, not the last word: run_cluster.sh derives the sample
+# name from READS and passes `--config sample=...`, which overrides what is
+# written here. That is deliberate -- fetch.sh names the SAM after the FASTQ,
+# so a config pinned to one sample would send the workflow to a DIFFERENT SAM
+# than the one just mapped, find the previous run's still sitting in data_dir,
+# and report it up to date without failing.
+#
+# Running snakemake BY HAND (the commands in the header above) does not get
+# that override, so edit this key to match the sample you mean -- or pass
+# `--config sample=<name>` yourself.
 sample: "5_EVA71_6h_P5.ccs"
 
 # Where the reads came from. Not read by the workflow -- its input is the SAM
 # that fetch.sh maps from here -- but recorded so the provenance of a results
 # directory is answerable from the config that produced it. run_cluster.sh maps
-# straight from this path; the FASTQ is never copied or staged.
+# straight from this path and overrides this key too, so the record follows the
+# run rather than whatever was last edited here.
 reads: "/data/lvd_qve/Sequencing_Data/QVEU_Seq_0065_PacBio_NDAS_SearchSeq-EVA71Passage/Analysis_r54242Ue_20230322_183435_8_H01/Sample_5_EVA71_6h_P5/5_EVA71_6h_P5.ccs.fastq"
 data_dir: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run"
 

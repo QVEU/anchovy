@@ -28,6 +28,19 @@ THREADS="${THREADS:-64}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"                    # results/ is relative; anchor it to the repo
 
+# THE SAMPLE NAME FOLLOWS THE READS, and has to be handed to BOTH halves of the
+# run. fetch.sh names the SAM it writes after the FASTQ; the workflow reads
+# `sample` from the config. Left to themselves those disagree the moment READS
+# is not the default -- fetch.sh maps the new FASTQ, the workflow reads the
+# PREVIOUS sample's SAM still sitting in data_dir, and reports it up to date.
+# Nothing fails: the mapping is simply discarded and the results are the old
+# sample's under the new sample's name.
+#
+# So derive it once here, pass it down to fetch.sh, and override the config key
+# on the snakemake command line. Set SAMPLE to name it yourself.
+. "$REPO/examples/eva71_sra/sample_name.sh"
+SAMPLE="${SAMPLE:-$(sample_name_from_fastq "$READS")}"
+
 [ -f "$READS" ] || {
     printf '\nerror: reads not found: %s\n' "$READS" >&2
     printf '  Set READS=/path/to/reads.fastq\n' >&2
@@ -61,17 +74,25 @@ fi
 printf '\n\033[1m==> Inputs\033[0m\n'
 printf '    reads   %s\n' "$READS"
 printf '    data    %s\n' "$DATA_DIR"
+printf '    sample  %s\n' "$SAMPLE"
 printf '    config  %s\n' "$CONFIG"
 printf '    threads %s\n\n' "$THREADS"
 
-FASTQ="$READS" DATA_DIR="$DATA_DIR" THREADS="$THREADS" \
+FASTQ="$READS" DATA_DIR="$DATA_DIR" THREADS="$THREADS" SAMPLE="$SAMPLE" \
     bash examples/eva71_sra/fetch.sh
 
 printf '\n\033[1m==> Workflow\033[0m\n'
+# --config OVERRIDES the configfile, so `sample` follows READS rather than
+# whatever the config was last edited to say. `reads` is provenance only (the
+# workflow never reads it), but a stale value there is a trap for anyone asking
+# later what produced a results directory, so it is overridden too.
+SM=(snakemake -s workflow/Snakefile --configfile "$CONFIG" --cores "$THREADS"
+    --config sample="$SAMPLE" reads="$READS")
+
 if [ -n "${DRY_RUN:-}" ]; then
-    snakemake -s workflow/Snakefile --configfile "$CONFIG" --cores "$THREADS" -n
+    "${SM[@]}" -n
 else
-    snakemake -s workflow/Snakefile --configfile "$CONFIG" --cores "$THREADS" -n
+    "${SM[@]}" -n
     printf '\n    plan above; running it now\n\n'
-    snakemake -s workflow/Snakefile --configfile "$CONFIG" --cores "$THREADS"
+    "${SM[@]}"
 fi
