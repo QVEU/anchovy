@@ -125,25 +125,28 @@ chemistry: "v3"                     # v2 or v3 -- sets the barcode signature AND
                                     # the whitelist, which have to agree
 ```
 
-That is the whole required set. Three things it no longer asks for, because
-each was a way to get a run subtly wrong:
-
-- **the sample name** — taken from each FASTQ's own filename;
-- **`reference_name`** — read from the reference FASTA's header;
-- **the barcode whitelist** — downloaded once per chemistry into `resources/`,
-  with its barcode count verified before anything uses it.
-
-The v3 whitelist is the one exception: 10X does not publish it anywhere
-fetchable, so `chemistry: "v3"` needs `whitelist:` pointing at the copy in your
-Cell Ranger install, or `whitelist_url:` for a mirror. The error says so.
+That is the whole required set. The sample names come from the FASTQ filenames,
+the reference name is read from the FASTA header, and the barcode whitelist is
+downloaded for you — matched to `chemistry` and checked against its expected
+barcode count before anything uses it.
 
 Optional settings — analysis window, depth and breadth filters, allele
 frequencies — are documented in `workflow/config.yaml`.
 
-Then run with your file instead of the example:
+Plan the run first, then do it:
 
 ```bash
+snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 8 -n
 snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 8
+```
+
+`-n` is a dry run: it lists the jobs and the samples it found without doing any
+work, which is the quickest way to catch a wrong `input_dir`. On a cluster node
+with more cores, raise `--cores` to match:
+
+```bash
+snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64 -n
+snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64
 ```
 
 ### If you already have per-cell sequence files

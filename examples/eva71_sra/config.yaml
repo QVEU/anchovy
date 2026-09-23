@@ -8,8 +8,7 @@
 
 # --- Input ------------------------------------------------------------------ #
 # The folder fetch.sh downloads into. The workflow finds the FASTQ there and
-# maps it itself -- fetch.sh no longer produces a SAM, because mapping is a
-# pipeline stage now. Drop another FASTQ in and it runs too.
+# maps it itself. Drop another FASTQ in and it runs too.
 input_dir: "examples/eva71_sra/data"
 
 # --- 10X chemistry ----------------------------------------------------------- #

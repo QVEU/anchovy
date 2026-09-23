@@ -88,15 +88,27 @@ parse_consensus_headers <- function(path) {
   )
 }
 
-# Reference length taken from the first record's own sequence, so it is exact
-# and needs no extra input. Sums the block in case the FASTA is wrapped.
+# Reference length, taken from the consensuses themselves so it needs no extra
+# input. Sums each record's block, in case the FASTA is wrapped.
+#
+# THE MODAL LENGTH, NOT THE FIRST RECORD'S. sam2consensus emits a called
+# insertion as an extra column, so a record carrying one is LONGER than the
+# reference -- and if that record happens to be first, using it as the
+# denominator understates every cell's breadth. On this dataset about 4% of
+# cells were insertion-bearing, so it is a live possibility rather than a
+# theoretical one. The population's most common length is the reference.
 consensus_ref_length <- function(path) {
   ln <- readLines(path, warn = FALSE)
   hi <- which(startsWith(ln, ">"))
   if (!length(hi)) return(NA_real_)
-  stop_at <- if (length(hi) > 1) hi[2] - 1L else length(ln)
-  if (stop_at <= hi[1]) return(NA_real_)
-  sum(nchar(ln[(hi[1] + 1L):stop_at]))
+  ends <- c(hi[-1] - 1L, length(ln))
+  lens <- vapply(seq_along(hi), function(i) {
+    if (ends[i] <= hi[i]) return(0)
+    as.numeric(sum(nchar(ln[(hi[i] + 1L):ends[i]])))
+  }, numeric(1))
+  lens <- lens[lens > 0]
+  if (!length(lens)) return(NA_real_)
+  as.numeric(names(sort(table(lens), decreasing = TRUE))[1])
 }
 
 covstats   <- if (have("cons")) parse_consensus_headers(paths$cons) else NULL
@@ -157,7 +169,10 @@ if (is.null(covstats) || !nrow(covstats) || is.na(genome_len)) {
   ggplot(b, aes(breadth)) +
     geom_histogram(bins = 50, fill = "darkseagreen4") +
     geom_vline(xintercept = med, linetype = "dashed", colour = "grey30") +
-    scale_x_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
+    # No hard 0-1 limit: an insertion-bearing record can call more positions
+    # than the modal reference length, and ggplot drops out-of-limit points
+    # silently -- losing cells from the panel that exists to count them.
+    scale_x_continuous(labels = percent_format(accuracy = 1)) +
     labs(x = "fraction of the reference the cell called", y = "cells",
          title = sprintf("Per-cell breadth (reference %s nt, median %.0f%%)",
                          comma(genome_len), 100 * med))

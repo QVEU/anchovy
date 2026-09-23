@@ -89,13 +89,18 @@ CHEMISTRIES = {
         "ns": 28,            # 16 nt barcode + 12 nt UMI
         "whitelist": "3M-february-2018.txt",
         "barcodes": 6794880,
-        # NO DEFAULT URL. 10X does not publish this one anywhere that could be
-        # verified as fetchable, unlike the v2 file above, and shipping a URL
-        # that 404s at run time is worse than asking for it. Set `whitelist` to
-        # the copy in your Cell Ranger install
-        # (cellranger-x.y.z/lib/python/cellranger/barcodes/3M-february-2018.txt.gz,
-        # gunzipped), or `whitelist_url` if you have a mirror.
-        "url": None,
+        # 10X does not host this one itself; this is the copy published with
+        # scg_lib_structs. Served gzipped, which get_whitelist handles.
+        #
+        # The barcode count below is the check that matters here: it is the
+        # figure for 3M-february-2018.txt, and if this mirror ever serves
+        # something else the rule fails naming the count it got rather than
+        # letting a wrong whitelist through. Set `whitelist_barcodes` to
+        # override the expected figure, or `whitelist` to use a local copy --
+        # Cell Ranger ships one at
+        # cellranger-x.y.z/lib/python/cellranger/barcodes/3M-february-2018.txt.gz
+        "url": ("https://teichlab.github.io/scg_lib_structs/data/"
+                "10X-Genomics/3M-february-2018.txt.gz"),
     },
 }
 
@@ -356,7 +361,7 @@ rule get_whitelist:
         RESOURCES + "/" + CHEM["whitelist"],
     params:
         url=WHITELIST_URL or "",
-        expected=CHEM["barcodes"],
+        expected=config.get("whitelist_barcodes", CHEM["barcodes"]),
         chemistry=CHEMISTRY,
     shell:
         r"""
@@ -375,6 +380,7 @@ rule get_whitelist:
             echo "       Left at {output}.part. A wrong or truncated whitelist does not fail the" >&2
             echo "       run -- it silently assigns every read to a nearest entry in the wrong" >&2
             echo "       list -- so it is rejected here instead." >&2
+            echo "       If the file IS right and the expected figure is not, set whitelist_barcodes." >&2
             exit 1
         fi
         mv "{output}.part" "{output}"
@@ -710,17 +716,35 @@ rule report:
     output:
         html=REPORT,
     params:
-        results_dir=RESULTS,
+        # ABSOLUTE PATHS, RESOLVED HERE RATHER THAN IN R.
+        #
+        # rmarkdown::render() setwd()s to the Rmd's own directory early on, and
+        # R evaluates arguments lazily -- so a relative path written into the
+        # render() call is resolved AFTER that setwd, against visualization/
+        # instead of the run directory. It fails with "the directory does not
+        # exist" naming a directory that is sitting right there, which reads
+        # like a missing output rather than a resolution bug.
+        #
+        # Resolving them in the rule removes R's evaluation order from the
+        # question entirely: by the time Rscript starts, every path is already
+        # absolute and no longer depends on where anything thinks it is.
+        results_dir=lambda w: os.path.abspath(f"results/{w.sample}"),
+        html=lambda w: os.path.abspath(
+            f"results/{w.sample}/{w.sample}_report.html"),
+        tmp=lambda w: os.path.abspath(
+            f"results/{w.sample}/.report_intermediates"),
+        rmd=lambda w: os.path.abspath(REPORT_RMD),
+        # knit_root_dir keeps chunk-relative paths meaning what they mean
+        # everywhere else in the workflow: relative to the run directory.
+        rundir=os.path.abspath("."),
         sample=SAMPLE,
-        tmp=RESULTS + "/.report_intermediates",
     shell:
         "mkdir -p {params.tmp} && "
         "Rscript -e 'rmarkdown::render("
-        "\"{input.rmd}\", "
-        "output_file = file.path(normalizePath(\"{params.results_dir}\"), "
-        "\"{params.sample}_report.html\"), "
+        "\"{params.rmd}\", "
+        "output_file = \"{params.html}\", "
         "intermediates_dir = \"{params.tmp}\", "
-        "knit_root_dir = getwd(), "
-        "params = list(results_dir = normalizePath(\"{params.results_dir}\"), "
+        "knit_root_dir = \"{params.rundir}\", "
+        "params = list(results_dir = \"{params.results_dir}\", "
         "sample = \"{params.sample}\"), "
         "quiet = TRUE)'"

@@ -8,10 +8,8 @@
 #       --cores 64
 #
 # The workflow reads every FASTQ in `input_dir`, maps it, runs it through to the
-# rendered report, and names the outputs after it. Mapping used to be done by
-# examples/eva71_sra/fetch.sh and the run driven by run_cluster.sh; both are
-# gone -- fetch.sh now only downloads the public example data, and there is
-# nothing to drive.
+# rendered report, and names the outputs after it. Nothing else to run:
+# examples/eva71_sra/fetch.sh only downloads the public example data.
 #
 # The -n first: the map_cell count is the surviving barcode count across all
 # samples, and dividing by --group-components gives the number of SLURM
@@ -31,9 +29,8 @@
 # results/.
 input_dir: "/data/lvd_qve/Sequencing_Data/QVEU_Seq_0065_PacBio_NDAS_SearchSeq-EVA71Passage/Analysis_r54242Ue_20230322_183435_8_H01/Sample_5_EVA71_6h_P5"
 
-# Genome the reads are mapped to. `reference_name` is no longer a key -- it is
-# read from this file's own FASTA header, since retyping it only invited a
-# mismatch that surfaced as missing files deep in the per-cell scatter.
+# Genome the reads are mapped to. The reference NAME is read from this file's
+# own FASTA header, so there is no second key to keep in sync with it.
 template: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run/AF304458.fasta"
 
 # Call genotypes against the genome, not the consensus across cells. Unset,
