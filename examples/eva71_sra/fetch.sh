@@ -4,7 +4,9 @@
 #
 # Gets reads (local file or SRA download), a reference genome, and a region
 # GFF3 derived from that reference's GenBank record, then maps the reads.
-# Output is {DATA_DIR}/{SAMPLE}.sam, the input to workflow/Snakefile.
+# Output is the FASTQ, reference and GFF3 in {DATA_DIR}. Point a config's
+# `input_dir` at that directory and the workflow does the rest -- mapping is
+# a pipeline stage now, not something a script prepares beforehand.
 #
 #   # your own reads:
 #   FASTQ=/path/to/reads.fastq bash examples/eva71_sra/fetch.sh
@@ -36,27 +38,19 @@ REFERENCE_ACC="${REFERENCE_ACC:-AF304458}"
 # what it moved. Set to empty to skip.
 MATPEP_DONOR_ACC="${MATPEP_DONOR_ACC:-NC_001612}"
 
-# minimap2 preset. map-hifi for PacBio (incl. .ccs), map-ont for Nanopore.
-# The wrong preset does not fail; it silently costs alignments.
-MINIMAP_PRESET="${MINIMAP_PRESET:-map-hifi}"
-
-# 10X v2 barcode whitelist, downloaded if unset. Matches the 26-base signature
-# in config.yaml (16 nt barcode + 10 nt UMI). v3 needs 28 Ns and the
-# 3M-february-2018.txt whitelist -- both chemistries use 16 nt barcodes, so
-# entry count, not barcode length, is what tells them apart.
+# 10X v2 barcode whitelist. THE WORKFLOW ALSO FETCHES THIS, keyed on
+# `chemistry`, so downloading it here is belt and braces for anyone poking at
+# the data by hand -- a config that sets `chemistry: "v2"` needs nothing from
+# this step. Entry count, not barcode length, is what tells v2 from v3: both
+# use 16 nt barcodes.
 WHITELIST="${WHITELIST:-}"
 WHITELIST_URL="${WHITELIST_URL:-https://raw.githubusercontent.com/10XGenomics/supernova/refs/heads/master/tenkit/lib/python/tenkit/barcodes/737K-august-2016.txt}"
 WHITELIST_EXPECTED_BARCODES="${WHITELIST_EXPECTED_BARCODES:-737280}"
 
-# Output name. Defaults to the FASTQ's basename, or the accession. The
-# derivation lives in sample_name.sh because run_cluster.sh needs the SAME
-# answer to tell the workflow which SAM to read -- see the note there.
-. "$(dirname "${BASH_SOURCE[0]}")/sample_name.sh"
-if [ -n "$FASTQ" ]; then
-    SAMPLE="${SAMPLE:-$(sample_name_from_fastq "$FASTQ")}"
-else
-    SAMPLE="${SAMPLE:-$SRR}"
-fi
+# NO SAMPLE NAME IS SET HERE. The workflow derives it from the FASTQ's own
+# basename, so whatever this script leaves in DATA_DIR is what the run is
+# called. That used to be two definitions -- this script's and the config's --
+# which disagreed the moment you pointed it at different reads.
 
 # Defaults INSIDE the repo, which suits the example and not a real run: the
 # reference, whitelist and the mapped SAM all land here, so deleting or
@@ -77,7 +71,6 @@ need() { command -v "$1" >/dev/null 2>&1 || die "'$1' not found. $2"; }
 uncat() { case "$1" in *.gz) zcat "$1";; *) cat "$1";; esac; }
 
 say "Checking prerequisites"
-need minimap2 "It is in environment.yml; did you 'conda activate anchovy'?"
 need curl     "Required to download the reference."
 need python   "Run this inside the anchovy conda environment."
 
@@ -99,11 +92,10 @@ mkdir -p "$DATA_DIR"
 REF_FA="$DATA_DIR/${REFERENCE_ACC}.fasta"
 REF_GB="$DATA_DIR/${REFERENCE_ACC}.gb"
 REF_GFF="$DATA_DIR/${REFERENCE_ACC}.gff3"
-SAM="$DATA_DIR/${SAMPLE}.sam"
 EFETCH="https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=${REFERENCE_ACC}"
 
 # --------------------------------------------------------------------------- #
-say "1/6  Barcode whitelist"
+say "1/5  Barcode whitelist"
 if [ -n "$WHITELIST" ]; then
     echo "    using your copy: $WHITELIST"
 else
@@ -134,7 +126,7 @@ if [ "$WL_COUNT" != "$WHITELIST_EXPECTED_BARCODES" ]; then
 fi
 
 # --------------------------------------------------------------------------- #
-say "2/6  Reference genome  ($REFERENCE_ACC)"
+say "2/5  Reference genome  ($REFERENCE_ACC)"
 if [ -s "$REF_FA" ]; then
     echo "    $REF_FA exists, skipping."
 else
@@ -153,7 +145,7 @@ REF_NAME=$(head -1 "$REF_FA" | sed 's/^>//' | awk '{print $1}')
 echo "    reference_name: $REF_NAME"
 
 # --------------------------------------------------------------------------- #
-say "3/6  Region annotation  (GenBank -> GFF3)"
+say "3/5  Region annotation  (GenBank -> GFF3)"
 if [ -s "$REF_GFF" ]; then
     echo "    $REF_GFF exists, skipping."
 else
@@ -177,10 +169,10 @@ fi
 
 # --------------------------------------------------------------------------- #
 if [ -n "$FASTQ" ]; then
-    say "4/6  Reads  (local file)"
+    say "4/5  Reads  (local file)"
     echo "    $FASTQ"
 else
-    say "4/6  Reads  ($SRR)"
+    say "4/5  Reads  ($SRR)"
     FASTQ="$DATA_DIR/${SRR}.fastq"
     if [ -s "$FASTQ" ]; then
         echo "    $FASTQ exists, skipping."
@@ -218,10 +210,10 @@ if [ -n "$MAX_SPOTS" ] && [ "$FASTQ_READS" -gt "$(( MAX_SPOTS * 2 ))" ]; then
 fi
 
 # --------------------------------------------------------------------------- #
-say "5/6  Optional subsample"
+say "5/5  Optional subsample"
 MAP_INPUT="$FASTQ"
 if [ -n "$MAX_READS" ]; then
-    SUB="$DATA_DIR/${SAMPLE}.subsample.fastq"
+    SUB="$DATA_DIR/subsample.fastq"
     if [ -s "$SUB" ]; then
         echo "    $SUB exists, skipping."
     else
@@ -234,30 +226,18 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
-say "6/6  Map to the reference  (minimap2 -ax $MINIMAP_PRESET)"
-if [ -s "$SAM" ]; then
-    echo "    $SAM exists, skipping."
-else
-    minimap2 -ax "$MINIMAP_PRESET" -t "$THREADS" "$REF_FA" "$MAP_INPUT" > "$SAM.part"
-    mv "$SAM.part" "$SAM"
-fi
-MAPPED=$(awk '$1 !~ /^@/ && $2 != 4' "$SAM" | wc -l)
-echo "    $MAPPED mapped alignment records"
-[ "$MAPPED" -gt 0 ] || die "nothing mapped. Wrong reference, or wrong
-  MINIMAP_PRESET for this read technology (currently $MINIMAP_PRESET)."
-
-# --------------------------------------------------------------------------- #
 cat <<EOF
 
 Done. Set these in your config:
 
-    sample: "$SAMPLE"
-    data_dir: "$DATA_DIR"
-    template: "$REF_FA"
+    input_dir: "$DATA_DIR"
+    template:  "$REF_FA"
     reference: "$REF_FA"
-    reference_name: "$REF_NAME"
-    whitelist: "$WHITELIST"
-    gff: "$REF_GFF"
+    gff:       "$REF_GFF"
+    chemistry: "v2"
+
+reference_name is read from the FASTA header and the whitelist is fetched by
+the workflow, so neither is a config key any more.
 
 Then:
 

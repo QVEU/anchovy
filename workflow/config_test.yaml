@@ -19,8 +19,10 @@
 # so the fasta checkpoint is bypassed and these files are used directly.
 cells_dir: "tests/data/mapping"
 
-# The reference to map against and its sequence name (must match the FASTA header
-# after ">"). sam2consensus prefixes output filenames with this name.
+# The reference to map against. `reference_name` is OPTIONAL now -- it is read
+# from the FASTA's own header when omitted -- and is set here deliberately, to
+# keep the override path exercised by the config that gets dry-run most often.
+# It matches what derivation would produce.
 template: "tests/data/mapping/template.fasta"
 reference_name: "testref"
 
@@ -69,9 +71,14 @@ orf_end: 500
 gff: "tests/data/mapping/regions.gff3"
 
 # --- Fields still required by the Snakefile even though the front-half stages
-# --- aren't exercised in this config. They point at the barcode fixture so the
-# --- file parses; extract/fasta simply won't run because nothing requests them.
-sample: "test"
-data_dir: "tests/data"
+# --- aren't exercised in this config. ---
+#
+# `samples` names the run explicitly instead of discovering FASTQs, because
+# cells_dir above means there are none: this config starts from per-cell FASTAs
+# that already exist. A normal run sets `input_dir` and omits this.
+samples: ["test"]
+
+# A local whitelist, so nothing is downloaded to run the fixture. (4 barcodes --
+# it exists to make the file parse; extract never runs here.)
 whitelist: "tests/data/whitelist.txt"
-signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
+chemistry: "v2"

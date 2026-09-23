@@ -6,42 +6,27 @@
 #
 #   snakemake -s workflow/Snakefile --configfile examples/eva71_sra/config.yaml --cores 8
 
-# --- Sample and input location --------------------------------------------- #
-# The workflow expects the mapped reads at {data_dir}/{sample}.sam, which is
-# exactly what fetch.sh produces.
-sample: "SRR28178313"
-data_dir: "examples/eva71_sra/data"
+# --- Input ------------------------------------------------------------------ #
+# The folder fetch.sh downloads into. The workflow finds the FASTQ there and
+# maps it itself -- fetch.sh no longer produces a SAM, because mapping is a
+# pipeline stage now. Drop another FASTQ in and it runs too.
+input_dir: "examples/eva71_sra/data"
 
-# --- 10X barcode whitelist -------------------------------------------------- #
-# Downloaded by fetch.sh from 10X's open-source supernova repository, so there
-# is nothing to install. Point this elsewhere to use a local copy -- the
-# identical file ships with Cell Ranger as
-# cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt.
-whitelist: "examples/eva71_sra/data/737K-august-2016.txt"
-
-# The 10X signature searched for in each read, which together with the
-# whitelist above is ONE choice of chemistry. The N-run is the barcode+UMI
-# region and carries the whole layout: a fixed 22-base 5' handle, a 16-base
-# barcode, then the UMI, whose width anchovy derives as len(signature) - 48.
+# --- 10X chemistry ----------------------------------------------------------- #
+# ONE key sets the signature and the whitelist together. SRR28178313 is v2 data
+# (16 nt barcode + 10 nt UMI, 737,280 barcodes), and the v2 whitelist downloads
+# automatically into resources/ with its barcode count verified -- so there is
+# nothing to install and nothing to point at.
 #
-# THIS EXAMPLE IS v2 DATA (SRR28178313), so it uses the 26-N signature and the
-# 737K-august-2016 whitelist above, and both stay as they are.
-signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
-
-# For v3 data, BOTH keys change together -- 28 Ns (a 12 nt UMI) and the v3
-# whitelist, which has 6,794,880 barcodes rather than 737,280:
-#
-# signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
-# whitelist: "path/to/3M-february-2018.txt"
-#
-# Mismatching them does not fail: every read is assigned to its nearest entry
-# in the wrong list, and the cells, consensus sequences and genotypes that come
-# out look ordinary and are wrong.
+# For v3 data this would read `chemistry: "v3"`, which needs the whitelist
+# supplied (see workflow/config.yaml): 10X does not publish that file anywhere
+# fetchable, and mismatching the chemistry pair does not fail -- every read is
+# assigned to its nearest entry in the wrong list and the output looks ordinary.
+chemistry: "v2"
 
 # --- Reference -------------------------------------------------------------- #
-# Downloaded by fetch.sh. reference_name must match the name after ">" in the
-# FASTA, because sam2consensus prefixes its per-cell output files with it --
-# fetch.sh prints the right value when it finishes.
+# Downloaded by fetch.sh. The reference NAME is read from this file's own
+# FASTA header, so there is no second key to keep in sync with it.
 template: "examples/eva71_sra/data/AF304458.fasta"
 
 # Call genotypes against the genome itself, rather than against the consensus of
@@ -59,7 +44,6 @@ template: "examples/eva71_sra/data/AF304458.fasta"
 reference: "examples/eva71_sra/data/AF304458.fasta"
 # fetch.sh prints the exact value when it finishes -- copy it rather than
 # assuming the version suffix, which can be .1 or .2 depending on the record.
-reference_name: "AF304458.1"
 
 # --- Region-aware annotation ------------------------------------------------ #
 # Derived by fetch.sh from the reference's own GenBank annotation, so the
