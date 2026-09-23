@@ -19,11 +19,24 @@ data_dir: "examples/eva71_sra/data"
 # cellranger-x.y.z/lib/python/cellranger/barcodes/737K-august-2016.txt.
 whitelist: "examples/eva71_sra/data/737K-august-2016.txt"
 
-# The 10X signature searched for in each read. The N-run is the barcode+UMI
-# region: 26 Ns = 16 nt barcode + 10 nt UMI, which is the v2 layout, matching
-# the whitelist above. This is the default anchovy ships with and the one the
-# original AnchovyJob.sh used. (v3 would need 28 Ns and the v3 whitelist.)
+# The 10X signature searched for in each read, which together with the
+# whitelist above is ONE choice of chemistry. The N-run is the barcode+UMI
+# region and carries the whole layout: a fixed 22-base 5' handle, a 16-base
+# barcode, then the UMI, whose width anchovy derives as len(signature) - 48.
+#
+# THIS EXAMPLE IS v2 DATA (SRR28178313), so it uses the 26-N signature and the
+# 737K-august-2016 whitelist above, and both stay as they are.
 signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
+
+# For v3 data, BOTH keys change together -- 28 Ns (a 12 nt UMI) and the v3
+# whitelist, which has 6,794,880 barcodes rather than 737,280:
+#
+# signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
+# whitelist: "path/to/3M-february-2018.txt"
+#
+# Mismatching them does not fail: every read is assigned to its nearest entry
+# in the wrong list, and the cells, consensus sequences and genotypes that come
+# out look ordinary and are wrong.
 
 # --- Reference -------------------------------------------------------------- #
 # Downloaded by fetch.sh. reference_name must match the name after ">" in the
