@@ -92,12 +92,8 @@ snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --core
 snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64
 ```
 
-There is no run script. There used to be `run_cluster.sh`, which mapped the
-reads and derived the sample name to hand to the workflow — both of which the
-workflow now does itself from `input_dir`, so what was left was a single
-`snakemake` line. Keeping it meant two places had to agree about how a run
-works, which is exactly how the sample name came to be wrong when you pointed
-it at different reads.
+The `-n` first is a dry run: it lists the jobs and the samples found, without
+doing any work.
 
 Run it from the repo root so `results/` lands there.
 
@@ -241,11 +237,10 @@ Copy this directory and change:
 - `FASTQ` — your own reads, or `SRR` in `fetch.sh` for a run accession
 - `REFERENCE_ACC` in `fetch.sh` — your reference
 - `minimap_preset` in the config — `map-hifi` for PacBio, `map-ont` for Nanopore
-  (it moved there when mapping became a pipeline stage)
 - `input_dir`, `template`, `gff`, `chemistry` in `config.yaml` to match
 
-`reference_name` is no longer a key: it is read from the reference FASTA's own
-header, so there is nothing to keep in sync with it.
+The reference name is read from the reference FASTA's own header, so there is
+no key to keep in sync with it.
 
 The region file is generated from whatever reference you name, so nothing there
 needs editing by hand. If your reference has no annotation, write the GFF3
