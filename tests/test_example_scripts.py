@@ -126,3 +126,27 @@ def test_fetch_no_longer_maps():
     assert "minimap2" not in fetch, (
         "fetch.sh maps again; that is the workflow's job and the two disagreed "
         "about the sample name when both did it")
+
+
+# --------------------------------------------------------------------------- #
+# The report rule must not hand relative paths to R
+# --------------------------------------------------------------------------- #
+# rmarkdown::render() setwd()s to the Rmd's own directory early on, and R
+# evaluates arguments lazily -- so a relative path written into the render()
+# call is resolved AFTER that setwd, against visualization/ rather than the run
+# directory. It failed on the cluster with "the directory does not exist"
+# naming a directory that was sitting right there, which reads like a missing
+# output rather than a path-resolution bug.
+def test_report_paths_are_resolved_before_r_sees_them():
+    rule = SNAKEFILE.split("rule report:")[1]
+    assert "os.path.abspath" in rule, (
+        "the report rule stopped resolving its paths; a relative path in the "
+        "render() call is resolved against the Rmd's directory, not the run's")
+
+
+def test_report_does_not_resolve_paths_inside_r():
+    rule = SNAKEFILE.split("rule report:")[1]
+    for pattern in ("normalizePath(", "getwd()"):
+        assert pattern not in rule, (
+            f"{pattern} is back in the report rule; it runs after "
+            f"rmarkdown::render() has already changed the working directory")

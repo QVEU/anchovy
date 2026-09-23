@@ -716,17 +716,35 @@ rule report:
     output:
         html=REPORT,
     params:
-        results_dir=RESULTS,
+        # ABSOLUTE PATHS, RESOLVED HERE RATHER THAN IN R.
+        #
+        # rmarkdown::render() setwd()s to the Rmd's own directory early on, and
+        # R evaluates arguments lazily -- so a relative path written into the
+        # render() call is resolved AFTER that setwd, against visualization/
+        # instead of the run directory. It fails with "the directory does not
+        # exist" naming a directory that is sitting right there, which reads
+        # like a missing output rather than a resolution bug.
+        #
+        # Resolving them in the rule removes R's evaluation order from the
+        # question entirely: by the time Rscript starts, every path is already
+        # absolute and no longer depends on where anything thinks it is.
+        results_dir=lambda w: os.path.abspath(f"results/{w.sample}"),
+        html=lambda w: os.path.abspath(
+            f"results/{w.sample}/{w.sample}_report.html"),
+        tmp=lambda w: os.path.abspath(
+            f"results/{w.sample}/.report_intermediates"),
+        rmd=lambda w: os.path.abspath(REPORT_RMD),
+        # knit_root_dir keeps chunk-relative paths meaning what they mean
+        # everywhere else in the workflow: relative to the run directory.
+        rundir=os.path.abspath("."),
         sample=SAMPLE,
-        tmp=RESULTS + "/.report_intermediates",
     shell:
         "mkdir -p {params.tmp} && "
         "Rscript -e 'rmarkdown::render("
-        "\"{input.rmd}\", "
-        "output_file = file.path(normalizePath(\"{params.results_dir}\"), "
-        "\"{params.sample}_report.html\"), "
+        "\"{params.rmd}\", "
+        "output_file = \"{params.html}\", "
         "intermediates_dir = \"{params.tmp}\", "
-        "knit_root_dir = getwd(), "
-        "params = list(results_dir = normalizePath(\"{params.results_dir}\"), "
+        "knit_root_dir = \"{params.rundir}\", "
+        "params = list(results_dir = \"{params.results_dir}\", "
         "sample = \"{params.sample}\"), "
         "quiet = TRUE)'"
