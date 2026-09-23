@@ -112,18 +112,33 @@ steps that actually need it — not starting over from scratch.
 
 ## Pointing it at your own data
 
-Copy the example settings file and change the paths to match your data:
+Put your FASTQs in a folder, copy the example settings file, and point it at
+them. Every FASTQ in the folder is run through the whole pipeline — mapping,
+barcode extraction, per-cell consensus, genotypes, networks and a rendered
+report — with its outputs named after it, in `results/<name>/`.
 
 ```yaml
-sample: "my_sample"                 # your reads should be at {data_dir}/{sample}.sam
-data_dir: "path/to/data"
-whitelist: "path/to/10x_whitelist.txt"    # your list of valid cell barcodes
-signature: "CTACACGACGCTCTTCCGATCT..."    # the barcode signature for your 10X kit
-template: "path/to/reference.fasta"       # the reference genome
-reference_name: "your_ref_name"           # the name written after ">" in that file
-orf_start: 96                             # start of the region you want analysed
-orf_end: 10272                            # end of that region
+input_dir: "path/to/fastqs"         # a FOLDER of reads; one run covers all of them
+template: "path/to/reference.fasta" # the reference genome
+gff: "path/to/reference.gff3"       # region model, for frame-correct annotation
+chemistry: "v3"                     # v2 or v3 -- sets the barcode signature AND
+                                    # the whitelist, which have to agree
 ```
+
+That is the whole required set. Three things it no longer asks for, because
+each was a way to get a run subtly wrong:
+
+- **the sample name** — taken from each FASTQ's own filename;
+- **`reference_name`** — read from the reference FASTA's header;
+- **the barcode whitelist** — downloaded once per chemistry into `resources/`,
+  with its barcode count verified before anything uses it.
+
+The v3 whitelist is the one exception: 10X does not publish it anywhere
+fetchable, so `chemistry: "v3"` needs `whitelist:` pointing at the copy in your
+Cell Ranger install, or `whitelist_url:` for a mirror. The error says so.
+
+Optional settings — analysis window, depth and breadth filters, allele
+frequencies — are documented in `workflow/config.yaml`.
 
 Then run with your file instead of the example:
 

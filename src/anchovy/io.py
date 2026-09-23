@@ -26,6 +26,7 @@ clearly-labeled commits, validated against the golden tests.
 
 from __future__ import annotations
 
+import glob
 import os
 import sys
 from pathlib import Path
@@ -316,3 +317,57 @@ def read_reference_sequence(path: str | Path) -> str:
     if not sequence:
         raise ValueError(f"{path}: no reference sequence found.")
     return sequence
+
+
+# --------------------------------------------------------------------------- #
+# Sample discovery (the workflow's input contract)
+# --------------------------------------------------------------------------- #
+FASTQ_PATTERNS = ("*.fastq", "*.fastq.gz", "*.fq", "*.fq.gz")
+
+
+def sample_name_from_fastq(path: str | Path) -> str:
+    """A FASTQ path's sample name: the basename with the read suffixes stripped.
+
+    Lives here rather than in the Snakefile so it can be tested, and so there is
+    ONE definition. It used to have two -- a shell copy for the fetch/run
+    scripts and the workflow's own idea -- which disagreed the moment a run was
+    pointed at different reads: the reads were mapped under one name and the
+    workflow then looked for the other, found the previous run's output still in
+    place, and reported it up to date without failing.
+    """
+    base = os.path.basename(str(path))
+    for ext in (".gz", ".fastq", ".fq"):
+        if base.endswith(ext):
+            base = base[: -len(ext)]
+    return base
+
+
+def discover_fastqs(input_dir: str | Path) -> dict[str, str]:
+    """{sample name: path} for every FASTQ directly in `input_dir`.
+
+    Sorted, so the DAG is stable between runs. Raises ValueError when the
+    directory holds no reads, or when two of them reduce to the same sample
+    name -- reads.fastq and reads.fq.gz do, and their results would overwrite
+    each other silently rather than collide.
+
+    Does not recurse: a nested layout is far more likely to be a mistake about
+    what `input_dir` means than an intent to run every FASTQ under a tree.
+    """
+    found: dict[str, str] = {}
+    for pattern in FASTQ_PATTERNS:
+        for path in sorted(glob.glob(os.path.join(str(input_dir), pattern))):
+            name = sample_name_from_fastq(path)
+            if name in found:
+                raise ValueError(
+                    f"two FASTQs in {input_dir} reduce to the sample name "
+                    f"{name!r}:\n  {found[name]}\n  {path}\n"
+                    f"Their results would overwrite each other. Rename one.")
+            found[name] = path
+    if not found:
+        raise ValueError(
+            f"no FASTQs in input_dir {str(input_dir)!r}.\n"
+            f"  Looked for {', '.join(FASTQ_PATTERNS)}. Check the path, and "
+            f"that the reads are not\n  still compressed in another format "
+            f"(.bz2, .zst) or nested in a subdirectory -- this does not "
+            f"recurse.")
+    return found

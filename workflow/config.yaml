@@ -6,18 +6,45 @@
 #
 # Currently pointed at the test fixtures for development against known data.
 
-# Base name of the sample. Input is expected at {data_dir}/{sample}.sam and
-# outputs are named {data_dir}/{sample}_*.
-sample: "test"
+# --- input: a folder of FASTQs ----------------------------------------------- #
+# THIS IS THE WHOLE INTERFACE. Point it at a directory and every FASTQ in it
+# (.fastq/.fq, plain or .gz) is run through the entire pipeline -- map, extract,
+# per-cell consensus, genotypes, networks, report -- with outputs named after
+# the FASTQ, in results/<name>/. Adding a sample means dropping a file in.
+#
+# The directory is never written to: the SAM and everything after it go under
+# results/.
+input_dir: "tests/data/fastqs"
 
-# Directory holding inputs and receiving package-stage outputs.
-data_dir: "tests/data"
+# --- 10X chemistry: one key, because the halves must agree ------------------- #
+# `chemistry` sets BOTH the signature and the whitelist, and they cannot come
+# apart. The signature's N-run carries the layout (anchovy derives the UMI width
+# as len(signature) - 48, so v2 and v3 differ only in the N count). The
+# whitelist is not derived and IS chemistry-specific -- 737,280 barcodes against
+# 6,794,880 -- and mismatching the pair does not fail: every read is assigned to
+# its nearest entry in the wrong list, and the cells, consensus sequences and
+# genotypes that come out look ordinary and are wrong.
+#
+#   v3  16 nt barcode + 12 nt UMI, 3M-february-2018.txt   (current chemistry)
+#   v2  16 nt barcode + 10 nt UMI, 737K-august-2016.txt
+chemistry: "v3"
 
-# Path to the 10X barcode whitelist.
+# The whitelist is downloaded once into resources/ and shared by every sample,
+# and its barcode count is verified before anything is allowed to use it.
+#
+# v2 downloads automatically. v3 does NOT: 10X does not publish that file
+# anywhere this could be verified as fetchable, and a URL that 404s at run time
+# is worse than asking. For v3, set one of these:
+#
+#   whitelist: "path/to/3M-february-2018.txt"   # Cell Ranger ships it, gzipped,
+#                 # at cellranger-x.y.z/lib/python/cellranger/barcodes/
+#   whitelist_url: "https://your-mirror/3M-february-2018.txt.gz"
+#
+# Either key also overrides the v2 default, for a local copy or a mirror.
 whitelist: "tests/data/whitelist.txt"
 
-# The 10X signature to search for (v2/v3 3' chemistry default).
-signature: "CTACACGACGCTCTTCCGATCTNNNNNNNNNNNNNNNNNNNNNNNNNNTTTCTTATAT"
+# `signature` overrides the one derived from `chemistry`, for an assay whose
+# handles differ from 10X's. The N count still has to match the whitelist.
 
 # Reference/template FASTA that minimap2 maps each per-cell FASTA against.
 # (This was the $3 argument to AnchovyJob.sh.)

@@ -43,7 +43,8 @@ paths <- list(
   epi     = P("_epistaticNetwork.csv"),
   geno    = P("_genotypeNetwork.csv"),
   allele  = P("_alleleFrequencies.csv"),
-  cell    = P("_cellAlleleFreq.csv")
+  cell    = P("_cellAlleleFreq.csv"),
+  cons    = P("_allConsensus.fasta")
 )
 have <- function(key) file.exists(paths[[key]])
 
@@ -65,6 +66,41 @@ cellfrq <- if (have("cell"))    read_csv(paths$cell,    show_col_types = FALSE) 
 # DEPTH -- the number of cells the whole analysis rests on. `total` in the annot
 # table is that count (it is constant down the column).
 depth <- if (!is.null(annot)) suppressWarnings(max(annot$total, na.rm = TRUE)) else NA
+
+# --- Per-cell sequencing depth, from the consensus FASTA headers -------------
+# sam2consensus writes "coverage:NN length:MM" onto every consensus it emits,
+# and that is the ONLY per-cell depth record surviving the pipeline -- no CSV
+# downstream carries it. Parsed here rather than recomputed, since the reads it
+# came from are long gone by this stage.
+#
+# These cover every cell that produced a consensus, not just the filtered
+# subset the annotation table describes, so this section sees the population
+# the filters were applied TO.
+parse_consensus_headers <- function(path) {
+  ln <- readLines(path, warn = FALSE)
+  hi <- which(startsWith(ln, ">"))
+  if (!length(hi)) return(NULL)
+  h <- ln[hi]
+  tibble::tibble(
+    cell     = sub("^>([^ ]+).*", "\\1", h),
+    coverage = num(sub(".*coverage:([0-9.]+).*", "\\1", h)),
+    called   = num(sub(".*length:([0-9]+).*",   "\\1", h))
+  )
+}
+
+# Reference length taken from the first record's own sequence, so it is exact
+# and needs no extra input. Sums the block in case the FASTA is wrapped.
+consensus_ref_length <- function(path) {
+  ln <- readLines(path, warn = FALSE)
+  hi <- which(startsWith(ln, ">"))
+  if (!length(hi)) return(NA_real_)
+  stop_at <- if (length(hi) > 1) hi[2] - 1L else length(ln)
+  if (stop_at <= hi[1]) return(NA_real_)
+  sum(nchar(ln[(hi[1] + 1L):stop_at]))
+}
+
+covstats   <- if (have("cons")) parse_consensus_headers(paths$cons) else NULL
+genome_len <- if (have("cons")) consensus_ref_length(paths$cons)    else NA_real_
 ```
 
 This report summarizes one `anchovy` run: sample **`r params$sample`**, from
@@ -83,6 +119,90 @@ tibble::tibble(output = names(paths),
 ```
 
 # Quality control
+
+## Coverage and depth
+
+What the calls rest on. These cover every cell that produced a consensus --
+including the ones later filtered out -- so this is the population the depth
+and completeness filters were applied to, not what survived them.
+
+**`coverage` is not a depth.** sam2consensus computes it as summed depth over
+positions with reads, divided by the FULL reference length, so it falls when a
+cell spans less of the genome however deep those reads were. A cell at 40x over
+40% of the genome scores 16. The two panels below therefore separate it: mean
+coverage as written, and how much of the genome the cell actually called.
+
+```{r qc-coverage, fig.height=3.2}
+if (is.null(covstats) || !nrow(covstats)) {
+  cat("_No `_allConsensus.fasta`; skipping per-cell coverage._")
+} else {
+  med <- median(covstats$coverage, na.rm = TRUE)
+  ggplot(covstats, aes(coverage)) +
+    geom_histogram(bins = 50, fill = "steelblue") +
+    geom_vline(xintercept = med, linetype = "dashed", colour = "grey30") +
+    annotate("text", x = med, y = Inf, vjust = 1.4, hjust = -0.1, size = 3.4,
+             colour = "grey30", label = sprintf("median %.1f", med)) +
+    labs(x = "mean coverage over the whole reference", y = "cells",
+         title = sprintf("Per-cell coverage (%s cells with a consensus)",
+                         comma(nrow(covstats))))
+}
+```
+
+```{r qc-breadth, fig.height=3.2}
+if (is.null(covstats) || !nrow(covstats) || is.na(genome_len)) {
+  cat("_No `_allConsensus.fasta`; skipping per-cell breadth._")
+} else {
+  b <- covstats |> mutate(breadth = called / genome_len)
+  med <- median(b$breadth, na.rm = TRUE)
+  ggplot(b, aes(breadth)) +
+    geom_histogram(bins = 50, fill = "darkseagreen4") +
+    geom_vline(xintercept = med, linetype = "dashed", colour = "grey30") +
+    scale_x_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
+    labs(x = "fraction of the reference the cell called", y = "cells",
+         title = sprintf("Per-cell breadth (reference %s nt, median %.0f%%)",
+                         comma(genome_len), 100 * med))
+}
+```
+
+`r if (!is.null(covstats) && nrow(covstats) && !is.na(genome_len)) sprintf("Depth where a base was actually called, rather than averaged over the whole reference, has median %.1fx -- the number the coverage panel understates for partially covered cells.", median(covstats$coverage * genome_len / pmax(covstats$called, 1), na.rm = TRUE))`
+
+### Along the genome
+
+Per-position read depth and how many cells had a confident call there. Sampled
+at the positions carrying a called allele, so the x-axis is not every base --
+but it is dense enough to show where coverage falls away, which is usually the
+ragged 5'/3' flanks every amplicon run has.
+
+```{r qc-depth-profile, fig.height=3.6}
+if (is.null(allele) || !all(c("position", "cells_called") %in% names(allele))) {
+  cat("_No allele-frequency table; skipping the coverage profile._")
+} else {
+  # reads_depth is only populated when the run dumped pileup counts, and an
+  # older output may not carry the column at all -- so build from what is
+  # there rather than naming it unconditionally.
+  prof <- allele |>
+    distinct(position, .keep_all = TRUE) |>
+    transmute(position = num(position),
+              `cells with a call` = num(cells_called))
+  if ("reads_depth" %in% names(allele)) {
+    prof$`read depth` <- num(allele |> distinct(position, .keep_all = TRUE) |>
+                             pull(reads_depth))
+  }
+  prof <- prof |>
+    pivot_longer(-position, names_to = "measure", values_to = "value") |>
+    filter(!is.na(value))
+  if (!nrow(prof)) {
+    cat("_No per-position depth recorded._")
+  } else {
+    ggplot(prof, aes(position, value)) +
+      geom_line(linewidth = 0.4, colour = "grey25") +
+      facet_wrap(~measure, ncol = 1, scales = "free_y") +
+      scale_y_continuous(labels = comma) +
+      labs(x = "genome position (nt)", y = NULL,
+           title = "Coverage along the genome")
+  }
+}
+```
 
 ## How many cells, and how many carried variants
 

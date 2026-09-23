@@ -9,6 +9,7 @@
 #
 # See workflow/README.md for the config-swap pattern and examples.
 
+import glob
 import os
 import shutil
 
@@ -23,13 +24,141 @@ import shutil
 #   snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 8
 # A missing key is then a loud KeyError naming it.
 
-SAMPLE    = config["sample"]
-DATA_DIR  = config["data_dir"]
-WHITELIST = config["whitelist"]
-SIGNATURE = config["signature"]
-REFNAME   = config["reference_name"]
+# --------------------------------------------------------------------------- #
+# The interface: a directory of FASTQs, a reference, and a region model
+# --------------------------------------------------------------------------- #
+# Point `input_dir` at a folder of FASTQs and every one of them is run through
+# the whole pipeline -- map, extract, per-cell consensus, genotypes, networks,
+# report -- with its outputs named after the FASTQ. Nothing else is required
+# and no script is run by hand: `fetch.sh` now only fetches the public example
+# data, and is not part of running your own.
+#
+# A sample's name is its FASTQ's basename with .gz/.fastq/.fq stripped, the
+# same rule examples/eva71_sra/sample_name.sh uses, so the two agree.
+INPUT_DIR = config.get("input_dir")
+TEMPLATE  = config["template"]
+if INPUT_DIR is None and "samples" not in config:
+    raise WorkflowError(
+        "config needs `input_dir` -- the folder holding the FASTQs to run. "
+        "(Or `samples`, with `cells_dir`, to resume from per-cell FASTAs.)")
 
-RESULTS   = "results/" + SAMPLE
+RESOURCES = config.get("resources_dir", "resources")
+
+
+# Discovery lives in the package so it can be unit-tested and so there is one
+# definition of what a sample is called. ValueError becomes WorkflowError here
+# because that is what snakemake reports cleanly.
+from anchovy.io import discover_fastqs
+
+
+# `samples` names them explicitly instead of discovering them, which is what
+# the `cells_dir` resume path needs: it starts from per-cell FASTAs that already
+# exist, so there is no FASTQ to take a name from. Normal runs omit it and let
+# the folder decide. map_reads is never requested on that path, so the empty
+# FASTQS map is not reachable from it.
+if "samples" in config:
+    SAMPLES = sorted(config["samples"])
+    FASTQS = {}
+else:
+    try:
+        FASTQS = discover_fastqs(INPUT_DIR)
+    except ValueError as exc:
+        raise WorkflowError(str(exc)) from None
+    SAMPLES = sorted(FASTQS)
+
+# --------------------------------------------------------------------------- #
+# 10X chemistry: one key, because the two halves must agree
+# --------------------------------------------------------------------------- #
+# The signature's N-run carries the layout -- a fixed 22-base handle, a 16-base
+# barcode, then the UMI, whose width anchovy derives as len(signature) - 48 --
+# so v2 and v3 differ only in the N count. The whitelist is NOT derived and is
+# chemistry-specific, and mismatching the pair does not fail: every read is
+# assigned to its nearest entry in the wrong list and the output looks ordinary.
+# So `chemistry` sets both, and they cannot come apart.
+CHEMISTRIES = {
+    "v2": {
+        "ns": 26,            # 16 nt barcode + 10 nt UMI
+        "whitelist": "737K-august-2016.txt",
+        "barcodes": 737280,
+        # Verified reachable. The identical file ships with Cell Ranger.
+        "url": ("https://raw.githubusercontent.com/10XGenomics/supernova/"
+                "refs/heads/master/tenkit/lib/python/tenkit/barcodes/"
+                "737K-august-2016.txt"),
+    },
+    "v3": {
+        "ns": 28,            # 16 nt barcode + 12 nt UMI
+        "whitelist": "3M-february-2018.txt",
+        "barcodes": 6794880,
+        # NO DEFAULT URL. 10X does not publish this one anywhere that could be
+        # verified as fetchable, unlike the v2 file above, and shipping a URL
+        # that 404s at run time is worse than asking for it. Set `whitelist` to
+        # the copy in your Cell Ranger install
+        # (cellranger-x.y.z/lib/python/cellranger/barcodes/3M-february-2018.txt.gz,
+        # gunzipped), or `whitelist_url` if you have a mirror.
+        "url": None,
+    },
+}
+
+CHEMISTRY = config.get("chemistry", "v3")
+if CHEMISTRY not in CHEMISTRIES:
+    raise WorkflowError(
+        f"unknown chemistry {CHEMISTRY!r}; expected one of "
+        f"{sorted(CHEMISTRIES)}.")
+CHEM = CHEMISTRIES[CHEMISTRY]
+
+# `signature` overrides the derived one, for an assay whose handles differ from
+# 10X's. The N count still has to match the whitelist.
+SIGNATURE = config.get(
+    "signature",
+    "CTACACGACGCTCTTCCGATCT" + "N" * CHEM["ns"] + "TTTCTTATAT")
+
+WHITELIST_URL = config.get("whitelist_url", CHEM["url"])
+
+if "whitelist" in config:
+    WHITELIST = config["whitelist"]          # a local copy, used as-is
+elif WHITELIST_URL:
+    WHITELIST = RESOURCES + "/" + CHEM["whitelist"]   # downloaded once, reused
+else:
+    raise WorkflowError(
+        f"chemistry {CHEMISTRY!r} has no whitelist to download, so one has to "
+        f"be supplied.\n"
+        f"  Set `whitelist` to a local {CHEM['whitelist']} -- Cell Ranger ships "
+        f"it at\n"
+        f"    cellranger-x.y.z/lib/python/cellranger/barcodes/"
+        f"{CHEM['whitelist']}.gz  (gunzip it)\n"
+        f"  or set `whitelist_url` to a mirror you can reach.")
+
+# --------------------------------------------------------------------------- #
+# Reference name, read from the reference rather than asked for
+# --------------------------------------------------------------------------- #
+# sam2consensus prefixes its per-cell outputs with the SAM's reference name,
+# which is the FASTA's own header. Asking the user to retype it just invites a
+# mismatch that surfaces as missing files deep in the scatter, so read it.
+def _reference_name(path):
+    try:
+        handle = open(path)
+    except OSError as exc:
+        # Reached before any job runs, so say which key is wrong rather than
+        # letting a bare FileNotFoundError name a path with no context.
+        raise WorkflowError(
+            f"cannot read `template` ({path}): {exc.strerror}.\n"
+            f"  This is the reference FASTA the reads are mapped to, and its "
+            f"header supplies the reference name.") from None
+    with handle:
+        for line in handle:
+            if line.startswith(">"):
+                return line[1:].split()[0]
+    raise WorkflowError(f"{path} has no FASTA header line, so the reference "
+                        f"name cannot be read from it.")
+
+
+REFNAME = config.get("reference_name") or _reference_name(TEMPLATE)
+
+# SAMPLE is the wildcard, not a fixed string: every path below is built by
+# concatenation, so this turns each one into a per-sample pattern without
+# touching the rules.
+SAMPLE  = "{sample}"
+RESULTS = "results/{sample}"
 
 ALL_CONSENSUS = RESULTS + "/" + SAMPLE + "_allConsensus.fasta"
 
@@ -143,6 +272,14 @@ FREQUENCIES = bool(config.get("allele_frequencies", False))
 ALLELE_FREQUENCIES = RESULTS + "/" + SAMPLE + "_alleleFrequencies.csv"
 CELL_ALLELE_FREQ   = RESULTS + "/" + SAMPLE + "_cellAlleleFreq.csv"
 
+# The rendered QC/results report. On by default: the pipeline is meant to end
+# with something readable, not a directory of CSVs. Set `report: false` to skip
+# it -- the only reason to, since it is what makes R a hard requirement for a
+# complete run.
+REPORT_RMD = config.get("report_rmd", "visualization/anchovy_report.rmd")
+REPORT_ON  = bool(config.get("report", True))
+REPORT     = RESULTS + "/" + SAMPLE + "_report.html"
+
 REGION_ANNOTATIONS = RESULTS + "/" + SAMPLE + "_regionAnnotations.csv"
 GENOTYPE_NODES     = RESULTS + "/" + SAMPLE + "_genotypeNodes.csv"
 
@@ -166,37 +303,115 @@ def aggregate_cell_consensuses(wildcards):
     "{reference}__{prefix}.fasta", prefix = input SAM minus ".sam".
     """
     cells = _discover_cells(wildcards)
-    return expand(WORK + "/" + REFNAME + "__{cell}_BC.fasta", cell=cells)
+    # `sample` is filled too: WORK is a per-sample pattern now, and expanding
+    # only `cell` would leave it as a literal brace in every returned path.
+    return expand(WORK + "/" + REFNAME + "__{cell}_BC.fasta",
+                  cell=cells, sample=wildcards.sample)
 
 
 def aggregate_cell_counts(wildcards):
     """Per-cell pileup TSVs, one per discovered cell (frequencies stage only)."""
     cells = _discover_cells(wildcards)
-    return expand(WORK + "/" + REFNAME + "__{cell}_BC_counts.tsv", cell=cells)
+    return expand(WORK + "/" + REFNAME + "__{cell}_BC_counts.tsv",
+                  cell=cells, sample=wildcards.sample)
 
 
 # --------------------------------------------------------------------------- #
 # Default target
 # --------------------------------------------------------------------------- #
 # The pipeline now builds through the filtered consensus genotype table.
+# Every target is expanded over the FASTQs found in input_dir, so one run
+# covers the whole folder and each sample's outputs are named after its reads.
 rule all:
     input:
-        RESULTS + "/" + SAMPLE + "_annot_v3.csv",
+        expand(RESULTS + "/" + SAMPLE + "_annot_v3.csv", sample=SAMPLES),
         # Region annotations are only produced (and only requested) when the
         # config supplies a GFF3.
-        *([REGION_ANNOTATIONS] if GFF else []),
-        *([ALLELE_FREQUENCIES, CELL_ALLELE_FREQ] if FREQUENCIES else []),
+        *(expand(REGION_ANNOTATIONS, sample=SAMPLES) if GFF else []),
+        *(expand([ALLELE_FREQUENCIES, CELL_ALLELE_FREQ], sample=SAMPLES)
+          if FREQUENCIES else []),
+        *(expand(REPORT, sample=SAMPLES) if REPORT_ON else []),
 
 
 # --------------------------------------------------------------------------- #
 # Stage 1: extract  (SAM -> per-read CBC/UMI table)
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Stage 0a: get_whitelist  (fetch the barcode whitelist once per chemistry)
+# --------------------------------------------------------------------------- #
+# Downloaded rather than asked for, and shared by every sample in the run.
+# Local, because it is one network call, not work to schedule on a node.
+#
+# THE LINE COUNT IS CHECKED AND A MISMATCH IS FATAL. The whole reason chemistry
+# is a single key is that a whitelist from the wrong chemistry does not fail --
+# every read is assigned to its nearest entry in it and the cells, consensus
+# sequences and genotypes look ordinary. A truncated download does the same
+# thing. So the file is verified before it is allowed to become the input to
+# anything, and a bad one is left as .part for inspection rather than cached.
+localrules: get_whitelist
+
+
+rule get_whitelist:
+    output:
+        RESOURCES + "/" + CHEM["whitelist"],
+    params:
+        url=WHITELIST_URL or "",
+        expected=CHEM["barcodes"],
+        chemistry=CHEMISTRY,
+    shell:
+        r"""
+        set -euo pipefail
+        curl -fsSL "{params.url}" -o "{output}.dl"
+        # Mirrors commonly serve these gzipped; the v2 source does not.
+        if gzip -t "{output}.dl" 2>/dev/null; then
+            gunzip -c "{output}.dl" > "{output}.part"
+        else
+            mv "{output}.dl" "{output}.part"
+        fi
+        rm -f "{output}.dl"
+        n=$(grep -c . "{output}.part" || true)
+        if [ "$n" -ne {params.expected} ]; then
+            echo "error: {params.chemistry} whitelist should have {params.expected} barcodes, got $n." >&2
+            echo "       Left at {output}.part. A wrong or truncated whitelist does not fail the" >&2
+            echo "       run -- it silently assigns every read to a nearest entry in the wrong" >&2
+            echo "       list -- so it is rejected here instead." >&2
+            exit 1
+        fi
+        mv "{output}.part" "{output}"
+        """
+
+
+# --------------------------------------------------------------------------- #
+# Stage 0b: map_reads  (FASTQ -> SAM)
+# --------------------------------------------------------------------------- #
+# This used to live in examples/eva71_sra/fetch.sh, which meant running your own
+# data took a script AND the workflow, and the two disagreed about the sample
+# name often enough to be worth a bug fix of its own. It is a pipeline stage.
+#
+# The SAM lands under results/, never beside the reads: input_dir is read-only
+# as far as this workflow is concerned.
+rule map_reads:
+    input:
+        fastq=lambda w: FASTQS[w.sample],
+        template=TEMPLATE,
+    output:
+        sam=RESULTS + "/" + SAMPLE + ".sam",
+    threads: config.get("map_threads", 8)
+    params:
+        # map-hifi for PacBio CCS, map-ont for Nanopore. Getting this wrong
+        # costs alignment sensitivity rather than failing, so it is explicit.
+        preset=config.get("minimap_preset", "map-hifi"),
+    shell:
+        "minimap2 -ax {params.preset} -t {threads} "
+        "{input.template} {input.fastq} > {output.sam}"
+
+
 rule extract:
     input:
-        sam=DATA_DIR + "/" + SAMPLE + ".sam",
+        sam=RESULTS + "/" + SAMPLE + ".sam",
         whitelist=WHITELIST,
     output:
-        DATA_DIR + "/" + SAMPLE + "_anchovy.csv",
+        RESULTS + "/" + SAMPLE + "_anchovy.csv",
     # extract runs its own multiprocessing Pool, which is NOT snakemake's
     # --cores: that governs how many JOBS run at once, and extract is one job.
     # Without this the pool sits at the CLI default of 16 however large the
@@ -243,7 +458,7 @@ rule extract:
 # survived `depth_min` anyway.
 checkpoint fasta:
     input:
-        csv=DATA_DIR + "/" + SAMPLE + "_anchovy.csv",
+        csv=RESULTS + "/" + SAMPLE + "_anchovy.csv",
     output:
         cells=directory(RESULTS + "/cells"),
     params:
@@ -467,3 +682,45 @@ rule frequencies:
         "--reference-name {params.refname} --subset {input.subset} "
         "{params.gff} {params.min_alt_reads} {params.min_alt_freq} "
         "{params.min_cells}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 9: report  (a run's outputs -> one readable HTML)  -- the last stage
+# --------------------------------------------------------------------------- #
+# The pipeline ends with something a person reads, not a directory of CSVs.
+# Rendered per sample from the same Rmd, which takes the results directory and
+# the sample prefix as parameters and finds everything else itself.
+#
+# The consensus FASTA is declared even though annotate does not need it: the
+# report's coverage panels parse the per-cell `coverage:`/`length:` headers out
+# of it, and that is the only per-cell depth record the pipeline keeps.
+#
+# INTERMEDIATES GO TO A PER-SAMPLE DIRECTORY. rmarkdown writes its knit
+# intermediates beside the input by default, so rendering the one shared Rmd
+# for several samples at once has them overwrite each other's working files --
+# which surfaces as an unrelated-looking knit error in whichever loses the race.
+rule report:
+    input:
+        rmd=REPORT_RMD,
+        annot=RESULTS + "/" + SAMPLE + "_annot_v3.csv",
+        consensus=ALL_CONSENSUS,
+        **({"regions": REGION_ANNOTATIONS} if GFF else {}),
+        **({"allele": ALLELE_FREQUENCIES, "cells": CELL_ALLELE_FREQ}
+           if FREQUENCIES else {}),
+    output:
+        html=REPORT,
+    params:
+        results_dir=RESULTS,
+        sample=SAMPLE,
+        tmp=RESULTS + "/.report_intermediates",
+    shell:
+        "mkdir -p {params.tmp} && "
+        "Rscript -e 'rmarkdown::render("
+        "\"{input.rmd}\", "
+        "output_file = file.path(normalizePath(\"{params.results_dir}\"), "
+        "\"{params.sample}_report.html\"), "
+        "intermediates_dir = \"{params.tmp}\", "
+        "knit_root_dir = getwd(), "
+        "params = list(results_dir = normalizePath(\"{params.results_dir}\"), "
+        "sample = \"{params.sample}\"), "
+        "quiet = TRUE)'"

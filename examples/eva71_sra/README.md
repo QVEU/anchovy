@@ -84,24 +84,22 @@ FASTQ=/path/to/5_EVA71_6h_P5.ccs.fastq bash examples/eva71_sra/fetch.sh
 
 ### A run with the paths already filled in
 
-`run_cluster.sh` holds the reads path, the data directory and the thread count
-for the QVEU EV-A71 6h P5 dataset, so the whole thing is one command:
+`workflow/config_cluster.yaml` holds the QVEU EV-A71 paths, so the whole thing
+is one command:
 
 ```bash
-bash examples/eva71_sra/run_cluster.sh
-DRY_RUN=1 bash examples/eva71_sra/run_cluster.sh     # plan only
+snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64 -n
+snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64
 ```
 
-It checks that its `DATA_DIR` matches `data_dir` in the config *before* it maps
-anything, since discovering that mismatch after five minutes of minimap2 is a
-waste, and it `cd`s to the repo root so `results/` lands there rather than
-wherever you happened to be.
+There is no run script. There used to be `run_cluster.sh`, which mapped the
+reads and derived the sample name to hand to the workflow — both of which the
+workflow now does itself from `input_dir`, so what was left was a single
+`snakemake` line. Keeping it meant two places had to agree about how a run
+works, which is exactly how the sample name came to be wrong when you pointed
+it at different reads.
 
-The reads are **mapped where they live** — `fetch.sh` never copies the FASTQ,
-so there is no reason to stage an 11 GB file next to the checkout.
-
-`fetch.sh` itself stays generic: `FASTQ` unset is what makes it download the
-public SRA example, so a lab-specific path cannot be its default.
+Run it from the repo root so `results/` lands there.
 
 ### Keep real-run data outside the repository
 
@@ -183,7 +181,7 @@ magnitude, or drop it entirely.
 When you want the real thing, delete the FASTQ and re-run with neither set.
 
 `fetch.sh` prints the reference name it found when it finishes. It should match
-`reference_name` in `config.yaml`; the version suffix on an accession can change
+the reference FASTA's header; the version suffix on an accession can change
 (`.1` vs `.2`), so it's worth a glance rather than an assumption.
 
 Every step is skipped if its output is already there, so if something fails you
@@ -242,8 +240,12 @@ Copy this directory and change:
 
 - `FASTQ` — your own reads, or `SRR` in `fetch.sh` for a run accession
 - `REFERENCE_ACC` in `fetch.sh` — your reference
-- `MINIMAP_PRESET` — `map-hifi` for PacBio, `map-ont` for Nanopore
-- `sample`, `template`, `reference_name`, `gff` in `config.yaml` to match
+- `minimap_preset` in the config — `map-hifi` for PacBio, `map-ont` for Nanopore
+  (it moved there when mapping became a pipeline stage)
+- `input_dir`, `template`, `gff`, `chemistry` in `config.yaml` to match
+
+`reference_name` is no longer a key: it is read from the reference FASTA's own
+header, so there is nothing to keep in sync with it.
 
 The region file is generated from whatever reference you name, so nothing there
 needs editing by hand. If your reference has no annotation, write the GFF3
