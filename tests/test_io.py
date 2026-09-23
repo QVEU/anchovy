@@ -116,3 +116,80 @@ def test_description_float_values():
     assert parse_description("coverage:12.5 length:9.0") == {
         "coverage": 12.5, "length": 9.0,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Whitelist validation
+# --------------------------------------------------------------------------- #
+# A whitelist anchovy cannot search with does not fail on its own.
+# build_barcode_query_blocks builds one template per barcode as
+# signature[0:22] + barcode + N*umi + signature[-10:], so a wrong-width barcode
+# shifts everything after it -- and without max_barcode_errors each read is
+# still assigned to its NEAREST entry rather than rejected. The run finishes,
+# every cell is wrong, and nothing says so.
+import pytest
+
+from anchovy.io import read_whitelist, validate_whitelist
+from anchovy.schema import SIGNATURE_BARCODE_LEN
+
+
+def test_the_barcode_width_is_the_same_in_both_chemistries():
+    """The check is chemistry-independent, and that is the point.
+
+    v2 and v3 differ only in UMI width (10 vs 12 nt); the cell barcode is 16 in
+    both. So a length that is not 16 is wrong whatever `chemistry` says, and a
+    correct length tells you nothing about which chemistry you have.
+    """
+    assert SIGNATURE_BARCODE_LEN == 16
+
+
+def test_a_good_whitelist_is_accepted():
+    validate_whitelist(["AAACCTGAGAAACCAT", "AAACCTGAGAAACCGC"])
+
+
+def test_the_cellranger_gem_suffix_is_named_with_its_fix(tmp_path):
+    """The likeliest thing to be wrong, for anyone exporting from Seurat."""
+    p = tmp_path / "barcodes.tsv"
+    p.write_text("AAACCTGAGAAACCAT-1\nAAACCTGAGAAACCGC-1\n")
+    with pytest.raises(ValueError, match="GEM suffix") as exc:
+        read_whitelist(str(p))
+    # The message has to carry the remedy, not just the diagnosis.
+    assert "cut -d- -f1" in str(exc.value)
+
+
+def test_a_header_line_is_caught(tmp_path):
+    p = tmp_path / "barcodes.tsv"
+    p.write_text("barcode\nAAACCTGAGAAACCAT\n")
+    with pytest.raises(ValueError, match="not all the same length"):
+        read_whitelist(str(p))
+
+
+def test_a_right_width_non_barcode_is_caught():
+    # A header would have to be a plausible 16-mer to reach this, but a quoted
+    # CSV export manages it.
+    # 14 bases in quotes is exactly 16 characters, so it passes the width
+    # check and only the alphabet catches it.
+    quoted = '"AAACCTGAGAAACC"'
+    assert len(quoted) == SIGNATURE_BARCODE_LEN
+    with pytest.raises(ValueError, match="other than A/C/G/T/N"):
+        validate_whitelist([quoted, "AAACCTGAGAAACCAT"])
+
+
+def test_a_uniform_but_wrong_width_says_it_is_not_a_chemistry_thing():
+    with pytest.raises(ValueError, match="NOT a v2/v3 difference"):
+        validate_whitelist(["AAACCTGAGAAACCA", "AAACCTGAGAAACCG"])
+
+
+def test_an_empty_whitelist_is_caught(tmp_path):
+    p = tmp_path / "barcodes.tsv"
+    p.write_text("\n\n")
+    with pytest.raises(ValueError, match="no barcodes"):
+        read_whitelist(str(p))
+
+
+def test_blank_lines_do_not_become_empty_barcodes(tmp_path):
+    """An empty barcode is an entry every poor read can match."""
+    p = tmp_path / "barcodes.tsv"
+    p.write_text("AAACCTGAGAAACCAT\n\nAAACCTGAGAAACCGC\n")
+    assert list(read_whitelist(str(p)).CBC) == ["AAACCTGAGAAACCAT",
+                                                "AAACCTGAGAAACCGC"]

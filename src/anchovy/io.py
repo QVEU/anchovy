@@ -39,6 +39,7 @@ from anchovy.schema import (
     AnchovyColumns,
     DESCRIPTION_COVERAGE_KEY,
     DESCRIPTION_LENGTH_KEY,
+    SIGNATURE_BARCODE_LEN,
 )
 
 
@@ -176,13 +177,87 @@ def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
     return df
 
 
+def validate_whitelist(barcodes: list[str], path: str = "whitelist") -> None:
+    """Check a barcode list is one anchovy can search with (raises, pure).
+
+    WHY THIS IS FATAL RATHER THAN A WARNING. build_barcode_query_blocks builds
+    one search template per barcode as
+
+        signature[0:22] + barcode + "N"*umi + signature[-10:]
+
+    so a barcode of the wrong width shifts everything after it. The reads then
+    match nothing well -- and unless max_barcode_errors is set, each one is
+    still assigned to its NEAREST entry rather than rejected. The run finishes,
+    every cell is wrong, and nothing says so. That is the failure this refuses
+    to let through.
+
+    THE BARCODE IS 16 nt IN BOTH v2 AND v3 (schema.SIGNATURE_BARCODE_LEN); the
+    chemistries differ only in UMI width. So this check is chemistry-
+    independent, and a length that is not 16 is wrong whatever the config says.
+    """
+    if not barcodes:
+        raise ValueError(f"{path} has no barcodes in it.")
+
+    lengths = {len(b) for b in barcodes}
+    if lengths == {SIGNATURE_BARCODE_LEN}:
+        # Right width. A header line would have to be a plausible 16-mer to get
+        # here, so only the alphabet is left to check, and one bad entry is
+        # enough to look at -- scanning 6.8M barcodes to find the rest is waste.
+        bad = next((b for b in barcodes if set(b.upper()) - set("ACGTN")), None)
+        if bad is not None:
+            raise ValueError(
+                f"{path}: {bad!r} is not a barcode -- it is the right length "
+                f"but contains something other than A/C/G/T/N.\n"
+                f"  A header line or a quoted CSV export will do this.")
+        return
+
+    offender = next(b for b in barcodes if len(b) != SIGNATURE_BARCODE_LEN)
+
+    # The GEM suffix first: it is much the likeliest thing to be wrong here and
+    # the only one with a one-line fix. Cell Ranger's barcodes.tsv, and
+    # anything taken from Seurat's column names, carry it.
+    if "-" in offender:
+        raise ValueError(
+            f"{path}: barcodes carry a GEM suffix, e.g. {offender!r}.\n"
+            f"  That suffix is not part of the barcode. Left on, every search "
+            f"template is built\n"
+            f"  the wrong width and reads are assigned to an arbitrary nearest "
+            f"entry rather than\n"
+            f"  failing -- the run finishes and every cell is wrong. Strip it:\n"
+            f"    cut -d- -f1 {path} > barcodes_stripped.txt")
+
+    if len(lengths) > 1:
+        raise ValueError(
+            f"{path}: barcodes are not all the same length "
+            f"(saw {sorted(lengths)}), e.g. {offender!r}.\n"
+            f"  A mixed-width list usually means a header line, a blank line "
+            f"mid-file, or two\n"
+            f"  files concatenated.")
+
+    raise ValueError(
+        f"{path}: barcodes are {offender and len(offender)} nt, but a 10X cell "
+        f"barcode is {SIGNATURE_BARCODE_LEN} nt.\n"
+        f"  This is NOT a v2/v3 difference -- both use a "
+        f"{SIGNATURE_BARCODE_LEN} nt barcode and differ only in UMI width. "
+        f"Check\n  you have a barcode list rather than, say, a feature or "
+        f"UMI list.")
+
+
 def read_whitelist(path: str) -> pd.DataFrame:
     """Read a 10X barcode whitelist into a single-column DataFrame.
 
-    Reproduces loadBC: take the first tab-separated field of each line, stripped.
+    Reproduces loadBC: take the first tab-separated field of each line,
+    stripped -- then validate, because an unusable whitelist does not fail on
+    its own. See validate_whitelist.
+
+    Blank lines are dropped rather than becoming empty barcodes: a trailing
+    blank line is the commonest way a hand-edited list acquires one, and an
+    empty barcode silently becomes an entry every poor read can match.
     """
     with open(path, "r") as handle:
         barcodes = [line.split("\t")[0].strip() for line in handle]
+    barcodes = [b for b in barcodes if b]
+    validate_whitelist(barcodes, path)
     print("Total Cell Barcodes: {}".format(len(barcodes)))
     return pd.DataFrame(barcodes, columns=["CBC"])
 

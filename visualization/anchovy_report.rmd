@@ -53,6 +53,25 @@ have <- function(key) file.exists(paths[[key]])
 # arrive as character when a column is all-empty (e.g. `region` with no GFF).
 # Coerce defensively at the point of use rather than trusting the header sniff.
 num <- function(x) suppressWarnings(as.numeric(x))
+
+# --- Substitution-class colours, used by every panel that splits on it --------
+# Blue/orange rather than the red/green this report used to carry. That pair
+# put a deuteranope -- the commonest colour-vision deficiency, ~6% of men --
+# at a CVD separation of 6.5 (OKLab x100, 8 is the target), on the one
+# distinction those panels exist to draw; the green also sat under the chroma
+# floor, reading grey, and under 3:1 contrast on white. This pair measures 24.7
+# CVD and 33.6 normal-vision separation.
+#
+# Defined once so the raster, the genome scatter and the region bars cannot
+# drift apart: the colour follows the substitution class, not the panel.
+SUBCLASS_PAL <- c(
+  "Non-Syn"                  = "#2a78d6",
+  "Syn"                      = "#eb6834",
+  # Neutrals, deliberately: these mean "no call", not another category.
+  "non-coding / unannotated" = "grey55",
+  "unclassified (no GFF)"    = "grey55",
+  "X"                        = "grey80"
+)
 ```
 
 ```{r load}
@@ -323,18 +342,73 @@ if (is.null(allele)) {
     d$sub_class <- "unclassified (no GFF)"
   }
 
-  pal <- c("Non-Syn" = "#d1495b", "Syn" = "#66a182",
-           "non-coding / unannotated" = "grey55",
-           "unclassified (no GFF)" = "grey55", "X" = "grey80")
   ggplot(d, aes(position, freq_cells, colour = sub_class)) +
     geom_point(alpha = 0.7, size = 1.6) +
-    scale_colour_manual(values = pal, name = NULL) +
+    scale_colour_manual(values = SUBCLASS_PAL, name = NULL) +
     scale_y_continuous(labels = percent_format(accuracy = 1)) +
     labs(x = "genome position (nt)", y = "fraction of cells",
          title = "Allele frequency across the genome") +
     theme(legend.position = "top")
 }
 ```
+
+## Every cell, every mutation
+
+The same genome axis as above, resolved per cell: one row per cell, one point
+per mutation in that cell's consensus. Cells are ordered by how many mutations
+they carry and then by genotype, so cells sharing a genotype sit together and a
+mutation the population shares reads as a vertical line down the plot.
+
+A blank row is a cell whose consensus matched the reference — those are kept,
+because how much of the plot is empty is part of what it shows.
+
+```{r results-cellmap, fig.height=8}
+if (is.null(annot)) {
+  cat("_No annotation table; skipping the per-cell map._")
+} else {
+  # EVERY cell gets a row, including the ones carrying nothing. They are the
+  # rows with no points, and dropping them would make the population look more
+  # mutated than it is. They arrive here as the annot table's reference rows,
+  # which have no position -- hence building the row order from the cell list
+  # and the points from a separate, filtered frame.
+  per_cell <- annot |>
+    distinct(CBC_ID, genotype) |>
+    mutate(n_mut = ifelse(genotype == "reference" | is.na(genotype) |
+                            genotype == "",
+                          0L, lengths(strsplit(genotype, "_")))) |>
+    arrange(n_mut, genotype, CBC_ID)
+
+  pts <- annot |>
+    filter(!is.na(pos)) |>
+    transmute(CBC_ID,
+              pos = num(pos),
+              # Anything the annotator could not classify is drawn in the
+              # neutral, not left unmapped -- scale_colour_manual gives an
+              # unmapped level no colour, which would silently drop the point.
+              sub_class = ifelse(subClass %in% names(SUBCLASS_PAL),
+                                 subClass, "X"))
+
+  # drop = FALSE plus the full level set is what keeps the empty rows: the
+  # points frame only contains cells that have mutations.
+  pts$CBC_ID <- factor(pts$CBC_ID, levels = per_cell$CBC_ID)
+
+  ggplot(pts, aes(pos, CBC_ID, colour = sub_class)) +
+    geom_point(shape = 15, size = 0.45) +
+    scale_colour_manual(values = SUBCLASS_PAL, name = NULL) +
+    scale_y_discrete(drop = FALSE) +
+    labs(x = "genome position (nt)",
+         y = sprintf("%s cells, fewest mutations at the bottom",
+                     comma(nrow(per_cell))),
+         title = "Mutations per cell across the genome") +
+    theme(axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor = element_blank(),
+          legend.position = "top")
+}
+```
+
+`r if (!is.null(annot)) sprintf("At %s cells in one panel each row is under two pixels tall, so read the vertical structure rather than individual rows -- a column of points is a mutation many cells share, and a block of identical rows is one genotype recurring.", comma(annot |> distinct(CBC_ID) |> nrow()))`
 
 ## Synonymous vs. non-synonymous
 
@@ -357,8 +431,7 @@ if (is.null(regions)) {
       count(region, sub_class) |>
       ggplot(aes(n, reorder(region, n, sum), fill = sub_class)) +
       geom_col() +
-      scale_fill_manual(values = c("Non-Syn" = "#d1495b", "Syn" = "#66a182"),
-                        name = NULL) +
+      scale_fill_manual(values = SUBCLASS_PAL, name = NULL) +
       labs(x = "distinct mutations", y = NULL,
            title = "Coding mutations by region") +
       theme(legend.position = "top")
