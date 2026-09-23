@@ -201,6 +201,51 @@ if (is.null(allele)) {
 }
 ```
 
+## Per-cell mutation map
+
+Every cell as a row, every called mutation as a point at its genome position,
+coloured the same way as the genome map above. A cell with no called variant
+is an empty row -- the same "reference (no called variants)" population as the
+QC section, drawn out individually rather than counted. Cells are grouped by
+identical genotype (then by mutation load) so a clonal expansion shows up as a
+block of rows with the same dots; this is a grouping, not a phylogeny, so the
+order between different genotypes carries no lineage meaning. Reading down a
+column shows how one mutation is distributed across cells; reading along a
+row shows a cell's whole genotype at a glance.
+
+```{r results-cellmap, fig.height=7}
+if (is.null(annot)) {
+  cat("_No annotation table; skipping the per-cell mutation map._")
+} else {
+  cell_order <- annot |>
+    distinct(CBC_ID, genotype) |>
+    mutate(n_mut = ifelse(genotype == "reference" | is.na(genotype) | genotype == "",
+                          0L, lengths(strsplit(genotype, "_")))) |>
+    arrange(genotype, n_mut, CBC_ID) |>
+    pull(CBC_ID)
+
+  d <- annot |>
+    mutate(position = num(pos)) |>
+    filter(is.finite(position)) |>
+    mutate(CBC_ID = factor(CBC_ID, levels = cell_order),
+           sub_class = case_when(subClass %in% c("Syn", "Non-Syn") ~ subClass,
+                                 subClass == "X" ~ "X",
+                                 TRUE ~ "non-coding / unannotated"))
+
+  pal <- c("Non-Syn" = "#d1495b", "Syn" = "#66a182",
+           "non-coding / unannotated" = "grey55", "X" = "grey80")
+
+  ggplot(d, aes(position, CBC_ID, colour = sub_class)) +
+    geom_point(size = 0.6, alpha = 0.7) +
+    scale_colour_manual(values = pal, name = NULL) +
+    labs(x = "genome position (nt)",
+         y = sprintf("cells (n = %s, grouped by genotype)", comma(depth)),
+         title = "Per-cell mutation map") +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+          legend.position = "top")
+}
+```
+
 ## Synonymous vs. non-synonymous
 
 The balance of protein-changing to silent mutations, overall and per region.
