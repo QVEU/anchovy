@@ -36,6 +36,12 @@ files) plus its own code. The easiest way to get everything at once is with
 have conda, install
 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) first.
 
+
+Install from `anchovy` GitHub repo: 
+```bash
+git clone https://github.com/QVEU/anchovy.git
+```
+
 Setup is two commands. The first creates a self-contained environment with all
 the required programs; the second installs anchovy itself into it. 
 
