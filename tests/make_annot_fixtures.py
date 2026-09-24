@@ -70,11 +70,11 @@ EXPECTED_MUTATION_FREQ = {
     "19T": {"count": 1, "freq": 1 / DEPTH},
 }
 
-# Predicted per-genotype names and frequencies. The key was haploFreq when the
-# output carried two frequency columns; there is one now, genoFreq, and it is
-# the genotype-grouped definition haploFreq had. The numbers are unchanged --
-# nothing in this fixture is synonymous-degenerate, which is the only case
-# where the two ever differed.
+# Predicted per-genotype labels and frequencies. genoFreq is the frequency of
+# the NUCLEOTIDE genotype; the R called that haploFreq and gave the name
+# genoFreq to the amino-acid-grouped figure, which the port calls idFreq. The
+# numbers here are unchanged either way -- nothing in this fixture is
+# synonymous-degenerate, which is the only case where the two differ.
 EXPECTED_GENOTYPES = {
     "":        {"name": "reference", "genoFreq": 2 / DEPTH},
     "13A":     {"name": "R5S",       "genoFreq": 2 / DEPTH},

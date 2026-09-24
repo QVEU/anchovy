@@ -503,7 +503,7 @@ if (is.null(nodes)) {
     mutate(nCells = num(nCells), genoFreq = num(genoFreq)) |>
     arrange(desc(nCells)) |>
     slice_head(n = 15) |>
-    transmute(genotype = genotypeName, mutations = nMutations,
+    transmute(genotype = genotypeID, mutations = nMutations,
               cells = nCells, `freq` = percent(genoFreq, accuracy = 0.1)) |>
     knitr::kable(caption = "Top 15 genotypes by cell count")
 }

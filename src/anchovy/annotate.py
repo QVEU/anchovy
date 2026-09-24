@@ -459,8 +459,8 @@ def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 # Genotype node table (for network visualization)
 # --------------------------------------------------------------------------- #
-NODE_COLUMNS = ["genotype", "genotypeName", "nMutations", "nCells",
-                "genoFreq"]
+NODE_COLUMNS = ["genotype", "genotypeID", "nMutations", "nCells",
+                "genoFreq", "idFreq"]
 
 
 def genotype_nodes(annotated: pd.DataFrame,
@@ -478,7 +478,7 @@ def genotype_nodes(annotated: pd.DataFrame,
     including the "reference" node, so Cytoscape can key a node-table import on
     it directly (File -> Import -> Table from File).
 
-    genotypeName carries the amino-acid-level name ("R5S", "D3V_R5S"), which is
+    genotypeID carries the amino-acid-level name ("R5S", "D3V_R5S"), which is
     what makes a rendered network readable -- and which is frame-correct and
     region-aware when annotate ran with a GFF, so a node can read "5UTR:A121C"
     rather than a bare nucleotide token.
@@ -499,7 +499,7 @@ def genotype_nodes(annotated: pd.DataFrame,
     rows = []
     seen: set = set()
     for genotype, group in annotated.groupby("genotype", dropna=False):
-        name = group["genotypeName"].dropna()
+        name = group["genotypeID"].dropna()
         # Reference cells have no substitutions, so no amino-acid name; label the
         # node by what it is rather than leaving the field blank.
         label = name.iloc[0] if len(name) and name.iloc[0] else None
@@ -514,10 +514,11 @@ def genotype_nodes(annotated: pd.DataFrame,
         seen.add(genotype)
         rows.append({
             "genotype": genotype,
-            "genotypeName": label,
+            "genotypeID": label,
             "nMutations": n_mutations,
             "nCells": group["CBC_ID"].nunique(),
             "genoFreq": group["genoFreq"].iloc[0] if "genoFreq" in group else None,
+            "idFreq": group["idFreq"].iloc[0] if "idFreq" in group else None,
         })
 
     # Nodes the edges name that no cell carries -- see the note above. The
@@ -530,12 +531,13 @@ def genotype_nodes(annotated: pd.DataFrame,
         seen.add(genotype)
         rows.append({
             "genotype": genotype,
-            "genotypeName": ("reference" if genotype == "reference"
+            "genotypeID": ("reference" if genotype == "reference"
                              else str(genotype)),
             "nMutations": (0 if genotype == "reference"
                            else len(str(genotype).split("_"))),
             "nCells": 0,
             "genoFreq": 0.0,
+            "idFreq": 0.0,
         })
 
     if not rows:
@@ -633,8 +635,8 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
 
     merged = haplocounts.merge(anno, how="left", on=["pos", "base"])
 
-    # genotypeName = "_".join(unique subName) per genotype; geno/haplo freqs
-    # genotypeName joins the per-mutation names in GENOME-POSITION order.
+    # genotypeID = "_".join(unique subName) per genotype, joined in
+    # GENOME-POSITION order.
     #
     # The port previously joined them in the order the tokens happened to appear
     # in the genotype string, so "13A_8T" became "R5S_D3V" where the R produced
@@ -646,41 +648,37 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     # Missing names collapse to "" rather than NaN, exactly as the old transform
     # did: reference cells have no substitutions, and genoFreq groups on this
     # column, so NaN here would silently drop those rows out of the frequency.
-    # (genotypeName no longer groups the frequency, but it is still the network
-    # node label, and a NaN label is worse than an empty one.)
+    # (it is the network node label and groups idFreq, and a NaN is worse than
+    # an empty string for both.)
     _names = (merged.dropna(subset=["subName"])
                     .sort_values("pos", kind="stable")
                     .groupby("genotype")["subName"]
                     .apply(lambda s: "_".join(pd.unique(s))))
-    merged["genotypeName"] = merged["genotype"].map(_names).fillna("")
+    merged["genotypeID"] = merged["genotype"].map(_names).fillna("")
 
-    # ONE FREQUENCY COLUMN, GROUPED ON THE NUCLEOTIDE GENOTYPE.
+    # TWO FREQUENCIES, OVER TWO DIFFERENT THINGS, EACH NAMED FOR WHAT IT COUNTS.
     #
-    # The R wrote two, and so did this port: genoFreq grouped on genotypeName,
-    # haploFreq on genotype. They agree whenever the two labels are in 1:1
-    # correspondence, which is almost always, so the pair looked redundant and
-    # was carried along unexamined.
+    # genotype is the NUCLEOTIDE haplotype ("121C_201A"); genotypeID is its
+    # amino-acid rendering ("5UTR:A121C_C18S"). The mapping is many-to-one:
+    # synonymous change is written X_n_X, so three cells each carrying a
+    # different third-base change in one codon are three genotypes sharing the
+    # single ID G4G.
     #
-    # They part company on SYNONYMOUS variation, because genotypeName renders a
-    # silent change as X_n_X: three cells each carrying a different third-base
-    # change in one codon are three distinct genotypes with the single name
-    # G4G. Grouped on the name they are one class at 3/n; grouped on the
-    # genotype they are three at 1/n each.
+    #   genoFreq  cells carrying this nucleotide genotype / total
+    #   idFreq    cells carrying any genotype with this ID / total
     #
-    # Which is right depends on the table, and in _genotypeNodes.csv -- one row
-    # per NUCLEOTIDE genotype, and what Cytoscape sizes nodes on -- the
-    # name-grouped figure is simply wrong: it put genoFreq 0.75 next to nCells
-    # 1 on each of those three rows, inflating every node in a synonymous group
-    # by the size of the group. The published figures size nodes by "the
-    # relative frequency of the genotype", one node per genotype, so this is
-    # the genotype-grouped one.
-    #
-    # Kept under the name genoFreq because that is what the report, the README
-    # and existing Cytoscape sessions already reference; it is haploFreq's
-    # definition under genoFreq's name. The amino-acid-level frequency is still
-    # recoverable from this table by grouping on genotypeName.
+    # Both are real quantities and they answer different questions. The R wrote
+    # both as well -- as haploFreq and genoFreq respectively -- but named them
+    # so that the amino-acid figure was the one called "genoFreq", and that is
+    # the one _genotypeNodes.csv carried into Cytoscape as the node frequency.
+    # A node is one nucleotide genotype, so on the G4G group it read nCells 1
+    # beside a frequency of 3/n, sizing every node by its whole synonymous
+    # group. genoFreq is the node frequency; idFreq sits beside it for the
+    # amino-acid view.
     merged["genoFreq"] = (merged.groupby("genotype")["CBC_ID"]
                                 .transform("nunique") / merged["total"])
+    merged["idFreq"] = (merged.groupby("genotypeID")["CBC_ID"]
+                              .transform("nunique") / merged["total"])
 
     merged.to_csv(f"{out_prefix}_annot_v3.csv", index=False)
     written["annot"] = f"{out_prefix}_annot_v3.csv"
