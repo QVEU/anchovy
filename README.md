@@ -467,14 +467,15 @@ something you can interpret. Each row describes one genotype:
 | `genotypeName` | The amino acid change(s), like `R5S` or `D3V_R5S`. If you annotated with a GFF3, non-coding changes appear here too, like `5UTR:A121C` |
 | `nMutations` | How many mutations the genotype carries |
 | `nCells` | How many cells carry it |
-| `genoFreq`, `haploFreq` | What fraction of cells that is |
+| `genoFreq` | What fraction of cells that is |
 
 Once it's imported, the useful moves in Cytoscape's **Style** panel are:
 
 - Set node **Label** to `genotypeName`, so each point is named by the amino acid
   change rather than an internal identifier.
 - Map node **Size** to `nCells` or `genoFreq` (continuous mapping), so common
-  genotypes are visibly bigger.
+  genotypes are visibly bigger. The two are the same quantity, counted and as a
+  fraction.
 - Map node **Fill Color** to `nMutations` (continuous mapping), so how far a
   genotype has drifted from the reference reads at a glance.
 

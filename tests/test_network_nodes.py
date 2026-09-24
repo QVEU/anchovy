@@ -139,7 +139,41 @@ def test_frequencies_come_through(annot_fixture, tmp_path):
     nodes = result["nodes"].set_index("genotype")
     # 7 cells in the fixture; 13A is carried by 2 of them.
     assert nodes.loc["13A", "genoFreq"] == pytest.approx(2 / 7)
-    assert nodes.loc["13A", "haploFreq"] == pytest.approx(2 / 7)
+    assert "haploFreq" not in nodes.columns
+
+
+def test_the_node_frequency_counts_cells_carrying_THAT_genotype(tmp_path):
+    """Synonymous variation is where the old two columns disagreed.
+
+    genoFreq used to group on genotypeName, which renders a silent change as
+    X_n_X -- so three cells each carrying a different third-base change in one
+    codon became three genotypes sharing the name G4G, and each of their rows
+    got the whole group's frequency. nCells said 1, genoFreq said 3/4, on the
+    same row. Cytoscape sizes nodes on it.
+    """
+    reference = "ATGAAACCCGGGTTTTAA"          # codon 4 = GGG (Gly), 1-based 10-12
+    cells = {
+        "cellA": ("", reference),
+        "cellB": ("12A", reference[:11] + "A" + reference[12:]),   # GGG->GGA
+        "cellC": ("12C", reference[:11] + "C" + reference[12:]),   # GGG->GGC
+        "cellD": ("12T", reference[:11] + "T" + reference[12:]),   # GGG->GGT
+    }
+    csv = tmp_path / "filtConsensus.csv"
+    pd.DataFrame({"CBC_ID": list(cells),
+                  "genotype": [g for g, _ in cells.values()],
+                  "sequence": [s for _, s in cells.values()]}).to_csv(csv, index=False)
+    (tmp_path / "reference.txt").write_text(reference + "\n")
+
+    nodes = run(str(csv), str(tmp_path / "reference.txt"),
+                str(tmp_path / "o"), network=True)["nodes"].set_index("genotype")
+
+    # The premise: all three really do collapse onto one name.
+    assert set(nodes.loc[["12A", "12C", "12T"], "genotypeName"]) == {"G4G"}
+    for genotype in ("12A", "12C", "12T"):
+        assert nodes.loc[genotype, "nCells"] == 1
+        assert nodes.loc[genotype, "genoFreq"] == pytest.approx(1 / 4), (
+            "the node frequency is grouped on the NAME again, so every "
+            "synonymous genotype is sized by its whole group")
 
 
 # --------------------------------------------------------------------------- #

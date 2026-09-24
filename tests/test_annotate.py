@@ -123,17 +123,25 @@ def test_annotate_matches_r_golden(tmp_path):
         f"\n exp: {genotype_names(exp)}"
     )
 
-    # And the per-genotype frequencies, which are what a network node gets
-    # sized by.
-    def freqs(df):
-        d = df[["genotype", "genoFreq", "haploFreq"]].drop_duplicates()
-        return {row["genotype"]: (round(row["genoFreq"], 9),
-                                  round(row["haploFreq"], 9))
-                for _, row in d.iterrows()}
+    # And the per-genotype frequency, which is what a network node gets sized
+    # by. DELIBERATE DIVERGENCE FROM THE R, so the comparison is asymmetric:
+    # the R wrote genoFreq (grouped on genotypeName) and haploFreq (grouped on
+    # genotype), which agree unless synonymous variation collapses two
+    # genotypes onto one name. The port keeps one column, genoFreq, carrying
+    # the genotype-grouped definition -- so it is the R's haploFreq that it has
+    # to match, not the R's genoFreq. See annotate.py for why the name-grouped
+    # figure was wrong on a table keyed by genotype.
+    def freqs(df, column):
+        d = df[["genotype", column]].drop_duplicates()
+        return {row["genotype"]: round(row[column], 9) for _, row in d.iterrows()}
 
-    assert freqs(got) == freqs(exp), (
-        f"genotype frequencies differ:\n got: {freqs(got)}\n exp: {freqs(exp)}"
+    assert freqs(got, "genoFreq") == freqs(exp, "haploFreq"), (
+        f"genotype frequencies differ:\n got: {freqs(got, 'genoFreq')}"
+        f"\n exp: {freqs(exp, 'haploFreq')}"
     )
+    assert "haploFreq" not in got.columns, (
+        "haploFreq is back; it was the same number as genoFreq under a second "
+        "name in every case but the one where genoFreq was wrong")
 
 
 def test_network_matches_r_golden(tmp_path):

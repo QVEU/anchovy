@@ -460,7 +460,7 @@ def _legacy_rows_from_regions(region_table: pd.DataFrame) -> pd.DataFrame:
 # Genotype node table (for network visualization)
 # --------------------------------------------------------------------------- #
 NODE_COLUMNS = ["genotype", "genotypeName", "nMutations", "nCells",
-                "genoFreq", "haploFreq"]
+                "genoFreq"]
 
 
 def genotype_nodes(annotated: pd.DataFrame,
@@ -518,7 +518,6 @@ def genotype_nodes(annotated: pd.DataFrame,
             "nMutations": n_mutations,
             "nCells": group["CBC_ID"].nunique(),
             "genoFreq": group["genoFreq"].iloc[0] if "genoFreq" in group else None,
-            "haploFreq": group["haploFreq"].iloc[0] if "haploFreq" in group else None,
         })
 
     # Nodes the edges name that no cell carries -- see the note above. The
@@ -537,7 +536,6 @@ def genotype_nodes(annotated: pd.DataFrame,
                            else len(str(genotype).split("_"))),
             "nCells": 0,
             "genoFreq": 0.0,
-            "haploFreq": 0.0,
         })
 
     if not rows:
@@ -648,13 +646,41 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     # Missing names collapse to "" rather than NaN, exactly as the old transform
     # did: reference cells have no substitutions, and genoFreq groups on this
     # column, so NaN here would silently drop those rows out of the frequency.
+    # (genotypeName no longer groups the frequency, but it is still the network
+    # node label, and a NaN label is worse than an empty one.)
     _names = (merged.dropna(subset=["subName"])
                     .sort_values("pos", kind="stable")
                     .groupby("genotype")["subName"]
                     .apply(lambda s: "_".join(pd.unique(s))))
     merged["genotypeName"] = merged["genotype"].map(_names).fillna("")
-    merged["genoFreq"] = merged.groupby("genotypeName")["CBC_ID"].transform("nunique") / merged["total"]
-    merged["haploFreq"] = merged.groupby("genotype")["CBC_ID"].transform("nunique") / merged["total"]
+
+    # ONE FREQUENCY COLUMN, GROUPED ON THE NUCLEOTIDE GENOTYPE.
+    #
+    # The R wrote two, and so did this port: genoFreq grouped on genotypeName,
+    # haploFreq on genotype. They agree whenever the two labels are in 1:1
+    # correspondence, which is almost always, so the pair looked redundant and
+    # was carried along unexamined.
+    #
+    # They part company on SYNONYMOUS variation, because genotypeName renders a
+    # silent change as X_n_X: three cells each carrying a different third-base
+    # change in one codon are three distinct genotypes with the single name
+    # G4G. Grouped on the name they are one class at 3/n; grouped on the
+    # genotype they are three at 1/n each.
+    #
+    # Which is right depends on the table, and in _genotypeNodes.csv -- one row
+    # per NUCLEOTIDE genotype, and what Cytoscape sizes nodes on -- the
+    # name-grouped figure is simply wrong: it put genoFreq 0.75 next to nCells
+    # 1 on each of those three rows, inflating every node in a synonymous group
+    # by the size of the group. The published figures size nodes by "the
+    # relative frequency of the genotype", one node per genotype, so this is
+    # the genotype-grouped one.
+    #
+    # Kept under the name genoFreq because that is what the report, the README
+    # and existing Cytoscape sessions already reference; it is haploFreq's
+    # definition under genoFreq's name. The amino-acid-level frequency is still
+    # recoverable from this table by grouping on genotypeName.
+    merged["genoFreq"] = (merged.groupby("genotype")["CBC_ID"]
+                                .transform("nunique") / merged["total"])
 
     merged.to_csv(f"{out_prefix}_annot_v3.csv", index=False)
     written["annot"] = f"{out_prefix}_annot_v3.csv"

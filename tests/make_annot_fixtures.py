@@ -70,13 +70,17 @@ EXPECTED_MUTATION_FREQ = {
     "19T": {"count": 1, "freq": 1 / DEPTH},
 }
 
-# Predicted per-genotype names and haplotype frequencies.
+# Predicted per-genotype names and frequencies. The key was haploFreq when the
+# output carried two frequency columns; there is one now, genoFreq, and it is
+# the genotype-grouped definition haploFreq had. The numbers are unchanged --
+# nothing in this fixture is synonymous-degenerate, which is the only case
+# where the two ever differed.
 EXPECTED_GENOTYPES = {
-    "":        {"name": "reference", "haploFreq": 2 / DEPTH},
-    "13A":     {"name": "R5S",       "haploFreq": 2 / DEPTH},
-    "13A_8T":  {"name": "R5S_D3V",   "haploFreq": 1 / DEPTH},
-    "6G":      {"name": "K2K",       "haploFreq": 1 / DEPTH},
-    "19T":     {"name": "H7Y",       "haploFreq": 1 / DEPTH},
+    "":        {"name": "reference", "genoFreq": 2 / DEPTH},
+    "13A":     {"name": "R5S",       "genoFreq": 2 / DEPTH},
+    "13A_8T":  {"name": "R5S_D3V",   "genoFreq": 1 / DEPTH},
+    "6G":      {"name": "K2K",       "genoFreq": 1 / DEPTH},
+    "19T":     {"name": "H7Y",       "genoFreq": 1 / DEPTH},
 }
 
 # Key network relationship the fixture is designed to produce.
