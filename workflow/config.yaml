@@ -4,7 +4,16 @@
 # the Snakefile) to point the pipeline at different data or tweak parameters --
 # the workflow-level equivalent of the package's config.py.
 #
-# Currently pointed at the test fixtures for development against known data.
+# AS SHIPPED THIS IS A RUNNABLE EXAMPLE, not a template to fill in. It points at
+# the fixture in tests/data/fastqs, so
+#
+#   snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 4
+#
+# runs the whole pipeline -- map, extract, per-cell consensus, genotypes,
+# networks, report -- in seconds, and is the quickest way to confirm an install
+# works. Outputs go to tests/data/fastqs/results/example/ and are gitignored;
+# delete that directory to start over. tests/make_fastq_fixtures.py documents
+# what the fixture contains and regenerates it.
 
 # --- input: a folder of FASTQs ----------------------------------------------- #
 # THIS IS THE WHOLE INTERFACE. Point it at a directory and every FASTQ in it
@@ -76,14 +85,32 @@ chemistry: "v3"
 # writes, mixed widths, non-ACGTN characters -- and the error names the fix.
 #
 # `whitelist_url` points the download at your own mirror instead.
-whitelist: "tests/data/whitelist.txt"
+# The fixture's six barcodes, sitting beside the reads -- which is also where a
+# real run-specific list belongs, since it comes from the same Illumina run.
+# Omit this key entirely and the chemistry-matched 10X list downloads instead.
+whitelist: "tests/data/fastqs/whitelist.txt"
 
 # `signature` overrides the one derived from `chemistry`, for an assay whose
 # handles differ from 10X's. The N count still has to match the whitelist.
 
-# Reference/template FASTA that minimap2 maps each per-cell FASTA against.
-# (This was the $3 argument to AnchovyJob.sh.)
-template: "tests/data/template.fasta"
+# Reference/template FASTA. minimap2 maps the raw reads against it, and then
+# each per-cell FASTA. (This was the $3 argument to AnchovyJob.sh.)
+#
+# The fixture's 600 nt template, whose region model is the gff below. Note this
+# is NOT tests/data/template.fasta -- that one belongs to the barcode-extraction
+# fixture and nothing aligns to it.
+template: "tests/data/mapping/template.fasta"
+
+# PacBio CCS. Use map-ont for Nanopore; getting this wrong costs alignment
+# sensitivity rather than failing.
+minimap_preset: "map-hifi"
+
+# Call genotypes against the GENOME, not against the consensus across cells.
+# Must be the same file as `template`. Unset, anything the population shares is
+# absorbed into the "reference" and vanishes -- and at a variant column that
+# splits evenly the tie is broken alphabetically, so the reference base comes
+# out arbitrary and the cells matching the template are reported as the mutants.
+reference: "tests/data/mapping/template.fasta"
 
 # --- Region-aware annotation (optional) ------------------------------------- #
 # Uncomment `gff` to annotate mutations against a genome region model instead of
@@ -112,3 +139,45 @@ template: "tests/data/template.fasta"
 # To keep genome coordinates WITHOUT a region model, set this instead:
 #
 #   whole_reference: true
+
+# The fixture's region model: 5'UTR 1-149, CDS 150-500 (+ strand, phase 0),
+# 3'UTR 501-600. The CDS deliberately does not start at position 1, so a run
+# exercises frame-correct residue numbering rather than assuming frame 1.
+gff: "tests/data/mapping/regions.gff3"
+
+# --- the analysis window and the cell filter --------------------------------- #
+# Setting `gff` above puts the consensus stage in whole-reference mode, where
+# these bounds stop being a cut and become the columns variants are called over.
+# Positions stay genome coordinates either way.
+#
+# `window: cds` takes the window from the GFF's CDS, which is what a real run
+# wants -- see workflow/config_cluster.yaml. Here it is given explicitly for two
+# reasons: the fixture's reads cover only template [50, 550), so the window has
+# to sit inside that, and one of the two planted variants is in the 5'UTR, which
+# a CDS window would exclude. Keeping both in view is the point of the example:
+# it produces a coding call AND a non-coding one.
+orf_start: 60
+orf_end: 540
+
+# THE CELL FILTER: a cell counts if the coding sequence is complete at depth.
+# min_breadth 1.0 says every position in the window must be called;
+# cons_min_depth says how many reads that takes. See workflow/config_cluster.yaml
+# for why these two replaced depth_min, which conflated depth with breadth.
+min_breadth: 1.0
+cons_min_depth: 5
+cons_threshold: 0.5
+depth_min: 0
+
+# Reads a barcode needs before it becomes a cell. The fixture gives each of its
+# four cells 8, so this keeps all of them and would drop stray mis-assignments.
+min_reads: 8
+
+# The fixture's barcodes are exact whitelist entries, so nothing needs correcting
+# -- but leaving this unset means any read is assigned to its NEAREST entry with
+# no floor, which on real data turns unreadable barcodes into plausible cells.
+max_barcode_errors: 2
+
+# The second analysis, over every mapped cell rather than the filtered subset:
+# {reads carrying an allele} / {reads at that position}, with a per-position
+# denominator. Adds _alleleFrequencies.csv and _cellAlleleFreq.csv.
+allele_frequencies: true

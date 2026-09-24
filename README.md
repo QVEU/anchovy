@@ -87,13 +87,21 @@ way that lets you edit it.)
 
 You control a run through a **settings file** — a plain text file that lists
 where your data is and a few options. You never need to edit anchovy's code; you
-just point it at a settings file. An example, `workflow/config.yaml`, is included.
+just point it at a settings file.
 
-To run everything:
+`workflow/config.yaml` is included and is **ready to run as-is**. It points at a
+small bundled dataset, so this is the quickest way to check your installation
+works — it finishes in seconds and exercises every stage:
 
 ```bash
 snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 8
 ```
+
+You should get six cells, two mutations (one in the polyprotein, one in the
+5'UTR), a genotype network and a rendered report, in
+`tests/data/fastqs/results/example/`. Open `example_report.html` and you have
+seen everything the pipeline produces. Delete that directory to start over;
+`tests/make_fastq_fixtures.py` documents what the bundled data contains.
 
 `--cores 8` lets it use 8 processor cores to work on multiple cells at once — set
 this to however many your machine has.

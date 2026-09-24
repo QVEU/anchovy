@@ -61,13 +61,34 @@ def min_distance_block(blocks: np.ndarray, target: str) -> tuple[int, int, str]:
 def make_read_blocks(seq: str, query_len: int) -> np.ndarray:
     """Slice a read sequence into overlapping query-length blocks.
 
-    Reproduces the original blockDist windowing:
+    THE UPPER BOUND IS len(seq) - query_len + 1, AND THE +1 IS THE WHOLE POINT.
+    The original blockDist stopped one short:
+
         [seq[i : i+query_len] for i in range(max(1, len(seq) - query_len))]
-    The max(1, ...) guard preserves the original's behavior on short sequences.
+
+    which never generates the LAST block -- the one flush with the end of the
+    sequence. That is not a harmless edge case here, because it is exactly where
+    the signature sits. The caller searches the window ending at the read's
+    alignment offset, and on a real 10X read the barcode construct runs right up
+    to the cDNA that aligns, so the signature lands at or very near the final
+    position. Excluded from the candidates, the best remaining block is the one
+    starting a base early: a leading insertion and a trailing deletion, so a read
+    with a PERFECT barcode is scored at distance 2 and reported as two errors.
+
+    Silently, and with consequences. Nothing failed -- the block-wise barcode
+    lookup usually still recovers the right cell from a shifted block, so the
+    output looked ordinary. But the shift is an indel, and `max_barcode_errors`
+    switches assignment to exact-or-within-k SUBSTITUTIONS, which drops indels
+    by design: with that option set, every such read was discarded before it
+    could become a cell. It is also the kind of thing that inflates a run's
+    "no exact whitelist barcode" fraction for no biological reason.
+
+    The max(1, ...) guard is kept for sequences shorter than the query, where it
+    yields the one truncated block the original produced.
     """
     return np.array([
         seq[i:min(len(seq), i + query_len)]
-        for i in range(max(1, len(seq) - query_len))
+        for i in range(max(1, len(seq) - query_len + 1))
     ])
 
 

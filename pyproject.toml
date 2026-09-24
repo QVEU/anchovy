@@ -48,6 +48,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov",
     "ruff",          # fast linter + formatter, the current common default
+    "pyyaml",        # tests read workflow/config.yaml to check the example runs
 ]
 
 # --- (3) Console entry points ----------------------------------------------

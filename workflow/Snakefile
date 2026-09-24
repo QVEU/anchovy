@@ -68,6 +68,21 @@ if INPUT_DIR is None and "samples" not in config:
 #
 # The `samples` + `cells_dir` resume path has no input_dir to anchor to, so
 # there these fall back to the working directory as before.
+# --config KEY=false ARRIVES AS THE STRING "false", WHICH IS TRUTHY.
+# Every flag below is documented as a YAML boolean, where `report: false` works
+# -- but the same key passed on the command line, which is how you override one
+# for a single run, silently did the opposite of what it said. Nothing failed;
+# the option was just ignored.
+_FALSEY = {"false", "no", "off", "0", "none", ""}
+
+
+def _flag(key, default=False):
+    value = config.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSEY
+    return bool(value)
+
+
 def _under_input(key, name):
     explicit = config.get(key)
     if explicit:
@@ -229,7 +244,7 @@ WORK            = RESULTS + "/work"
 # optional ANALYSIS WINDOW: the covered core to call variants over, excluding
 # ragged flanks. Positions are never renumbered either way.
 GFF        = config.get("gff")
-WHOLE_REF  = bool(config.get("whole_reference", False)) or GFF is not None
+WHOLE_REF  = _flag("whole_reference") or GFF is not None
 ORF_START  = config.get("orf_start")
 ORF_END    = config.get("orf_end")
 
@@ -279,7 +294,7 @@ REFERENCE = config.get("reference")
 # that are merely both unresolved at a position get grouped as sharing a
 # variant. Set `keep_ambiguous: true` to retain them, e.g. when you are
 # deliberately looking for within-cell mixed populations.
-KEEP_AMBIGUOUS = bool(config.get("keep_ambiguous", False))
+KEEP_AMBIGUOUS = _flag("keep_ambiguous")
 
 if not WHOLE_REF and (ORF_START is None or ORF_END is None):
     raise WorkflowError(
@@ -293,7 +308,7 @@ ANNOTATE_FLAGS  = f"--gff {GFF}" if GFF else ""
 # Keep each genotype's self-edge in the epistatic network. Off by default --
 # Cytoscape draws them as a loop on every node and dropping them loses none.
 # Set `self_edges: true` to reproduce the original R output exactly.
-if config.get("self_edges", False):
+if _flag("self_edges"):
     ANNOTATE_FLAGS = (ANNOTATE_FLAGS + " --self-edges").strip()
 
 # --------------------------------------------------------------------------- #
@@ -305,7 +320,7 @@ if config.get("self_edges", False):
 # and deliberately does NOT use the network's cell subset: its denominators are
 # per position, so a cell covering part of the CDS counts where it has data and
 # is absent elsewhere. See src/anchovy/frequencies.py.
-FREQUENCIES = bool(config.get("allele_frequencies", False))
+FREQUENCIES = _flag("allele_frequencies")
 
 ALLELE_FREQUENCIES = RESULTS + "/" + SAMPLE + "_alleleFrequencies.csv"
 CELL_ALLELE_FREQ   = RESULTS + "/" + SAMPLE + "_cellAlleleFreq.csv"
@@ -325,7 +340,7 @@ REPORT_RMD = config.get(
     "report_rmd",
     os.path.normpath(os.path.join(workflow.basedir, os.pardir,
                                   "visualization", "anchovy_report.rmd")))
-REPORT_ON  = bool(config.get("report", True))
+REPORT_ON  = _flag("report", True)
 REPORT     = RESULTS + "/" + SAMPLE + "_report.html"
 
 REGION_ANNOTATIONS = RESULTS + "/" + SAMPLE + "_regionAnnotations.csv"
