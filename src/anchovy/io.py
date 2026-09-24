@@ -95,39 +95,38 @@ def parse_cigar_lengths(read) -> list[int]:
     return [read_len, clip_read_len, read_len - clip_read_len]
 
 
-def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
-    """Read a mapped SAM into a DataFrame with CIGAR-derived length columns.
+def iter_sam_chunks(path: str, min_read_length: int,
+                    chunk_size: int | None = None):
+    """Yield the surviving reads as frames of at most `chunk_size` rows.
 
-    ONE STREAMING PASS. The original loadSAM read the file twice -- a manual
-    text parse of the 11 core fields, then a pysam pass for CIGAR accounting --
-    and built a list of every non-header line before filtering anything. That
-    is bounded by the WHOLE FILE rather than by the reads that survive, which on
-    a real run is the difference that matters: of 3,457,184 records in a PacBio
-    run, 402,303 reached the next stage. The other 88% were parsed, stored, and
-    copied into a DataFrame before being discarded.
+    WHY CHUNKED. read_sam below returns the whole file as one frame, and the
+    extract stage then holds it, a pool's worth of payloads derived from it,
+    and the output table, all at once. That is fine at 400,000 reads and fatal
+    at eleven million: the sequences alone are ~2 KB each, so one frame is 22 GB
+    before anything is done with it, and the run dies to the OOM killer with no
+    message. Chunking bounds every one of those by the chunk rather than by the
+    file, so the stage costs the same on a run of any size.
 
-    pysam already parses the record and exposes the CIGAR, so a single
-    `for read in fp:` gets everything both passes got. Filtering inside the loop
-    means a discarded read is never retained at all.
+    `chunk_size=None` yields exactly one frame, which is what read_sam wants.
 
-    WHICH READS SURVIVE IS UNCHANGED. The old code filtered rows on
-    `RNAME != "*"` (the text pass) while computing CIGARs for
-    `not read.is_unmapped` (the pysam pass), then zipped the two together. Those
-    are different predicates: a read that is flagged unmapped but still carries
-    a reference name -- legal SAM, an unmapped mate placed at its partner's
-    locus -- is kept by the first and dropped by the second. When they disagree
-    the old code raised `ValueError: Length of values (N) does not match length
-    of index (M)` from pandas, so it could not silently misalign, but it also
-    could not proceed. This keeps the row predicate, `reference_name is not
-    None`, and computes the CIGAR for exactly those rows, so the two can no
-    longer disagree.
-
+    Prints the candidate-read total when the file is exhausted, not before:
+    that count is only known at the end of a single streaming pass, and a
+    second pass to learn it early would cost more than it tells anyone.
     Args:
         path: path to the input SAM file.
         min_read_length: keep reads with length strictly greater than this.
             (Callers pass config.extract.effective_min_read_length(), which
             defaults to the signature length -- the original's `minL = quL`.)
+        chunk_size: rows per yielded frame, or None for a single frame.
     """
+    def frame(rows, read_lens, clip_lens, offsets, lengths):
+        df = pd.DataFrame(rows, columns=SamColumns.KEPT)
+        df[SamColumns.READ_LEN] = read_lens
+        df[SamColumns.CLIP_READ_LEN] = clip_lens
+        df[SamColumns.OFFSET] = offsets
+        df[SamColumns.LENGTH] = lengths
+        return df
+
     rows: list[list[str]] = []
     read_lens: list[int] = []
     clip_lens: list[int] = []
@@ -163,8 +162,8 @@ def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
             # QUAL is one character per base, so it is exactly as large as SEQ,
             # and on a PacBio frame the two together are 88% of it. Nothing
             # reads it -- not this module, not extract, not any stage after --
-            # so every byte of it was carried through the whole stage, copied
-            # again by the frame duplicate below, and dropped at the end.
+            # so every byte of it was carried through the whole stage and
+            # dropped at the end.
             #
             # SamColumns.ORDER still describes the 11-field SAM line; KEPT is
             # the subset actually retained. Add a column back to KEPT if
@@ -176,16 +175,55 @@ def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
             clip_lens.append(clip_len)
             offsets.append(offset)
             lengths.append(len(seq))
-    print("Done.")
 
+            if chunk_size is not None and len(rows) >= chunk_size:
+                yield frame(rows, read_lens, clip_lens, offsets, lengths)
+                rows, read_lens, clip_lens = [], [], []
+                offsets, lengths = [], []
+
+    print("Done.")
     print("Total Candidate Reads: {}".format(n_records))
 
-    df = pd.DataFrame(rows, columns=SamColumns.KEPT)
-    df[SamColumns.READ_LEN] = read_lens
-    df[SamColumns.CLIP_READ_LEN] = clip_lens
-    df[SamColumns.OFFSET] = offsets
-    df[SamColumns.LENGTH] = lengths
-    return df
+    # The trailing partial chunk, and the only chunk when chunk_size is None.
+    # Yielded even when empty so a caller always sees the column layout.
+    if rows or chunk_size is None:
+        yield frame(rows, read_lens, clip_lens, offsets, lengths)
+
+
+def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
+    """Read a mapped SAM into a DataFrame with CIGAR-derived length columns.
+
+    ONE STREAMING PASS. The original loadSAM read the file twice -- a manual
+    text parse of the 11 core fields, then a pysam pass for CIGAR accounting --
+    and built a list of every non-header line before filtering anything. That
+    is bounded by the WHOLE FILE rather than by the reads that survive, which on
+    a real run is the difference that matters: of 3,457,184 records in a PacBio
+    run, 402,303 reached the next stage. The other 88% were parsed, stored, and
+    copied into a DataFrame before being discarded.
+
+    pysam already parses the record and exposes the CIGAR, so a single
+    `for read in fp:` gets everything both passes got. Filtering inside the loop
+    means a discarded read is never retained at all.
+
+    WHICH READS SURVIVE IS UNCHANGED. The old code filtered rows on
+    `RNAME != "*"` (the text pass) while computing CIGARs for
+    `not read.is_unmapped` (the pysam pass), then zipped the two together. Those
+    are different predicates: a read that is flagged unmapped but still carries
+    a reference name -- legal SAM, an unmapped mate placed at its partner's
+    locus -- is kept by the first and dropped by the second. When they disagree
+    the old code raised `ValueError: Length of values (N) does not match length
+    of index (M)` from pandas, so it could not silently misalign, but it also
+    could not proceed. This keeps the row predicate, `reference_name is not
+    None`, and computes the CIGAR for exactly those rows, so the two can no
+    longer disagree.
+
+    Args:
+        path: path to the input SAM file.
+        min_read_length: keep reads with length strictly greater than this.
+            (Callers pass config.extract.effective_min_read_length(), which
+            defaults to the signature length -- the original's `minL = quL`.)
+    """
+    return next(iter_sam_chunks(path, min_read_length, chunk_size=None))
 
 
 def validate_whitelist(barcodes: list[str], path: str = "whitelist") -> None:
@@ -301,6 +339,49 @@ def write_anchovy_csv(df: pd.DataFrame, path: str, chunksize: int = 50000) -> No
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+class AnchovyCsvSink:
+    """Append the extract stage's output one chunk at a time, atomically.
+
+    write_anchovy_csv takes a whole frame, which is exactly what the streaming
+    stage must never build. This writes the same file from a sequence of chunks:
+    header once, the index continuing across chunks so the rows are numbered as
+    though one frame had been written, and the same write-then-rename so a run
+    killed partway leaves no half-file under the name the next stage reads.
+
+    The output is byte-identical to write_anchovy_csv given the same rows in the
+    same order, which tests/test_scale.py checks rather than asserts.
+    """
+
+    def __init__(self, path: str):
+        self.target = Path(path)
+        self.tmp = self.target.with_name(self.target.name + ".partial")
+        self._handle = None
+        self._next_index = 0
+
+    def __enter__(self):
+        self._handle = self.tmp.open("w", newline="")
+        return self
+
+    def write(self, df: pd.DataFrame) -> None:
+        if df.empty:
+            return
+        df = df[AnchovyColumns.ORDER]
+        # Renumber so the index runs unbroken across chunks; each chunk arrives
+        # numbered from zero.
+        df.index = range(self._next_index, self._next_index + len(df))
+        df.to_csv(self._handle, header=self._next_index == 0)
+        self._next_index += len(df)
+
+    def __exit__(self, exc_type, exc, tb):
+        self._handle.close()
+        self._handle = None
+        if exc_type is None:
+            os.replace(self.tmp, self.target)
+        else:
+            self.tmp.unlink(missing_ok=True)
+        return False
 
 
 def read_anchovy_csv(path: str) -> pd.DataFrame:

@@ -251,14 +251,17 @@ def test_assign_payloads_carry_no_bulk_objects():
 
     from anchovy import extract
 
-    source = inspect.getsource(extract.assign_barcodes)
-    payload_block = source.split("payloads = [")[1].split("]")[0]
-    for leaked in ("whitelist", "barcode_blocks"):
+    # The payload is built in _assign_chunk and the pool in _BarcodeState;
+    # they used to share one function, and split so the lookup tables could be
+    # built once and reused across the streamed chunks rather than per chunk.
+    payload_block = (inspect.getsource(extract._assign_chunk)
+                     .split("payloads = [")[1].split("]")[0])
+    for leaked in ("whitelist", "barcode_blocks", "state.blocks", "state.index"):
         assert leaked not in payload_block, (
             f"{leaked} is back in the per-read payload; it belongs in "
             f"_assign_init, or every chunk ships a copy of it")
 
-    assert "initializer=_assign_init" in source, (
+    assert "initializer=_assign_init" in inspect.getsource(extract._BarcodeState), (
         "the pool must publish shared state via its initializer")
 
     # A payload must stay small enough that per-chunk pickling is irrelevant.
@@ -736,3 +739,135 @@ def test_extract_announces_its_memory_before_spending_it(tmp_path, capsys):
     assert "GB" in out and "extract_threads" in out, (
         "the stage no longer reports its projected memory; a run killed by the "
         "OOM killer is then indistinguishable from any other crash")
+
+
+# --------------------------------------------------------------------------- #
+# Streaming: the same answer, a bounded footprint
+# --------------------------------------------------------------------------- #
+# The stage used to read the whole SAM, run both passes over it, and build the
+# entire output before returning any of it, so its cost scaled with the run. At
+# eleven million reads the sequences alone are ~22 GB and the kernel killed it.
+# Chunking bounds all three by chunk_size -- but only if the chunk boundary
+# cannot change the answer, which is what these check.
+def _streaming_fixture(tmp_path, n_reads):
+    """A SAM whose reads carry real barcodes, plus its whitelist."""
+    import random
+
+    random.seed(11)
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    codes = ["AAACCCAAGAAACACT", "AACGTGATCCTTAGGC", "ACTTGATTGCCAGTAC"]
+    (tmp_path / "wl.txt").write_text("\n".join(codes) + "\n")
+
+    lines = ["@SQ\tSN:ref\tLN:900"]
+    for i in range(n_reads):
+        bc = codes[i % len(codes)]
+        umi = "".join(random.choice("ACGT") for _ in range(10))
+        sig = query[:22] + bc + umi + query[-10:]
+        left = "".join(random.choice("ACGT") for _ in range(20))
+        right = "".join(random.choice("ACGT") for _ in range(300))
+        seq = left + sig + right
+        lines.append("\t".join([f"r{i}", "0", "ref", "1", "60",
+                                f"{len(left) + len(sig)}S{len(right)}M",
+                                "*", "0", "0", seq, "I" * len(seq)]))
+    path = tmp_path / "s.sam"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path), str(tmp_path / "wl.txt"), query
+
+
+def test_the_chunk_boundary_cannot_change_the_answer(tmp_path, capsys):
+    """Every chunk size must give the identical table, including a silly one.
+
+    A boundary bug here would not fail: it would drop or duplicate the reads
+    that happen to straddle a chunk, which on real data reads as slightly fewer
+    cells.
+    """
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run
+
+    sam, wl, query = _streaming_fixture(tmp_path, 250)
+
+    def table(chunk_size):
+        df = run(sam=sam, whitelist=wl, signature=query,
+                 config=ExtractConfig(signature=query, nthreads=2,
+                                      chunk_size=chunk_size))
+        capsys.readouterr()
+        return df
+
+    whole = table(10_000)
+    assert len(whole) == 250
+    for chunk_size in (1, 7, 100, 249, 250, 251):
+        pd.testing.assert_frame_equal(table(chunk_size), whole)
+
+
+def test_streaming_to_csv_matches_writing_the_whole_frame(tmp_path, capsys):
+    """run_to_csv must produce the file write_anchovy_csv would have."""
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run, run_to_csv
+    from anchovy.io import write_anchovy_csv
+
+    sam, wl, query = _streaming_fixture(tmp_path, 120)
+    cfg = ExtractConfig(signature=query, nthreads=2, chunk_size=17)
+
+    write_anchovy_csv(run(sam=sam, whitelist=wl, signature=query, config=cfg),
+                      str(tmp_path / "accumulated.csv"))
+    rows = run_to_csv(sam=sam, whitelist=wl, out_path=str(tmp_path / "streamed.csv"),
+                      signature=query, config=cfg)
+    capsys.readouterr()
+
+    assert rows == 120
+    assert (tmp_path / "streamed.csv").read_bytes() == \
+        (tmp_path / "accumulated.csv").read_bytes(), (
+            "the streamed CSV differs from the accumulated one -- most likely "
+            "the index no longer runs unbroken across chunks, or the header is "
+            "repeated")
+
+
+def test_a_failed_stream_leaves_no_half_file(tmp_path):
+    """A truncated CSV under the real name is worse than no CSV at all.
+
+    The next stage cannot tell one from a complete file, and snakemake gets no
+    chance to clean up after a SIGKILL.
+    """
+    import pandas as pd
+
+    from anchovy.io import AnchovyCsvSink
+    from anchovy.schema import AnchovyColumns
+
+    target = tmp_path / "out.csv"
+    row = {c: "x" for c in AnchovyColumns.ORDER}
+    try:
+        with AnchovyCsvSink(str(target)) as sink:
+            sink.write(pd.DataFrame([row]))
+            raise RuntimeError("killed partway")
+    except RuntimeError:
+        pass
+
+    assert not target.exists(), "a partial CSV was left under the real name"
+    assert not target.with_name(target.name + ".partial").exists()
+
+
+def test_the_lookup_tables_are_built_once_not_per_chunk(tmp_path, capsys):
+    """Rebuilding them per chunk would be ruinous on a v3 whitelist.
+
+    build_barcode_query_blocks makes one search template per whitelist entry --
+    6.8 million for v3 -- so a hundred chunks rebuilding it is a hundred times
+    the work and the pool re-ships it every time.
+    """
+    from anchovy import barcodes
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run
+
+    sam, wl, query = _streaming_fixture(tmp_path, 60)
+    calls = []
+    real = barcodes.build_barcode_query_blocks
+    barcodes.build_barcode_query_blocks = lambda *a, **k: (calls.append(1),
+                                                           real(*a, **k))[1]
+    try:
+        run(sam=sam, whitelist=wl, signature=query,
+            config=ExtractConfig(signature=query, nthreads=2, chunk_size=10))
+    finally:
+        barcodes.build_barcode_query_blocks = real
+    capsys.readouterr()
+
+    assert len(calls) == 1, (
+        f"the barcode blocks were rebuilt {len(calls)} times, once per chunk")

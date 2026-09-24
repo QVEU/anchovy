@@ -146,19 +146,22 @@ max_barcode_errors: 2
 allele_frequencies: true
 
 # --- extract stage resources ------------------------------------------------- #
-# MEMORY SCALES WITH THIS, NOT JUST SPEED, and it is the first thing to lower
-# if the stage is killed. Each worker is a forked process that ends up holding
-# its own copy of the payloads it is given, so the whole tree costs roughly
+# MEMORY IS BOUNDED BY THE CHUNK, NOT BY THE RUN. extract reads the SAM, runs
+# both passes and writes its output a chunk at a time, so its footprint is
 #
-#     0.3 GB  +  extract_threads x 4.6 KB x (reads surviving the length filter)
+#     0.3 GB  +  extract_threads x 4.6 KB x extract_chunk_size
 #
-# measured on a PacBio-shaped SAM. At 8 workers and a million reads that is
-# ~37 GB. A run that dies with "died with <Signals.SIGKILL: 9>" and no other
-# message was killed by the kernel for exactly this -- SIGKILL cannot be caught,
-# so the stage has no chance to say so itself.
+# measured on a PacBio-shaped SAM, whatever the size of the run. Before it was
+# chunked this scaled with the read count instead: at eleven million reads the
+# sequences alone are ~22 GB, and such a run dies to the kernel with
+# "died with <Signals.SIGKILL: 9>" and nothing else, because SIGKILL cannot be
+# caught.
 #
-# Halving extract_threads roughly halves the footprint and costs proportionally
-# more wall time. Setting it to 1 is the smallest the stage gets.
+# Lower either knob on a tight node. extract_threads costs wall time in
+# proportion; extract_chunk_size costs almost nothing until the chunks get
+# small enough that pool dispatch shows up.
 #
-# Unset it defaults to 16, capped by snakemake's --cores.
+# extract_threads defaults to 16 (capped by snakemake's --cores);
+# extract_chunk_size defaults to 100,000.
 # extract_threads: 8
+# extract_chunk_size: 100000

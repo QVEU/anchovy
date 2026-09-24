@@ -27,6 +27,7 @@ DESIGN NOTES
 
 from __future__ import annotations
 
+from collections import Counter
 from multiprocessing import Pool
 
 import numpy as np
@@ -34,7 +35,7 @@ import pandas as pd
 
 from anchovy import barcodes
 from anchovy.config import ExtractConfig
-from anchovy.io import read_sam, read_whitelist
+from anchovy.io import AnchovyCsvSink, iter_sam_chunks, read_whitelist
 from anchovy.schema import (SamColumns, AnchovyColumns,
                             SIGNATURE_NON_UMI_LEN,
                             SIGNATURE_PREFIX_LEN, SIGNATURE_UMI_START)
@@ -128,7 +129,7 @@ def _chunksize(n_items: int, n_workers: int) -> int:
 
 
 def find_signature_positions(sam: pd.DataFrame, query: str,
-                             config: ExtractConfig) -> pd.DataFrame:
+                             config: ExtractConfig, pool=None) -> pd.DataFrame:
     """Pass 1: locate the best signature match per read. (was: poolBlocks)
 
     Searches a window ending at each read's mapped offset. Adds minD, minPos,
@@ -147,11 +148,17 @@ def find_signature_positions(sam: pd.DataFrame, query: str,
         for row in sam.itertuples()
     )
 
-    with Pool(config.nthreads) as pool:
-        print("\n1. Computing minimum distance hit position for {} reads."
-              .format(len(sam)))
+    # `pool` is passed in by run(), which keeps one alive across every chunk:
+    # forking a pool per chunk would pay the fork cost a hundred times over on a
+    # large run. Left None, one is made here for the single-frame callers.
+    owned = pool is None
+    pool = pool or Pool(config.nthreads)
+    try:
         results = list(pool.imap(_match_worker, search_inputs,
                                  chunksize=_chunksize(len(sam), config.nthreads)))
+    finally:
+        if owned:
+            pool.terminate()
 
     # minD/minPos/matchseq are intermediate columns (not part of the SAM schema),
     # named literally to match what pass 2 reads by attribute.
@@ -166,22 +173,77 @@ def find_signature_positions(sam: pd.DataFrame, query: str,
     return sam
 
 
-def assign_barcodes(sam: pd.DataFrame, query: str, whitelist: pd.DataFrame,
-                    config: ExtractConfig) -> pd.DataFrame:
-    """Pass 2: assign each read to its closest barcode + extract UMI.
+class _BarcodeState:
+    """The pass-2 lookup tables, built once and reused for every chunk.
 
-    (was: cellIDPool) Filters to reads whose signature match passed the distance
-    cutoff, builds the barcode-augmented query blocks once, then matches each
-    read in parallel.
+    WHY THIS IS A CLASS. build_barcode_query_blocks makes one search template
+    per whitelist entry -- 6.8 million of them for a v3 list -- and the pool
+    publishes them to its workers through an initializer. Both used to happen
+    inside assign_barcodes, which was fine while the stage ran once over the
+    whole file and ruinous the moment it runs once per chunk: a hundred chunks
+    would rebuild and re-ship the whole thing a hundred times. Built here, the
+    cost is paid once however the reads arrive.
     """
-    barcode_blocks = barcodes.build_barcode_query_blocks(query, whitelist.CBC)
 
-    # Exact-match index over the whitelist. Every block differs from every
-    # other in only the 16 barcode characters, so a read whose barcode region
-    # is a whitelist entry can be resolved by lookup instead of by scanning all
-    # of them. See barcodes.assign_barcode for why that is the same answer.
-    barcode_index = barcodes.build_barcode_index(whitelist.CBC)
+    def __init__(self, query, whitelist, config):
+        self.whitelist = whitelist
+        self.config = config
+        self.blocks = barcodes.build_barcode_query_blocks(query, whitelist.CBC)
+        # Exact-match index over the whitelist. Every block differs from every
+        # other in only the 16 barcode characters, so a read whose barcode
+        # region is a whitelist entry can be resolved by lookup instead of by
+        # scanning all of them. See barcodes.assign_barcode for why that is the
+        # same answer.
+        self.index = barcodes.build_barcode_index(whitelist.CBC)
 
+    def pool(self):
+        return Pool(self.config.nthreads, initializer=_assign_init,
+                    initargs=(self.whitelist, self.blocks, self.index,
+                              self.config.umi_start_offset,
+                              self.config.umi_end_trim,
+                              self.config.max_barcode_errors))
+
+
+class _Tally:
+    """Counts accumulated across chunks, reported once at the end.
+
+    Chunking would otherwise turn one summary into one per chunk, which on a
+    hundred chunks is noise rather than reporting. Everything here is a scalar
+    or a small Counter, so carrying it across the whole run costs nothing --
+    the distances in particular are counted, not collected, which is the
+    difference between a few hundred bytes and one integer per read.
+    """
+
+    def __init__(self):
+        self.mapped_hits = 0
+        self.payloads = 0
+        self.exact = 0
+        self.dropped = 0
+        self.assigned = 0
+        self.distances = Counter()
+
+    def report(self, config, baseline):
+        if self.payloads:
+            rest = ("the rest are resolved within {} error(s) or dropped"
+                    .format(config.max_barcode_errors)
+                    if config.max_barcode_errors is not None
+                    else "the rest fall back to the full scan")
+            print("\n2. Identifying Cell Barcodes...")
+            print("   {:,}/{:,} reads ({:.1%}) match a whitelist barcode "
+                  "exactly; {}.".format(self.exact, self.payloads,
+                                        self.exact / self.payloads, rest))
+        if config.max_barcode_errors is not None:
+            total = self.assigned + self.dropped
+            print("   dropped {:,} read(s) ({:.1%}) whose barcode carried more "
+                  "than {} error(s); {:,} remain."
+                  .format(self.dropped, self.dropped / max(total, 1),
+                          config.max_barcode_errors, self.assigned))
+        _report_barcode_distances(self.distances, baseline)
+
+
+def _assign_chunk(sam, state, pool, tally):
+    """Pass 2 over one chunk. Returns the chunk's output rows."""
+    config = state.config
     kept = sam[sam.minD < config.min_distance_cutoff]
 
     payloads = [
@@ -189,52 +251,50 @@ def assign_barcodes(sam: pd.DataFrame, query: str, whitelist: pd.DataFrame,
         for row in kept.itertuples()
     ]
 
-    # Report the split, because it is what decides this stage's runtime: a
+    # Count the split, because it is what decides this stage's runtime: a
     # lookup is ~46,000x cheaper than the scan, so the reads that miss are
     # essentially the whole cost.
     lo, hi = SIGNATURE_PREFIX_LEN, SIGNATURE_UMI_START
-    exact = sum(1 for p in payloads if p[3][lo:hi] in barcode_index)
-    total = len(payloads)
-    if total:
-        print("\n2. Identifying Cell Barcodes...")
-        rest = ("the rest are resolved within {} error(s) or dropped"
-                .format(config.max_barcode_errors)
-                if config.max_barcode_errors is not None
-                else "the rest fall back to the full scan")
-        print("   {:,}/{:,} reads ({:.1%}) match a whitelist barcode exactly; {}."
-              .format(exact, total, exact / total, rest))
+    tally.exact += sum(1 for p in payloads if p[3][lo:hi] in state.index)
+    tally.payloads += len(payloads)
 
-    with Pool(config.nthreads, initializer=_assign_init,
-              initargs=(whitelist, barcode_blocks, barcode_index,
-                        config.umi_start_offset, config.umi_end_trim,
-                        config.max_barcode_errors)) as pool:
-        # imap for the same reason as pass 1, and it matters more here: a
-        # payload carries the read's full sequence, so map's up-front pickle of
-        # every one of them is a second copy of every base in the run.
-        results = list(pool.imap(_assign_worker, payloads,
-                                 chunksize=_chunksize(len(payloads),
-                                                      config.nthreads)))
+    # imap over map for the same reason as pass 1, and it matters more here: a
+    # payload carries the read's full sequence, so map's up-front pickle of
+    # every one of them is a second copy of every base in the chunk.
+    results = list(pool.imap(_assign_worker, payloads,
+                             chunksize=_chunksize(len(payloads),
+                                                  config.nthreads)))
 
     # Reads whose barcode exceeded the limit come back as None. They were
     # never scanned -- that is the point of bounding the search rather than
     # filtering after it.
     if config.max_barcode_errors is not None:
         kept_results = [r for r in results if r is not None]
-        dropped = len(results) - len(kept_results)
-        print("   dropped {:,} read(s) ({:.1%}) whose barcode carried more than "
-              "{} error(s); {:,} remain."
-              .format(dropped, dropped / max(len(results), 1),
-                      config.max_barcode_errors, len(kept_results)))
+        tally.dropped += len(results) - len(kept_results)
         results = kept_results
 
-    out = pd.DataFrame(results, columns=AnchovyColumns.ORDER)
+    tally.assigned += len(results)
+    tally.distances.update(r[1] for r in results)
+    return results
 
+
+def assign_barcodes(sam: pd.DataFrame, query: str, whitelist: pd.DataFrame,
+                    config: ExtractConfig) -> pd.DataFrame:
+    """Pass 2 over a whole frame at once. (was: cellIDPool)
+
+    The single-chunk path, kept for callers that already hold the entire frame.
+    run() drives _assign_chunk directly so it can share one pool and one
+    _BarcodeState across every chunk.
+    """
+    state = _BarcodeState(query, whitelist, config)
+    tally = _Tally()
+    with state.pool() as pool:
+        results = _assign_chunk(sam, state, pool, tally)
     # A perfect barcode still scores the UMI width, because every block is
     # padded with one N per UMI base and an N never matches a real base. So
     # that width is the floor, and anything above it is error in the barcode.
-    _report_barcode_distances(out[AnchovyColumns.MIN_DISTANCE],
-                              len(query) - SIGNATURE_NON_UMI_LEN)
-    return out
+    tally.report(config, len(query) - SIGNATURE_NON_UMI_LEN)
+    return pd.DataFrame(results, columns=AnchovyColumns.ORDER)
 
 
 def _report_barcode_distances(distances, baseline: int) -> None:
@@ -246,13 +306,17 @@ def _report_barcode_distances(distances, baseline: int) -> None:
     of this distribution is what says whether the cell assignments mean
     anything.
     """
-    if len(distances) == 0:
+    # A COUNTER, NOT A SERIES. Chunking means these arrive a chunk at a time and
+    # the histogram is the only thing that needs all of them -- counted, that is
+    # a handful of keys however many reads there were; collected, it was one
+    # integer per read held until the very end.
+    total = sum(distances.values())
+    if total == 0:
         return
-    exact = int((distances == baseline).sum())
-    one = int((distances == baseline + 1).sum())
-    two = int((distances == baseline + 2).sum())
-    worse = int((distances > baseline + 2).sum())
-    total = len(distances)
+    exact = distances.get(baseline, 0)
+    one = distances.get(baseline + 1, 0)
+    two = distances.get(baseline + 2, 0)
+    worse = sum(n for d, n in distances.items() if d > baseline + 2)
 
     print("   barcode match quality (a perfect barcode scores {}):"
           .format(baseline))
@@ -265,7 +329,7 @@ def _report_barcode_distances(distances, baseline: int) -> None:
 # Public entry point
 # --------------------------------------------------------------------------- #
 def run(sam: str, whitelist: str, signature: str | None = None,
-        config: ExtractConfig | None = None) -> pd.DataFrame:
+        config: ExtractConfig | None = None, sink=None):
     """Run the full extract stage and return the anchovy table.
 
     Args:
@@ -295,30 +359,77 @@ def run(sam: str, whitelist: str, signature: str | None = None,
     barcodes.validate_signature(query)
 
     print("Query Length: {}".format(len(query)))
-    sam_df = read_sam(sam, config.effective_min_read_length())
-    sam_df = sam_df[sam_df[SamColumns.TEMPLATE] != "*"]
     wl_df = read_whitelist(whitelist)
+    state = _BarcodeState(query, wl_df, config)
+    tally = _Tally()
 
-    # SAY WHAT THIS IS ABOUT TO COST, BEFORE SPENDING IT.
+    # MEMORY IS BOUNDED BY THE CHUNK, NOT BY THE FILE.
     #
-    # The stage holds the surviving reads and forks a pool over them, so its
-    # footprint is set here -- and when it exceeds what the machine has, the
-    # kernel sends SIGKILL, which cannot be caught. The run then dies with
-    # "died with <Signals.SIGKILL: 9>" and nothing else: no traceback, no stage
-    # name, nothing to distinguish it from a crash. A colleague's run was
-    # debugged from the snakemake log alone for want of this line.
+    # This used to read the whole SAM into one frame, run both passes over it,
+    # and build the entire output table before returning any of it -- so the
+    # stage cost scaled with the run. At eleven million reads the sequences
+    # alone are ~22 GB, and the kernel killed it with SIGKILL, which cannot be
+    # caught: the run died reporting only "died with <Signals.SIGKILL: 9>".
     #
-    # The constant is measured, not derived: 4.6 KB per surviving read per
-    # worker, on a PacBio-shaped SAM, across the whole process tree.
-    projected = 0.3 + config.nthreads * 4.6e-6 * len(sam_df)
-    print("\n{:,} reads x {} worker(s) -- this stage needs roughly {:.1f} GB. "
-          "If it is killed with no message, that is the kernel: lower "
-          "extract_threads."
-          .format(len(sam_df), config.nthreads, projected))
+    # Chunked, each of those is bounded by chunk_size instead, and the lookup
+    # tables and the worker pools are built once outside the loop rather than
+    # once per chunk. The output is byte-identical either way: chunks are
+    # processed in file order and concatenated in that order.
+    emit = sink if sink is not None else []
+    with Pool(config.nthreads) as match_pool, state.pool() as assign_pool:
+        for n_chunk, chunk in enumerate(
+                iter_sam_chunks(sam, config.effective_min_read_length(),
+                                config.chunk_size), start=1):
+            chunk = chunk[chunk[SamColumns.TEMPLATE] != "*"]
+            if chunk.empty:
+                continue
+            if n_chunk == 1:
+                print("\nProcessing in chunks of up to {:,} reads, {} worker(s)"
+                      " -- roughly {:.1f} GB at a time. A run killed with no "
+                      "message is the kernel: lower extract_threads or "
+                      "extract_chunk_size."
+                      .format(config.chunk_size, config.nthreads,
+                              0.3 + config.nthreads * 4.6e-6
+                              * config.chunk_size))
 
-    sam_df = find_signature_positions(sam_df, query, config)
-    print("\nMapped hits in {} reads."
-          .format(int(np.sum([int(i) >= 0 for i in sam_df.minPos]))))
+            chunk = find_signature_positions(chunk, query, config,
+                                             pool=match_pool)
+            tally.mapped_hits += int((chunk.minPos >= 0).sum())
+            chunk = chunk[chunk.matchseq != ""]
 
-    sam_df = sam_df[sam_df.matchseq != ""]
-    return assign_barcodes(sam_df, query, wl_df, config)
+            rows = _assign_chunk(chunk, state, assign_pool, tally)
+            frame = pd.DataFrame(rows, columns=AnchovyColumns.ORDER)
+            if sink is not None:
+                sink.write(frame)
+            else:
+                emit.append(frame)
+            print("   chunk {}: {:,} reads in, {:,} assigned ({:,} so far)"
+                  .format(n_chunk, len(chunk), len(frame), tally.assigned))
+
+    print("\nMapped hits in {} reads.".format(tally.mapped_hits))
+    # A perfect barcode still scores the UMI width, because every block is
+    # padded with one N per UMI base and an N never matches a real base. So
+    # that width is the floor, and anything above it is error in the barcode.
+    tally.report(config, len(query) - SIGNATURE_NON_UMI_LEN)
+
+    if sink is not None:
+        return tally.assigned
+    if not emit:
+        return pd.DataFrame(columns=AnchovyColumns.ORDER)
+    return pd.concat(emit, ignore_index=True)
+
+
+def run_to_csv(sam: str, whitelist: str, out_path: str,
+               signature: str | None = None,
+               config: ExtractConfig | None = None) -> int:
+    """Stream the extract stage straight to its CSV. Returns rows written.
+
+    The difference from run() is only where the output goes. run() concatenates
+    every chunk and hands back one frame, which means the whole table is in
+    memory at the end however small each chunk was -- fine for a test, and the
+    thing this stage was dying of on a real run. Here each chunk is appended as
+    it is produced and never held.
+    """
+    with AnchovyCsvSink(out_path) as sink:
+        return run(sam=sam, whitelist=whitelist, signature=signature,
+                   config=config, sink=sink)

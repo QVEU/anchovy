@@ -76,23 +76,25 @@ min_reads: 20
 # large the node, which is what made this stage take four hours on a 64-core
 # machine.
 #
-# MEMORY SCALES WITH THIS, NOT JUST SPEED, and it is the first thing to lower
-# if the stage is killed. Each worker is a forked process that ends up holding
-# its own copy of the payloads it is given, so the whole tree costs roughly
+# MEMORY IS BOUNDED BY THE CHUNK, NOT BY THE RUN. extract reads the SAM, runs
+# both passes and writes its output a chunk at a time, so its footprint is
 #
-#     0.3 GB  +  extract_threads x 4.6 KB x (reads surviving the length filter)
+#     0.3 GB  +  extract_threads x 4.6 KB x extract_chunk_size
 #
-# measured on a PacBio-shaped SAM. At 8 workers and a million reads that is
-# ~37 GB. A run that dies with "died with <Signals.SIGKILL: 9>" and no other
-# message was killed by the kernel for exactly this -- SIGKILL cannot be caught,
-# so the stage has no chance to say so itself.
+# measured on a PacBio-shaped SAM, whatever the size of the run. Before it was
+# chunked this scaled with the read count instead: at eleven million reads the
+# sequences alone are ~22 GB, and such a run dies to the kernel with
+# "died with <Signals.SIGKILL: 9>" and nothing else, because SIGKILL cannot be
+# caught.
 #
-# Halving extract_threads roughly halves the footprint and costs proportionally
-# more wall time. Setting it to 1 is the smallest the stage gets.
+# Lower either knob on a tight node. extract_threads costs wall time in
+# proportion; extract_chunk_size costs almost nothing until the chunks get
+# small enough that pool dispatch shows up.
 #
-# 64 here suits a dedicated large-memory node and is far too many for a shared
-# one: at a million reads the formula above puts it near 300 GB.
+# 64 workers at the default 100,000-read chunk is ~29 GB, which suits a
+# dedicated large-memory node. Halve both on a shared one.
 extract_threads: 64
+# extract_chunk_size: 100000
 
 # THE CELL FILTER: a cell counts if the CODING SEQUENCE is complete at depth.
 #

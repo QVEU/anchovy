@@ -102,6 +102,18 @@ class ExtractConfig:
     # set an explicit int to override.
     min_read_length: int | None = None
 
+    # Reads held in memory at once. The stage reads the SAM, runs both passes
+    # and builds its output a chunk at a time, so this -- not the size of the
+    # run -- is what sets its footprint, roughly
+    #
+    #     0.3 GB + nthreads x 4.6 KB x chunk_size
+    #
+    # measured on a PacBio-shaped SAM. 100,000 costs about 4 GB at 8 workers and
+    # keeps the per-chunk overhead (one pool dispatch) irrelevant. Lower it on a
+    # tight node; there is little to gain from raising it, because the pool is
+    # already saturated well below this.
+    chunk_size: int = 100_000
+
     def effective_min_read_length(self) -> int:
         """Resolve the read-length threshold, defaulting to signature length.
 
