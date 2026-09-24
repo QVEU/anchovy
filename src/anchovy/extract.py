@@ -376,7 +376,19 @@ def run(sam: str, whitelist: str, signature: str | None = None,
     # once per chunk. The output is byte-identical either way: chunks are
     # processed in file order and concatenated in that order.
     emit = sink if sink is not None else []
-    with Pool(config.nthreads) as match_pool, state.pool() as assign_pool:
+
+    # ONE POOL FOR BOTH PASSES, AND THE REASON IS FORK SAFETY, not tidiness.
+    # A live Pool runs three management threads IN THE PARENT
+    # (_handle_workers, _handle_tasks, _handle_results), so creating a second
+    # pool forks a multi-threaded process -- which CPython 3.12 warns about and
+    # which can genuinely deadlock: the child inherits a lock whose holding
+    # thread does not exist in it. Two pools here made CI emit 68 of those
+    # warnings where it had one.
+    #
+    # Sharing is free. _match_worker reads none of the state _assign_init
+    # publishes, so a pool built for pass 2 serves pass 1 unchanged, and the
+    # single fork happens before any pool thread exists.
+    with state.pool() as pool:
         for n_chunk, chunk in enumerate(
                 iter_sam_chunks(sam, config.effective_min_read_length(),
                                 config.chunk_size), start=1):
@@ -392,12 +404,11 @@ def run(sam: str, whitelist: str, signature: str | None = None,
                               0.3 + config.nthreads * 4.6e-6
                               * config.chunk_size))
 
-            chunk = find_signature_positions(chunk, query, config,
-                                             pool=match_pool)
+            chunk = find_signature_positions(chunk, query, config, pool=pool)
             tally.mapped_hits += int((chunk.minPos >= 0).sum())
             chunk = chunk[chunk.matchseq != ""]
 
-            rows = _assign_chunk(chunk, state, assign_pool, tally)
+            rows = _assign_chunk(chunk, state, pool, tally)
             frame = pd.DataFrame(rows, columns=AnchovyColumns.ORDER)
             if sink is not None:
                 sink.write(frame)

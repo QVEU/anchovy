@@ -871,3 +871,27 @@ def test_the_lookup_tables_are_built_once_not_per_chunk(tmp_path, capsys):
 
     assert len(calls) == 1, (
         f"the barcode blocks were rebuilt {len(calls)} times, once per chunk")
+
+
+def test_the_stage_forks_exactly_one_pool():
+    """A second pool would be forked from a multi-threaded parent.
+
+    multiprocessing.Pool runs three management threads in the PARENT, so
+    creating a second pool while the first is alive forks a multi-threaded
+    process. CPython 3.12 raises DeprecationWarning for that, and the deadlock
+    it warns about is real -- the child can inherit a lock whose holding thread
+    does not exist in it. An earlier version of the chunked loop held a pool for
+    each pass and turned CI's single warning into 68.
+
+    _match_worker reads none of the state _assign_init publishes, so one pool
+    serves both passes.
+    """
+    import inspect
+
+    from anchovy import extract
+
+    body = inspect.getsource(extract.run)
+    assert body.count("state.pool()") == 1
+    assert "Pool(config.nthreads)" not in body, (
+        "run() builds a pool of its own again; it must reuse the one from "
+        "_BarcodeState so there is a single fork, before any pool thread exists")
