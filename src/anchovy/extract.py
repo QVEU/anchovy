@@ -299,6 +299,23 @@ def run(sam: str, whitelist: str, signature: str | None = None,
     sam_df = sam_df[sam_df[SamColumns.TEMPLATE] != "*"]
     wl_df = read_whitelist(whitelist)
 
+    # SAY WHAT THIS IS ABOUT TO COST, BEFORE SPENDING IT.
+    #
+    # The stage holds the surviving reads and forks a pool over them, so its
+    # footprint is set here -- and when it exceeds what the machine has, the
+    # kernel sends SIGKILL, which cannot be caught. The run then dies with
+    # "died with <Signals.SIGKILL: 9>" and nothing else: no traceback, no stage
+    # name, nothing to distinguish it from a crash. A colleague's run was
+    # debugged from the snakemake log alone for want of this line.
+    #
+    # The constant is measured, not derived: 4.6 KB per surviving read per
+    # worker, on a PacBio-shaped SAM, across the whole process tree.
+    projected = 0.3 + config.nthreads * 4.6e-6 * len(sam_df)
+    print("\n{:,} reads x {} worker(s) -- this stage needs roughly {:.1f} GB. "
+          "If it is killed with no message, that is the kernel: lower "
+          "extract_threads."
+          .format(len(sam_df), config.nthreads, projected))
+
     sam_df = find_signature_positions(sam_df, query, config)
     print("\nMapped hits in {} reads."
           .format(int(np.sum([int(i) >= 0 for i in sam_df.minPos]))))

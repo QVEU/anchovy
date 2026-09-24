@@ -713,3 +713,26 @@ def test_the_worker_chunk_is_bounded():
     # worth paying when everything fits anyway.
     assert _chunksize(40, 8) >= 1
     assert _chunksize(0, 8) >= 1
+
+
+def test_extract_announces_its_memory_before_spending_it(tmp_path, capsys):
+    """SIGKILL cannot be caught, so the stage has to speak before it dies."""
+    from anchovy.extract import run
+
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    (tmp_path / "wl.txt").write_text("AAACCCAAGAAACACT\n")
+    body = "G" * 40 + query.replace("N" * 26, "AAACCCAAGAAACACT" + "T" * 10)
+    seq = body + "C" * 200
+    _sam(tmp_path, "m.sam", [("r", 0, "ref", f"{len(body)}S200M")],
+         read_len=len(seq))
+    (tmp_path / "m.sam").write_text(
+        "@SQ\tSN:ref\tLN:500\n"
+        + "\t".join(["r", "0", "ref", "1", "60", f"{len(body)}S200M",
+                     "*", "0", "0", seq, "I" * len(seq)]) + "\n")
+
+    run(sam=str(tmp_path / "m.sam"), whitelist=str(tmp_path / "wl.txt"),
+        signature=query)
+    out = capsys.readouterr().out
+    assert "GB" in out and "extract_threads" in out, (
+        "the stage no longer reports its projected memory; a run killed by the "
+        "OOM killer is then indistinguishable from any other crash")
