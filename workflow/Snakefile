@@ -37,8 +37,10 @@ import shutil
 # and no script is run by hand: `fetch.sh` now only fetches the public example
 # data, and is not part of running your own.
 #
-# A sample's name is its FASTQ's basename with .gz/.fastq/.fq stripped, the
-# same rule examples/eva71_sra/sample_name.sh uses, so the two agree.
+# A sample's name is its FASTQ's basename with .gz/.fastq/.fq stripped. There is
+# one definition of that rule, anchovy.io.sample_name_from_fastq, because when
+# a script derived it too the two disagreed and a run silently reused the
+# previous sample's SAM.
 INPUT_DIR = config.get("input_dir")
 TEMPLATE  = config["template"]
 if INPUT_DIR is None and "samples" not in config:

@@ -3,30 +3,37 @@
 ![anchovies](assets/northern-anchovies-rw07-130.webp)
 anchovy is an analysis pipeline designed for use with barcoded single-cell sequencing data to reconstruct viral haplotypes from individual cells.
 
-You provide sequencing reads that have already been mapped to a reference genome (in the form of SAM or BAM), anchovy:
-- sorts the reads by cell
-- builds a consensus genome for each cell, and produces tables describing the mutations and genotypes observed
-- how the different genotypes are related.
+You provide a folder of sequencing reads (FASTQ, plain or gzipped) and a
+reference genome. anchovy:
+- maps the reads and sorts them by cell
+- builds a consensus genome for each cell, and produces tables describing the
+  mutations and genotypes observed
+- describes how the different genotypes are related.
 
-The entire thing can be run as one automated pipeline (recommended), or run each step by hand.
+The entire thing can be run as one automated pipeline (recommended), or run each
+step by hand.
 
 ## What the pipeline does, step by step
 
-1. **extract** — sorts the reads by the cell barcode they carry
-2. **fasta** — writes out the reads for each cell into its own file
-3. **map** — lines up each cell's reads against the reference genome
-4. **cell consensus** — builds one consensus genome per cell from its reads
-5. **merge** — collects all the per-cell genomes into one file
-6. **consensus** — narrows to the region you care about and lists each cell's mutations
-7. **annotate** — works out which mutations change the protein, and builds tables
+1. **map** — lines up the reads against the reference genome
+2. **extract** — sorts the reads by the cell barcode they carry
+3. **fasta** — writes out the reads for each cell into its own file
+4. **map cell** — lines up each cell's reads against the reference
+5. **cell consensus** — builds one consensus genome per cell from its reads
+6. **merge** — collects all the per-cell genomes into one file
+7. **consensus** — narrows to the region you care about and lists each cell's mutations
+8. **annotate** — works out which mutations change the protein, and builds tables
    showing how genotypes relate. Given a GFF3 file describing your genome's
    regions, it can also annotate non-coding parts and number amino acids
    correctly per region (see below)
+9. **frequencies** — allele frequencies over *every* mapped cell, with a
+   per-position denominator, rather than only the cells that passed filtering
+10. **report** — renders it all as one HTML page you can read
 
-The final results are spreadsheet-style files (CSV) you can open in Excel or load
-into other analysis tools. Two of them describe the **genotype network** — how
-the different viral genotypes relate to one another — and can be opened directly
-in Cytoscape to view and explore the network visually (see below).
+The tables are spreadsheet-style files (CSV) you can open in Excel or load into
+other analysis tools. Two of them describe the **genotype network** — how the
+different viral genotypes relate to one another — and can be opened directly in
+Cytoscape to view and explore the network visually (see below).
 
 ## Setting it up
 
@@ -139,8 +146,54 @@ the reference name is read from the FASTA header, and the barcode whitelist is
 downloaded for you — matched to `chemistry` and checked against its expected
 barcode count before anything uses it.
 
-Optional settings — analysis window, depth and breadth filters, allele
-frequencies — are documented in `workflow/config.yaml`.
+### Every other setting
+
+`workflow/config_cluster.yaml` is the fully commented reference — it sets most
+of these and says why. The complete list:
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Input and output** | | |
+| `input_dir` | — | The folder of FASTQs. Required, unless resuming with `samples` + `cells_dir` |
+| `samples` | from the FASTQ names | Name the samples explicitly. Only for the `cells_dir` resume path, where there are no FASTQs to take a name from |
+| `cells_dir` | `<results>/cells` | Resume from per-cell FASTAs you already have |
+| `results_dir` | `<input_dir>/results` | Move the outputs |
+| `resources_dir` | `<input_dir>/resources` | Move the whitelist cache |
+| **Reference** | | |
+| `template` | — | Reference FASTA. Required |
+| `reference` | unset | Call genotypes against the genome rather than the consensus across cells. Set it to the same file as `template` |
+| `reference_name` | from the FASTA header | Override the contig name |
+| `gff` | unset | Region model (see below). Implies `whole_reference` |
+| `whole_reference` | `false` | Keep genome coordinates without a region model |
+| `minimap_preset` | `map-hifi` | `map-ont` for Nanopore |
+| `map_threads` | `8` | Threads for the initial mapping |
+| **Barcodes** | | |
+| `chemistry` | `v3` | `v2` or `v3`. Sets the read signature *and* the whitelist together |
+| `whitelist` | downloaded | A local or run-specific barcode list |
+| `whitelist_url` | 10X's | Fetch the whitelist from your own mirror |
+| `whitelist_barcodes` | per chemistry | Override the barcode count a download is checked against |
+| `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
+| `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor |
+| `max_distance` | `42` | How far the *signature* match may be before a read is dropped |
+| `extract_threads` | `16` | Worker pool inside `extract`. Not `--cores` |
+| `min_reads` | `5` | Reads a barcode needs to become a cell. This decides the size of the run |
+| **Calling and filtering** | | |
+| `window` | unset | `cds` takes the analysis window from the GFF |
+| `orf_start`, `orf_end` | — | The window explicitly, as 0-based slice bounds |
+| `cons_min_depth` | `5` | Reads a position needs before a base is called |
+| `cons_threshold` | `0.5` | Consensus threshold. Raising it emits *more* ambiguity codes, not fewer |
+| `min_breadth` | unset | Fraction of the window a cell must have called. `1.0` means a complete coding sequence |
+| `min_depth_called` | unset | Mean depth at the positions actually called |
+| `depth_min` | `10` | Legacy overall filter. Superseded by `min_breadth` — see the note in `config_cluster.yaml` |
+| `keep_ambiguous` | `false` | Keep IUPAC codes as genotype tokens |
+| `max_mutations_per_cell` | unset | Drop cells carrying more mutations than this |
+| **Output** | | |
+| `allele_frequencies` | `false` | Also write the two allele-frequency tables |
+| `min_alt_reads`, `min_alt_freq` | — | Thresholds for the per-cell frequency table |
+| `min_cells_per_allele` | — | Threshold for the population frequency table |
+| `self_edges` | `false` | Keep self-loops in the epistatic network |
+| `report` | `true` | Render the HTML report |
+| `report_rmd` | the bundled one | Use your own report template |
 
 ### Where everything goes
 
@@ -236,7 +289,9 @@ gff: "path/to/regions.gff3"
 
 #### Writing your own
 
-Here is an example GFF3 for dengue virus 1, which can be found at: `tests/data/mapping/regions.gff3`. Copy it and edit for your own run. 
+Here is an example GFF3 for dengue virus 1. Copy it and edit it for your own
+run — or start from `tests/data/mapping/regions.gff3`, a smaller complete file
+the test suite uses.
 
 ```
 ##gff-version 3
@@ -287,9 +342,6 @@ by three, into codons. If it doesn't, anchovy warns you and names
 the region, that almost always means the coordinates are off. The
 warning doesn't stop the run, but you should double check the coordinates are correct, genomic nucleotide positions. 
 
-If you'd rather start from something known to work, `tests/data/mapping/regions.gff3`
-in this repository is a small, complete file used by the test suite.
-
 With that in place you get an extra results file,
 `{sample}_regionAnnotations.csv`, with one row per mutation **per region it falls
 in**. So a mutation inside NS5, which also sits inside the polyprotein, gets two
@@ -332,11 +384,16 @@ If you'd rather run steps individually instead of the full pipeline, each is its
 own command:
 
 ```bash
-anchovy extract   reads.sam whitelist.txt -o out_anchovy.csv
-anchovy fasta     out_anchovy.csv cells/
-anchovy consensus allConsensus.fasta 96 10272 --out-prefix results/sample
-anchovy annotate  filtConsensus.csv reference.txt results/sample
+anchovy extract     reads.sam whitelist.txt -o out_anchovy.csv
+anchovy fasta       out_anchovy.csv cells/
+anchovy consensus   allConsensus.fasta 96 10272 --out-prefix results/sample
+anchovy annotate    filtConsensus.csv reference.txt results/sample
+anchovy frequencies allConsensus.fasta --reference ref.fasta --out-prefix results/sample
 ```
+
+`96` and `10272` are the analysis window — the first and last positions to call
+variants over, as 0-based slice bounds. The mapping steps are plain `minimap2`
+and are not anchovy subcommands.
 
 To annotate by genome region (see above), the last two steps become:
 
@@ -424,14 +481,21 @@ pytest tests/test_annotate.py -v   # run the tests for one step
 Test data lives in `tests/data/`. The `tests/make_*_fixtures.py` scripts
 regenerate it if ever needed.
 
+`anchovy_v3/` is the archived original this version was migrated from. It is
+kept because `tests/data/golden/` is frozen from its output, so the port can be
+checked against it. Nothing in the pipeline runs it.
+
 ## Good to know
 
 - The mapping/consensus step uses **sam2consensus**, a small existing tool by
   Edgardo Ortiz
   ([original here](https://github.com/edgardomortiz/sam2consensus)). A copy,
   updated to run on modern Python, is included in `workflow/scripts/`.
-- The original version of this analysis also made plots. This version produces the
-  data tables only; you can make figures from those in your tool of choice.
+- Every run ends with a rendered HTML report (`{sample}_report.html`) built from
+  `visualization/anchovy_report.rmd`. Set `report: false` in your settings file
+  to skip it — that is also what removes R from the requirements for a complete
+  run. The CSVs are written either way, so you can make your own figures from
+  them instead.
 - anchovy currently assumes you're mapping against a single reference sequence.
   A segmented genome (several reference pieces) would need a small extension.
 

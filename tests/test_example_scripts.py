@@ -121,11 +121,36 @@ def test_the_whitelist_is_fetched_and_verified():
     assert "barcodes, got" in SNAKEFILE
 
 
+FETCH = (REPO / "examples" / "eva71_sra" / "fetch.sh").read_text()
+
+
 def test_fetch_no_longer_maps():
-    fetch = (REPO / "examples" / "eva71_sra" / "fetch.sh").read_text()
-    assert "minimap2" not in fetch, (
+    assert "minimap2" not in FETCH, (
         "fetch.sh maps again; that is the workflow's job and the two disagreed "
         "about the sample name when both did it")
+
+
+def test_the_subsample_does_not_become_a_second_sample():
+    """input_dir is a FOLDER, so a trimmed copy beside the full file is a sample.
+
+    MAX_READS exists to make a run shorter. Written into the same directory it
+    would instead have the workflow run both files -- the full one included --
+    and take longer than doing nothing.
+    """
+    assert 'SUB_DIR="$DATA_DIR/subsample"' in FETCH, (
+        "the subsample is back in input_dir, where it runs as its own sample "
+        "alongside the full FASTQ")
+    assert 'INPUT_DIR="$SUB_DIR"' in FETCH, (
+        "fetch.sh must print the subsample directory as the input_dir to use, "
+        "or the subsample is written and then not used")
+
+
+def test_fetch_reports_the_input_dir_it_actually_prepared():
+    """The closing block is how a user learns what to put in their config."""
+    tail = FETCH.split("Done. Set these in your config:")[1]
+    assert 'input_dir: "$INPUT_DIR"' in tail, (
+        "fetch.sh prints DATA_DIR again; with MAX_READS set that is the "
+        "directory holding the FULL reads, so the subsample is ignored")
 
 
 # --------------------------------------------------------------------------- #

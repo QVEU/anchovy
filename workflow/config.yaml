@@ -1,57 +1,31 @@
 # workflow/config.yaml
 #
-# Run-specific settings for the anchovy Snakemake workflow. Edit this file (not
-# the Snakefile) to point the pipeline at different data or tweak parameters --
-# the workflow-level equivalent of the package's config.py.
+# Run-specific settings for the anchovy Snakemake workflow. Edit this file, not
+# the Snakefile, to point the pipeline at different data. Every setting the
+# workflow accepts is listed in README.md; this file explains the ones whose
+# wrong value does not produce an error.
 #
-# AS SHIPPED THIS IS A RUNNABLE EXAMPLE, not a template to fill in. It points at
-# the fixture in tests/data/fastqs, so
+# AS SHIPPED THIS IS A RUNNABLE EXAMPLE, not a template to fill in:
 #
 #   snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 4
 #
-# runs the whole pipeline -- map, extract, per-cell consensus, genotypes,
-# networks, report -- in seconds, and is the quickest way to confirm an install
-# works. Outputs go to tests/data/fastqs/results/example/ and are gitignored;
-# delete that directory to start over. tests/make_fastq_fixtures.py documents
-# what the fixture contains and regenerates it.
+# runs the whole pipeline on the bundled fixture in seconds, which is the
+# quickest way to confirm an install works. Outputs go to
+# tests/data/fastqs/results/example/ and are gitignored; delete that directory
+# to start over. tests/make_fastq_fixtures.py says what the fixture contains.
 
 # --- input: a folder of FASTQs ----------------------------------------------- #
-# THIS IS THE WHOLE INTERFACE. Point it at a directory and every FASTQ in it
-# (.fastq/.fq, plain or .gz) is run through the entire pipeline -- map, extract,
-# per-cell consensus, genotypes, networks, report -- with outputs named after
-# the FASTQ. Adding a sample means dropping a file in.
+# THIS IS THE WHOLE INTERFACE. Every FASTQ in the directory (.fastq/.fq, plain
+# or .gz) is run through the entire pipeline, with outputs named after it, so
+# adding a sample means dropping a file in.
 #
-# It is also where the run LIVES. Outputs go to <input_dir>/results/<name>/ and
-# the downloaded whitelist to <input_dir>/resources/, so the reads, this config
-# and everything derived from them are one self-contained directory -- the same
-# command gives the same files from any shell, and archiving the run means
-# archiving one folder. Your reads themselves are never written to.
-#
-# The intended layout, then, is this file sitting beside the FASTQs it describes:
-#
-#   my_experiment/
-#       config.yaml           <- this file
-#       sample_A.fastq.gz
-#       sample_B.fastq.gz
-#       resources/            <- appears on the first run
-#       results/sample_A/ ... <- appears on the first run
+# It is also where the run LIVES: results/ and resources/ are created inside it
+# and your reads are never written to, which makes a run one self-contained
+# directory and its outputs independent of where you launched from. README.md
+# has the full layout, and `results_dir` / `resources_dir` move either half out
+# -- worth setting resources_dir when several runs can share one whitelist
+# cache, since the v3 list is ~100 MB and byte-identical every time.
 input_dir: "tests/data/fastqs"
-
-# --- where the outputs go ---------------------------------------------------- #
-# Both default to a subdirectory of input_dir, which is what you want unless one
-# of these applies. Full paths.
-#
-# results_dir    the reads are on a read-only mount, or the outputs belong on a
-#                faster or larger disk than the reads
-# resources_dir  share one whitelist cache between runs -- the v3 list is ~100 MB
-#                and byte-identical every time, so downloading it per run is
-#                waste. Point every config at the same directory.
-#
-# results_dir: "/scratch/me/anchovy_runs/experiment1"
-# resources_dir: "/scratch/me/anchovy_whitelists"
-#
-# Snakemake's own .snakemake/ bookkeeping still lands wherever you launch from.
-# That one is Snakemake's, not anchovy's, and is safe to delete between runs.
 
 # --- 10X chemistry: one key, because the halves must agree ------------------- #
 # `chemistry` sets BOTH the signature and the whitelist, and they cannot come
@@ -85,6 +59,7 @@ chemistry: "v3"
 # writes, mixed widths, non-ACGTN characters -- and the error names the fix.
 #
 # `whitelist_url` points the download at your own mirror instead.
+#
 # The fixture's six barcodes, sitting beside the reads -- which is also where a
 # real run-specific list belongs, since it comes from the same Illumina run.
 # Omit this key entirely and the chemistry-matched 10X list downloads instead.
@@ -94,7 +69,7 @@ whitelist: "tests/data/fastqs/whitelist.txt"
 # handles differ from 10X's. The N count still has to match the whitelist.
 
 # Reference/template FASTA. minimap2 maps the raw reads against it, and then
-# each per-cell FASTA. (This was the $3 argument to AnchovyJob.sh.)
+# each per-cell FASTA.
 #
 # The fixture's 600 nt template, whose region model is the gff below. Note this
 # is NOT tests/data/template.fasta -- that one belongs to the barcode-extraction
@@ -112,34 +87,17 @@ minimap_preset: "map-hifi"
 # out arbitrary and the cells matching the template are reported as the mutants.
 reference: "tests/data/mapping/template.fasta"
 
-# --- Region-aware annotation (optional) ------------------------------------- #
-# Uncomment `gff` to annotate mutations against a genome region model instead of
-# assuming a single ORF read in frame 1 from its first base. A GFF3 gets you:
+# --- Region-aware annotation ------------------------------------------------- #
+# A GFF3 annotates mutations against a genome region model instead of assuming
+# one ORF read in frame 1 from base 1, which gets UTRs and residue numbering
+# wrong on a real viral genome. README.md's "Annotating by genome region"
+# explains the format and what it adds; `whole_reference: true` gets genome
+# coordinates without one.
 #
-#   * non-coding regions annotated at all (UTRs, stem-loops), instead of silently
-#     translated as though they were coding;
-#   * frame-correct residue numbers, taken from the feature's own start and phase
-#     rather than from position 1 of the reference;
-#   * one row per (mutation x containing region), so a variant inside both a
-#     polyprotein and a mature protein is numbered in BOTH frames of reference;
-#   * both strands handled, driven by the GFF3's strand and phase columns.
-#
-# It adds {sample}_regionAnnotations.csv to the outputs. The existing
-# {sample}_annot_v3.csv is still written, with its columns filled in from each
-# mutation's primary (first-listed containing) region, so nothing downstream
-# needs to change.
-#
-# Setting `gff` also switches the consensus stage into whole-reference mode,
+# Setting it also switches the consensus stage into whole-reference mode,
 # because region lookup needs genome coordinates and the default mode renumbers
-# positions relative to the ORF. In that mode orf_start/orf_end stop being a cut
-# and become an optional analysis window over the covered core.
+# positions relative to the ORF.
 #
-#   gff: "path/to/regions.gff3"
-#
-# To keep genome coordinates WITHOUT a region model, set this instead:
-#
-#   whole_reference: true
-
 # The fixture's region model: 5'UTR 1-149, CDS 150-500 (+ strand, phase 0),
 # 3'UTR 501-600. The CDS deliberately does not start at position 1, so a run
 # exercises frame-correct residue numbering rather than assuming frame 1.
@@ -169,7 +127,7 @@ cons_threshold: 0.5
 depth_min: 0
 
 # Reads a barcode needs before it becomes a cell. The fixture gives each of its
-# four cells 8, so this keeps all of them and would drop stray mis-assignments.
+# six cells 8, so this keeps all of them and would drop stray mis-assignments.
 min_reads: 8
 
 # The fixture's barcodes are exact whitelist entries, so nothing needs correcting
