@@ -132,7 +132,13 @@ def test_each_cell_has_enough_reads_to_clear_the_configured_floors():
 
 
 def test_the_umis_are_distinct_within_each_cell():
-    """A shared UMI is deduplicated, which would starve the consensus."""
+    """Realism, not a pipeline requirement.
+
+    anchovy records UMIs but does not deduplicate on them: the published method
+    states the per-cell sampling is not deep enough to use them for error
+    correction, so every read votes in the cell-level consensus. A fixture with
+    repeated UMIs would still work, and would misrepresent a real library.
+    """
     from collections import defaultdict
     by_cell = defaultdict(list)
     for _, seq in _records():

@@ -199,8 +199,11 @@ def build() -> Path:
 
         for read_i in range(READS_PER_CELL):
             seed += 1
-            # A UMI per read: the stage deduplicates on it, so reusing one would
-            # collapse eight reads into one and starve the consensus of depth.
+            # A distinct UMI per read, because that is what a real library
+            # looks like. anchovy records the UMI but does NOT deduplicate on
+            # it -- the published method states the sampling is not deep enough
+            # per cell to use UMIs for error correction, so the analysis is the
+            # cell-level consensus and every read votes.
             umi = _pseudo_random(12, seed)
             # Padding stands in for the rest of the library construct. Its only
             # job is to sit upstream of the aligned part so the signature falls

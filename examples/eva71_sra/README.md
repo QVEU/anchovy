@@ -256,10 +256,22 @@ format.
 
 By default anchovy works out its own reference: the consensus of whatever cells
 survived filtering. That answers "which cells differ from the crowd", which is
-often what you want — but it needs a crowd. With a single surviving cell, the
-reference *is* that cell, so its genotype comes out empty no matter what it
-carries. An empty genotype then means "there was nothing to compare against",
-which reads identically to "matches the virus".
+often what you want — but it needs a crowd, and it is worth being clear about
+what that consensus is.
+
+**The consensus is not the modal genotype.** The modal genotype is the single
+most common genotype actually observed in a cell; the consensus is the most
+common base at each position taken independently, so it is an aggregate that
+need not correspond to any genotype in the population — and on a population of
+co-circulating genotypes, it may correspond to none of them. Dábilla & Dolan
+(2024) make this distinction the reason for reporting the modal genotype:
+the consensus can sit still while the genotypes underneath it move.
+
+Two further failure modes follow from comparing against it. With a single
+surviving cell, the reference *is* that cell, so its genotype comes out empty no
+matter what it carries — and an empty genotype reads identically to "matches the
+virus". At a position where the population splits evenly, the tie is broken
+alphabetically, so which base counts as reference is arbitrary.
 
 This example sets `reference` to the genome instead:
 

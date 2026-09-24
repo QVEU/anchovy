@@ -3,6 +3,16 @@
 ![anchovies](assets/northern-anchovies-rw07-130.webp)
 anchovy is an analysis pipeline designed for use with barcoded single-cell sequencing data to reconstruct viral haplotypes from individual cells.
 
+It is the genotype-reconstruction half of **SEARCHLIGHT** (scRNAseq-Enabled
+Acquisition of mRNA and Consensus Haplotypes Linking Individual Genotypes and
+Host Transcriptomes), the method described in [Dábilla & Dolan
+(2024)](https://doi.org/10.1126/sciadv.ado1693). The wet-lab side is a 10x
+Genomics 5′ run with virus-specific reverse-transcription primers tiled across
+the viral genome, sequenced long-read; anchovy takes those reads and returns one
+consensus genome per cell, plus the genotype networks built from them. Host
+transcriptomes come from the matched short-read libraries through Cell Ranger
+and Seurat, which are outside this repository.
+
 You provide a folder of sequencing reads (FASTQ, plain or gzipped) and a
 reference genome. anchovy:
 - maps the reads and sorts them by cell
@@ -409,11 +419,19 @@ Add `--help` to any command (e.g. `anchovy extract --help`) to see its options.
 Two of anchovy's output files describe how the viral genotypes relate to each
 other as a network:
 
-- `<sample>_genotypeNetwork.csv` — all the relationships between genotypes
-- `<sample>_epistaticNetwork.csv` — just the "single-step" links (genotypes that
-  differ by exactly one mutation), plus links back to the reference
+- `<sample>_epistaticNetwork.csv` — **"single-step" links**: pairs of genotypes
+  differing by exactly one mutation, plus links back to the reference
+- `<sample>_genotypeNetwork.csv` — **shared-mutation links**: every pair of
+  genotypes with at least one mutation in common, however far apart they are
 - `<sample>_genotypeNodes.csv` — one row per genotype, describing the genotypes
   themselves rather than the links between them
+
+**Which one you want is probably `_epistaticNetwork.csv`, despite the names.**
+The networks in Dábilla & Dolan (2024) — where "edges represent single-nucleotide
+substitutions linking individual genotypes" — are the *single-step* network.
+`_genotypeNetwork.csv` joins any two genotypes sharing a mutation, so it is much
+denser and its edges do not mean one mutational step. The file names are kept
+for compatibility with the original R output.
 
 You can explore these visually in **Cytoscape**, a free tool for viewing and
 analyzing networks that's widely used in biology. Download it from
@@ -502,6 +520,19 @@ checked against it. Nothing in the pipeline runs it.
 ## Citation
 
 N. Dábilla, P. T. Dolan, Structure and dynamics of enterovirus genotype networks. **Sci Adv** 10, eado1693 (2024).
+
+The data behind that paper:
+
+| | |
+|---|---|
+| Raw sequencing | GEO [GSE260709](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE260709), SRA [PRJNA1082267](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1082267) |
+| Processed data and analysis code | Dryad [10.5061/dryad.6hdr7sr76](https://doi.org/10.5061/dryad.6hdr7sr76) |
+
+anchovy also builds on two other tools, both of which should be cited if you use
+it: **minimap2** (H. Li, *Bioinformatics* 34, 3094–3100, 2018) for mapping, and
+**sam2consensus** (E. M. Ortiz,
+[github.com/edgardomortiz/sam2consensus](https://github.com/edgardomortiz/sam2consensus))
+for the per-cell consensus.
   
 
 ## License

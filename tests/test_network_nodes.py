@@ -339,3 +339,39 @@ def test_self_edges_true_keeps_every_loop(tmp_path):
     ep, _ = _network(tmp_path, ISOLATED_CASE, self_edges=True)
     loops = set(ep[ep["source"] == ep["target"]]["source"].astype(str))
     assert {"5T", "5T_9A", "100G_200C"} <= loops
+
+
+# --------------------------------------------------------------------------- #
+# The two networks are not the same network, and the names suggest otherwise
+# --------------------------------------------------------------------------- #
+# The published figures ("edges represent single-nucleotide substitutions
+# linking individual genotypes") are the SINGLE-STEP network, which this code
+# writes to _epistaticNetwork.csv. _genotypeNetwork.csv joins any two genotypes
+# sharing a mutation, so it is denser and its edges mean something else. Anyone
+# reproducing a figure will reach for the file called "genotypeNetwork" first,
+# so the distinction is pinned here rather than left to the names.
+def test_the_single_step_network_is_a_subset_of_the_overlap_network():
+    import pandas as pd
+    from anchovy.annotate import hap_network_gen
+
+    # Two genotypes one step apart, and a third sharing a mutation with the
+    # first but two steps from it -- the pair that separates the two networks.
+    rows = []
+    for genotype, muts in [("A", ["A"]), ("A_B", ["A", "B"]),
+                           ("A_B_C", ["A", "B", "C"])]:
+        for m in muts:
+            rows.append({"genotype": genotype, "mutants": m,
+                         "count": 1, "freq": 1.0})
+    single, overlap = hap_network_gen(pd.DataFrame(rows))
+
+    def pairs(df):
+        return {frozenset((s, t)) for s, t in zip(df["source"], df["target"])
+                if s != t and "reference" not in (s, t)}
+
+    # A and A_B_C share mutation A, so the overlap network links them; they are
+    # two mutations apart, so the single-step network must not.
+    assert frozenset(("A", "A_B_C")) in pairs(overlap)
+    assert frozenset(("A", "A_B_C")) not in pairs(single)
+    assert pairs(single) < pairs(overlap), (
+        "the single-step network is no longer a strict subset of the overlap "
+        "network; one of the two edge criteria has changed")

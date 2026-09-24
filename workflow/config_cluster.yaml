@@ -116,6 +116,12 @@ min_breadth: 1.0
 # THE DEPTH FLOOR, and with min_breadth: 1.0 above the other half of the rule:
 # every position in the CDS must reach this many reads or the cell is dropped.
 #
+# NOTE THE PUBLISHED METHOD USED 10. Dábilla & Dolan (2024) limited the analysis
+# to cells with the full coding sequence recovered "at sufficient depth per site
+# (10-fold)", which is this key together with min_breadth: 1.0 above. 3 here is
+# well below that, so a run at this setting is NOT reproducing the paper's
+# filtering -- raise it to 10 to do that, and expect fewer cells.
+#
 # 3 is permissive. Two things to check on the first run at this setting, both
 # reported by the consensus stage: insertions get easier to call at low depth,
 # and a cell carrying one is no longer reference length, so it cannot be

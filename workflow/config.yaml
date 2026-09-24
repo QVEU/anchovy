@@ -119,8 +119,13 @@ orf_end: 540
 
 # THE CELL FILTER: a cell counts if the coding sequence is complete at depth.
 # min_breadth 1.0 says every position in the window must be called;
-# cons_min_depth says how many reads that takes. See workflow/config_cluster.yaml
-# for why these two replaced depth_min, which conflated depth with breadth.
+# cons_min_depth says how many reads that takes. This pair is the published
+# rule -- Dábilla & Dolan (2024) kept cells with the full coding sequence at
+# 10-fold depth per site -- and it replaced depth_min, which conflated depth
+# with breadth. workflow/config_cluster.yaml has the numbers behind that.
+#
+# 5 here is the package default, kept because the fixture has 8 reads per cell.
+# A real run reproducing the paper wants 10.
 min_breadth: 1.0
 cons_min_depth: 5
 cons_threshold: 0.5
