@@ -380,6 +380,11 @@ regenerate it if ever needed.
 - anchovy currently assumes you're mapping against a single reference sequence.
   A segmented genome (several reference pieces) would need a small extension.
 
+## Citation
+
+N. Dábilla, P. T. Dolan, Structure and dynamics of enterovirus genotype networks. **Sci Adv** 10, eado1693 (2024).
+  
+
 ## License
 
 MIT — free to use and modify. See the LICENSE file.
