@@ -75,7 +75,26 @@ min_reads: 20
 # a single job whose pool is sized separately. Left unset it is 16 however
 # large the node, which is what made this stage take four hours on a 64-core
 # machine.
+#
+# MEMORY IS BOUNDED BY THE CHUNK, NOT BY THE RUN. extract reads the SAM, runs
+# both passes and writes its output a chunk at a time, so its footprint is
+#
+#     0.3 GB  +  extract_threads x 4.6 KB x extract_chunk_size
+#
+# measured on a PacBio-shaped SAM, whatever the size of the run. Before it was
+# chunked this scaled with the read count instead: at eleven million reads the
+# sequences alone are ~22 GB, and such a run dies to the kernel with
+# "died with <Signals.SIGKILL: 9>" and nothing else, because SIGKILL cannot be
+# caught.
+#
+# Lower either knob on a tight node. extract_threads costs wall time in
+# proportion; extract_chunk_size costs almost nothing until the chunks get
+# small enough that pool dispatch shows up.
+#
+# 64 workers at the default 100,000-read chunk is ~29 GB, which suits a
+# dedicated large-memory node. Halve both on a shared one.
 extract_threads: 64
+# extract_chunk_size: 100000
 
 # THE CELL FILTER: a cell counts if the CODING SEQUENCE is complete at depth.
 #

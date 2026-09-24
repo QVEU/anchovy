@@ -501,10 +501,14 @@ rule extract:
         max_barcode_errors=(
             f"--max-barcode-errors {config['max_barcode_errors']}"
             if "max_barcode_errors" in config else ""),
+        # Reads held in memory at once. With extract_threads, this is what sets
+        # the stage's footprint -- it no longer scales with the size of the run.
+        chunk_size=(f"--chunk-size {config['extract_chunk_size']}"
+                    if "extract_chunk_size" in config else ""),
     shell:
         "anchovy extract {input.sam} {input.whitelist} "
         "--signature {params.sig} -o {output} --threads {threads} "
-        "{params.max_distance} {params.max_barcode_errors}"
+        "{params.max_distance} {params.max_barcode_errors} {params.chunk_size}"
 
 
 # --------------------------------------------------------------------------- #

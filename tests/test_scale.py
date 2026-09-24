@@ -251,14 +251,17 @@ def test_assign_payloads_carry_no_bulk_objects():
 
     from anchovy import extract
 
-    source = inspect.getsource(extract.assign_barcodes)
-    payload_block = source.split("payloads = [")[1].split("]")[0]
-    for leaked in ("whitelist", "barcode_blocks"):
+    # The payload is built in _assign_chunk and the pool in _BarcodeState;
+    # they used to share one function, and split so the lookup tables could be
+    # built once and reused across the streamed chunks rather than per chunk.
+    payload_block = (inspect.getsource(extract._assign_chunk)
+                     .split("payloads = [")[1].split("]")[0])
+    for leaked in ("whitelist", "barcode_blocks", "state.blocks", "state.index"):
         assert leaked not in payload_block, (
             f"{leaked} is back in the per-read payload; it belongs in "
             f"_assign_init, or every chunk ships a copy of it")
 
-    assert "initializer=_assign_init" in source, (
+    assert "initializer=_assign_init" in inspect.getsource(extract._BarcodeState), (
         "the pool must publish shared state via its initializer")
 
     # A payload must stay small enough that per-chunk pickling is irrelevant.
@@ -344,11 +347,14 @@ def test_read_sam_keeps_sam_fields_as_strings(tmp_path):
 
     df = read_sam(str(_sam(tmp_path, "types.sam", [("r", 0, "ref", "80M")])), 10)
 
-    assert list(df.columns)[:len(SamColumns.ORDER)] == SamColumns.ORDER
-    for column in SamColumns.ORDER:
+    assert list(df.columns)[:len(SamColumns.KEPT)] == SamColumns.KEPT
+    for column in SamColumns.KEPT:
         assert pd.api.types.is_string_dtype(df[column]), \
             f"{column} should stay text, got {df[column].dtype}"
         assert isinstance(df[column].iloc[0], str)
+    # QUAL is deliberately not retained: it is the same length as SEQ and
+    # nothing reads it. See the note in schema.SamColumns.
+    assert SamColumns.QSCORE not in df.columns
     # The two that pysam would hand back as ints if taken natively.
     assert df[SamColumns.FLAG].iloc[0] == "0"
     assert df[SamColumns.POS].iloc[0] == "1"
@@ -640,3 +646,252 @@ def test_anchovy_csv_is_written_atomically(tmp_path):
     assert target.exists()
     written = pd.read_csv(target)
     assert list(written.columns)[1:] == AnchovyColumns.ORDER
+
+
+# --------------------------------------------------------------------------- #
+# What the extract stage holds in memory
+# --------------------------------------------------------------------------- #
+# A colleague's v3 run died with SIGKILL 9 in `extract` -- the OOM killer, with
+# no other message. Measured on a synthetic PacBio-shaped SAM, the stage held
+# roughly 55 KB per read across the process tree at 8 workers. These pin the two
+# structural causes that were avoidable, both of which cost a full copy of every
+# base in the run.
+def test_read_sam_does_not_retain_the_quality_string(tmp_path):
+    """QUAL is exactly as long as SEQ, and nothing in the pipeline reads it.
+
+    Retained, it was ~44% of the frame -- carried through the whole stage,
+    duplicated by the frame copy that used to follow, and dropped at the end.
+    """
+    from anchovy.io import read_sam
+    from anchovy.schema import SamColumns
+
+    path = _sam(tmp_path, "qual.sam", [(f"r{i}", 0, "ref", "400M")
+                                       for i in range(20)], read_len=400)
+    df = read_sam(str(path), 10)
+
+    assert SamColumns.QSCORE not in df.columns
+    per_column = df.memory_usage(deep=True)
+    assert per_column[SamColumns.SEQ] > 0
+    # Nothing left in the frame is as heavy as the sequences themselves.
+    heaviest = per_column.drop(index=[SamColumns.SEQ, "Index"]).max()
+    assert heaviest < per_column[SamColumns.SEQ] / 4, (
+        "a per-base column other than SEQ is back in the frame")
+
+
+def test_signature_search_does_not_duplicate_the_frame():
+    """It used to copy the frame before adding its three columns.
+
+    The only caller reassigns its variable to the return value, so the original
+    was garbage the moment this returned -- the copy bought nothing and cost a
+    full duplicate of every sequence, live alongside the original.
+    """
+    import pandas as pd
+
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import find_signature_positions
+
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 28 + "TTTCTTATAT"
+    seq = "G" * 30 + query.replace("N" * 28, "A" * 28) + "C" * 100
+    frame = pd.DataFrame({"seq": [seq], "offset": [130]})
+
+    returned = find_signature_positions(frame, query,
+                                        ExtractConfig(signature=query, nthreads=1))
+    assert returned is frame, (
+        "find_signature_positions is copying the frame again; on a PacBio run "
+        "that duplicate was the largest single allocation in the stage")
+    assert {"minD", "minPos", "matchseq"} <= set(returned.columns)
+
+
+def test_the_worker_chunk_is_bounded():
+    """Pool.map's own rule hands each worker n/(4*workers) payloads.
+
+    Every payload carries a read's full sequence, so on a multi-million read run
+    that is a chunk of hundreds of thousands of sequences, pickled before the
+    first result comes back.
+    """
+    from anchovy.extract import _chunksize
+
+    assert _chunksize(10_000_000, 8) <= 1000, "the chunk is unbounded again"
+    # Small inputs still get whole-ish chunks: the per-chunk overhead is not
+    # worth paying when everything fits anyway.
+    assert _chunksize(40, 8) >= 1
+    assert _chunksize(0, 8) >= 1
+
+
+def test_extract_announces_its_memory_before_spending_it(tmp_path, capsys):
+    """SIGKILL cannot be caught, so the stage has to speak before it dies."""
+    from anchovy.extract import run
+
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    (tmp_path / "wl.txt").write_text("AAACCCAAGAAACACT\n")
+    body = "G" * 40 + query.replace("N" * 26, "AAACCCAAGAAACACT" + "T" * 10)
+    seq = body + "C" * 200
+    _sam(tmp_path, "m.sam", [("r", 0, "ref", f"{len(body)}S200M")],
+         read_len=len(seq))
+    (tmp_path / "m.sam").write_text(
+        "@SQ\tSN:ref\tLN:500\n"
+        + "\t".join(["r", "0", "ref", "1", "60", f"{len(body)}S200M",
+                     "*", "0", "0", seq, "I" * len(seq)]) + "\n")
+
+    run(sam=str(tmp_path / "m.sam"), whitelist=str(tmp_path / "wl.txt"),
+        signature=query)
+    out = capsys.readouterr().out
+    assert "GB" in out and "extract_threads" in out, (
+        "the stage no longer reports its projected memory; a run killed by the "
+        "OOM killer is then indistinguishable from any other crash")
+
+
+# --------------------------------------------------------------------------- #
+# Streaming: the same answer, a bounded footprint
+# --------------------------------------------------------------------------- #
+# The stage used to read the whole SAM, run both passes over it, and build the
+# entire output before returning any of it, so its cost scaled with the run. At
+# eleven million reads the sequences alone are ~22 GB and the kernel killed it.
+# Chunking bounds all three by chunk_size -- but only if the chunk boundary
+# cannot change the answer, which is what these check.
+def _streaming_fixture(tmp_path, n_reads):
+    """A SAM whose reads carry real barcodes, plus its whitelist."""
+    import random
+
+    random.seed(11)
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    codes = ["AAACCCAAGAAACACT", "AACGTGATCCTTAGGC", "ACTTGATTGCCAGTAC"]
+    (tmp_path / "wl.txt").write_text("\n".join(codes) + "\n")
+
+    lines = ["@SQ\tSN:ref\tLN:900"]
+    for i in range(n_reads):
+        bc = codes[i % len(codes)]
+        umi = "".join(random.choice("ACGT") for _ in range(10))
+        sig = query[:22] + bc + umi + query[-10:]
+        left = "".join(random.choice("ACGT") for _ in range(20))
+        right = "".join(random.choice("ACGT") for _ in range(300))
+        seq = left + sig + right
+        lines.append("\t".join([f"r{i}", "0", "ref", "1", "60",
+                                f"{len(left) + len(sig)}S{len(right)}M",
+                                "*", "0", "0", seq, "I" * len(seq)]))
+    path = tmp_path / "s.sam"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path), str(tmp_path / "wl.txt"), query
+
+
+def test_the_chunk_boundary_cannot_change_the_answer(tmp_path, capsys):
+    """Every chunk size must give the identical table, including a silly one.
+
+    A boundary bug here would not fail: it would drop or duplicate the reads
+    that happen to straddle a chunk, which on real data reads as slightly fewer
+    cells.
+    """
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run
+
+    sam, wl, query = _streaming_fixture(tmp_path, 250)
+
+    def table(chunk_size):
+        df = run(sam=sam, whitelist=wl, signature=query,
+                 config=ExtractConfig(signature=query, nthreads=2,
+                                      chunk_size=chunk_size))
+        capsys.readouterr()
+        return df
+
+    whole = table(10_000)
+    assert len(whole) == 250
+    for chunk_size in (1, 7, 100, 249, 250, 251):
+        pd.testing.assert_frame_equal(table(chunk_size), whole)
+
+
+def test_streaming_to_csv_matches_writing_the_whole_frame(tmp_path, capsys):
+    """run_to_csv must produce the file write_anchovy_csv would have."""
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run, run_to_csv
+    from anchovy.io import write_anchovy_csv
+
+    sam, wl, query = _streaming_fixture(tmp_path, 120)
+    cfg = ExtractConfig(signature=query, nthreads=2, chunk_size=17)
+
+    write_anchovy_csv(run(sam=sam, whitelist=wl, signature=query, config=cfg),
+                      str(tmp_path / "accumulated.csv"))
+    rows = run_to_csv(sam=sam, whitelist=wl, out_path=str(tmp_path / "streamed.csv"),
+                      signature=query, config=cfg)
+    capsys.readouterr()
+
+    assert rows == 120
+    assert (tmp_path / "streamed.csv").read_bytes() == \
+        (tmp_path / "accumulated.csv").read_bytes(), (
+            "the streamed CSV differs from the accumulated one -- most likely "
+            "the index no longer runs unbroken across chunks, or the header is "
+            "repeated")
+
+
+def test_a_failed_stream_leaves_no_half_file(tmp_path):
+    """A truncated CSV under the real name is worse than no CSV at all.
+
+    The next stage cannot tell one from a complete file, and snakemake gets no
+    chance to clean up after a SIGKILL.
+    """
+    import pandas as pd
+
+    from anchovy.io import AnchovyCsvSink
+    from anchovy.schema import AnchovyColumns
+
+    target = tmp_path / "out.csv"
+    row = {c: "x" for c in AnchovyColumns.ORDER}
+    try:
+        with AnchovyCsvSink(str(target)) as sink:
+            sink.write(pd.DataFrame([row]))
+            raise RuntimeError("killed partway")
+    except RuntimeError:
+        pass
+
+    assert not target.exists(), "a partial CSV was left under the real name"
+    assert not target.with_name(target.name + ".partial").exists()
+
+
+def test_the_lookup_tables_are_built_once_not_per_chunk(tmp_path, capsys):
+    """Rebuilding them per chunk would be ruinous on a v3 whitelist.
+
+    build_barcode_query_blocks makes one search template per whitelist entry --
+    6.8 million for v3 -- so a hundred chunks rebuilding it is a hundred times
+    the work and the pool re-ships it every time.
+    """
+    from anchovy import barcodes
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run
+
+    sam, wl, query = _streaming_fixture(tmp_path, 60)
+    calls = []
+    real = barcodes.build_barcode_query_blocks
+    barcodes.build_barcode_query_blocks = lambda *a, **k: (calls.append(1),
+                                                           real(*a, **k))[1]
+    try:
+        run(sam=sam, whitelist=wl, signature=query,
+            config=ExtractConfig(signature=query, nthreads=2, chunk_size=10))
+    finally:
+        barcodes.build_barcode_query_blocks = real
+    capsys.readouterr()
+
+    assert len(calls) == 1, (
+        f"the barcode blocks were rebuilt {len(calls)} times, once per chunk")
+
+
+def test_the_stage_forks_exactly_one_pool():
+    """A second pool would be forked from a multi-threaded parent.
+
+    multiprocessing.Pool runs three management threads in the PARENT, so
+    creating a second pool while the first is alive forks a multi-threaded
+    process. CPython 3.12 raises DeprecationWarning for that, and the deadlock
+    it warns about is real -- the child can inherit a lock whose holding thread
+    does not exist in it. An earlier version of the chunked loop held a pool for
+    each pass and turned CI's single warning into 68.
+
+    _match_worker reads none of the state _assign_init publishes, so one pool
+    serves both passes.
+    """
+    import inspect
+
+    from anchovy import extract
+
+    body = inspect.getsource(extract.run)
+    assert body.count("state.pool()") == 1
+    assert "Pool(config.nthreads)" not in body, (
+        "run() builds a pool of its own again; it must reuse the one from "
+        "_BarcodeState so there is a single fork, before any pool thread exists")

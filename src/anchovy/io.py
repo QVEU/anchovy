@@ -95,6 +95,101 @@ def parse_cigar_lengths(read) -> list[int]:
     return [read_len, clip_read_len, read_len - clip_read_len]
 
 
+def iter_sam_chunks(path: str, min_read_length: int,
+                    chunk_size: int | None = None):
+    """Yield the surviving reads as frames of at most `chunk_size` rows.
+
+    WHY CHUNKED. read_sam below returns the whole file as one frame, and the
+    extract stage then holds it, a pool's worth of payloads derived from it,
+    and the output table, all at once. That is fine at 400,000 reads and fatal
+    at eleven million: the sequences alone are ~2 KB each, so one frame is 22 GB
+    before anything is done with it, and the run dies to the OOM killer with no
+    message. Chunking bounds every one of those by the chunk rather than by the
+    file, so the stage costs the same on a run of any size.
+
+    `chunk_size=None` yields exactly one frame, which is what read_sam wants.
+
+    Prints the candidate-read total when the file is exhausted, not before:
+    that count is only known at the end of a single streaming pass, and a
+    second pass to learn it early would cost more than it tells anyone.
+    Args:
+        path: path to the input SAM file.
+        min_read_length: keep reads with length strictly greater than this.
+            (Callers pass config.extract.effective_min_read_length(), which
+            defaults to the signature length -- the original's `minL = quL`.)
+        chunk_size: rows per yielded frame, or None for a single frame.
+    """
+    def frame(rows, read_lens, clip_lens, offsets, lengths):
+        df = pd.DataFrame(rows, columns=SamColumns.KEPT)
+        df[SamColumns.READ_LEN] = read_lens
+        df[SamColumns.CLIP_READ_LEN] = clip_lens
+        df[SamColumns.OFFSET] = offsets
+        df[SamColumns.LENGTH] = lengths
+        return df
+
+    rows: list[list[str]] = []
+    read_lens: list[int] = []
+    clip_lens: list[int] = []
+    offsets: list[int] = []
+    lengths: list[int] = []
+    n_records = 0
+
+    print("Parsing Cigars...")
+    # check_sq=False so a SAM with no @SQ header still opens; the old text pass
+    # never looked at the header at all.
+    with pysam.AlignmentFile(path, "rb", check_sq=False) as handle:
+        for read in handle:
+            n_records += 1
+
+            # The old text filter, expressed on the parsed record: pysam reports
+            # RNAME "*" as reference_name None. Applied before anything is kept,
+            # so a rejected read never occupies memory.
+            if read.reference_name is None:
+                continue
+
+            # len() of the SEQ field, matching the old df[SEQ].apply(len); a
+            # read with SEQ "*" measured 1 there, and query_sequence is None.
+            seq = read.query_sequence or "*"
+            if len(seq) <= min_read_length:
+                continue
+
+            # to_string() re-renders the record as its SAM text line, so the
+            # fields are the same STRINGS the text parse produced -- same values
+            # and same object dtype. Taking pysam's native attributes instead
+            # would silently turn FLAG and POS into ints and change the frame.
+            #
+            # THE QUALITY STRING IS DROPPED HERE, and it is not a small saving:
+            # QUAL is one character per base, so it is exactly as large as SEQ,
+            # and on a PacBio frame the two together are 88% of it. Nothing
+            # reads it -- not this module, not extract, not any stage after --
+            # so every byte of it was carried through the whole stage and
+            # dropped at the end.
+            #
+            # SamColumns.ORDER still describes the 11-field SAM line; KEPT is
+            # the subset actually retained. Add a column back to KEPT if
+            # something starts needing it.
+            rows.append(read.to_string().split("\t")[:len(SamColumns.KEPT)])
+
+            read_len, clip_len, offset = parse_cigar_lengths(read)
+            read_lens.append(read_len)
+            clip_lens.append(clip_len)
+            offsets.append(offset)
+            lengths.append(len(seq))
+
+            if chunk_size is not None and len(rows) >= chunk_size:
+                yield frame(rows, read_lens, clip_lens, offsets, lengths)
+                rows, read_lens, clip_lens = [], [], []
+                offsets, lengths = [], []
+
+    print("Done.")
+    print("Total Candidate Reads: {}".format(n_records))
+
+    # The trailing partial chunk, and the only chunk when chunk_size is None.
+    # Yielded even when empty so a caller always sees the column layout.
+    if rows or chunk_size is None:
+        yield frame(rows, read_lens, clip_lens, offsets, lengths)
+
+
 def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
     """Read a mapped SAM into a DataFrame with CIGAR-derived length columns.
 
@@ -128,53 +223,7 @@ def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
             (Callers pass config.extract.effective_min_read_length(), which
             defaults to the signature length -- the original's `minL = quL`.)
     """
-    rows: list[list[str]] = []
-    read_lens: list[int] = []
-    clip_lens: list[int] = []
-    offsets: list[int] = []
-    lengths: list[int] = []
-    n_records = 0
-
-    print("Parsing Cigars...")
-    # check_sq=False so a SAM with no @SQ header still opens; the old text pass
-    # never looked at the header at all.
-    with pysam.AlignmentFile(path, "rb", check_sq=False) as handle:
-        for read in handle:
-            n_records += 1
-
-            # The old text filter, expressed on the parsed record: pysam reports
-            # RNAME "*" as reference_name None. Applied before anything is kept,
-            # so a rejected read never occupies memory.
-            if read.reference_name is None:
-                continue
-
-            # len() of the SEQ field, matching the old df[SEQ].apply(len); a
-            # read with SEQ "*" measured 1 there, and query_sequence is None.
-            seq = read.query_sequence or "*"
-            if len(seq) <= min_read_length:
-                continue
-
-            # to_string() re-renders the record as its SAM text line, so the 11
-            # fields are the same STRINGS the text parse produced -- same values
-            # and same object dtype. Taking pysam's native attributes instead
-            # would silently turn FLAG and POS into ints and change the frame.
-            rows.append(read.to_string().split("\t")[:len(SamColumns.ORDER)])
-
-            read_len, clip_len, offset = parse_cigar_lengths(read)
-            read_lens.append(read_len)
-            clip_lens.append(clip_len)
-            offsets.append(offset)
-            lengths.append(len(seq))
-    print("Done.")
-
-    print("Total Candidate Reads: {}".format(n_records))
-
-    df = pd.DataFrame(rows, columns=SamColumns.ORDER)
-    df[SamColumns.READ_LEN] = read_lens
-    df[SamColumns.CLIP_READ_LEN] = clip_lens
-    df[SamColumns.OFFSET] = offsets
-    df[SamColumns.LENGTH] = lengths
-    return df
+    return next(iter_sam_chunks(path, min_read_length, chunk_size=None))
 
 
 def validate_whitelist(barcodes: list[str], path: str = "whitelist") -> None:
@@ -290,6 +339,49 @@ def write_anchovy_csv(df: pd.DataFrame, path: str, chunksize: int = 50000) -> No
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+class AnchovyCsvSink:
+    """Append the extract stage's output one chunk at a time, atomically.
+
+    write_anchovy_csv takes a whole frame, which is exactly what the streaming
+    stage must never build. This writes the same file from a sequence of chunks:
+    header once, the index continuing across chunks so the rows are numbered as
+    though one frame had been written, and the same write-then-rename so a run
+    killed partway leaves no half-file under the name the next stage reads.
+
+    The output is byte-identical to write_anchovy_csv given the same rows in the
+    same order, which tests/test_scale.py checks rather than asserts.
+    """
+
+    def __init__(self, path: str):
+        self.target = Path(path)
+        self.tmp = self.target.with_name(self.target.name + ".partial")
+        self._handle = None
+        self._next_index = 0
+
+    def __enter__(self):
+        self._handle = self.tmp.open("w", newline="")
+        return self
+
+    def write(self, df: pd.DataFrame) -> None:
+        if df.empty:
+            return
+        df = df[AnchovyColumns.ORDER]
+        # Renumber so the index runs unbroken across chunks; each chunk arrives
+        # numbered from zero.
+        df.index = range(self._next_index, self._next_index + len(df))
+        df.to_csv(self._handle, header=self._next_index == 0)
+        self._next_index += len(df)
+
+    def __exit__(self, exc_type, exc, tb):
+        self._handle.close()
+        self._handle = None
+        if exc_type is None:
+            os.replace(self.tmp, self.target)
+        else:
+            self.tmp.unlink(missing_ok=True)
+        return False
 
 
 def read_anchovy_csv(path: str) -> pd.DataFrame:

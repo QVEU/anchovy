@@ -185,7 +185,8 @@ of these and says why. The complete list:
 | `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
 | `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor |
 | `max_distance` | `42` | How far the *signature* match may be before a read is dropped |
-| `extract_threads` | `16` | Worker pool inside `extract`. Not `--cores` |
+| `extract_threads` | `16` | Worker pool inside `extract`. Not `--cores`. **Sets the stage's memory** — see below |
+| `extract_chunk_size` | `100000` | Reads held at once. The other half of the memory setting |
 | `min_reads` | `5` | Reads a barcode needs to become a cell. This decides the size of the run |
 | **Calling and filtering** | | |
 | `window` | unset | `cds` takes the analysis window from the GFF |
@@ -469,6 +470,27 @@ something you can interpret. Each row describes one genotype:
 | `nCells` | How many cells carry it |
 | `genoFreq` | What fraction of cells that is |
 | `idFreq` | What fraction of cells carry *any* genotype with this `genotypeID` |
+
+#### If `extract` is killed
+
+A run that stops with `died with <Signals.SIGKILL: 9>` and nothing else was
+killed by the kernel for using too much memory. SIGKILL cannot be caught, so the
+stage gets no chance to say so itself.
+
+`extract` processes the SAM a chunk at a time, so **its footprint does not
+depend on how big the run is** — only on the chunk and the worker count:
+
+```
+0.3 GB  +  extract_threads x 4.6 KB x extract_chunk_size
+```
+
+At the defaults (16 workers, 100,000 reads per chunk) that is about 7 GB,
+whether the file holds one million reads or twenty. Lower either knob on a tight
+node: `extract_threads` costs wall time in proportion, `extract_chunk_size`
+costs almost nothing until the chunks get small enough that dispatch shows up.
+
+The stage prints what it is about to need before it starts, so a subsequent kill
+is at least diagnosable.
 
 **`genotype` and `genotypeID` are not the same thing, and neither are their
 frequencies.** `genotype` is the nucleotide haplotype and is what a node *is* —

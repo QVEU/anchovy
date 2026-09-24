@@ -41,15 +41,20 @@ def _cmd_extract(args: argparse.Namespace) -> int:
         min_distance_cutoff=(args.max_distance if args.max_distance is not None
                              else defaults.min_distance_cutoff),
         max_barcode_errors=args.max_barcode_errors,
+        chunk_size=(args.chunk_size if args.chunk_size is not None
+                    else defaults.chunk_size),
     )
 
-    df = extract.run(sam=args.sam, whitelist=args.whitelist,
-                     signature=config.signature, config=config)
-
-    from anchovy.io import write_anchovy_csv
     out = args.out or args.sam.replace(".sam", "_anchovy.csv").replace(".bam", "_anchovy.csv")
-    write_anchovy_csv(df, out)
-    print(f"Wrote {out} ({len(df)} reads assigned).")
+
+    # run_to_csv, not run: run concatenates every chunk and hands back one
+    # frame, so the whole table would be in memory at the end however small the
+    # chunks were -- which is the thing chunking exists to avoid. Here each
+    # chunk is appended as it is produced.
+    n = extract.run_to_csv(sam=args.sam, whitelist=args.whitelist,
+                           out_path=out, signature=config.signature,
+                           config=config)
+    print(f"Wrote {out} ({n} reads assigned).")
     return 0
 
 
@@ -197,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
                                 "assigned to its nearest whitelist barcode with "
                                 "no floor, however poorly it matched. 0 admits "
                                 "only exact barcodes, 1 allows one substitution.")
+    p_extract.add_argument("--chunk-size", type=int, dest="chunk_size",
+                           help="Reads held in memory at once (default: 100000). "
+                                "This sets the stage's footprint, roughly "
+                                "0.3 GB + threads x 4.6 KB x chunk-size; lower "
+                                "it on a tight node.")
     p_extract.set_defaults(func=_cmd_extract)
 
     # --- fasta ---
