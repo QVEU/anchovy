@@ -10,11 +10,39 @@
 # THIS IS THE WHOLE INTERFACE. Point it at a directory and every FASTQ in it
 # (.fastq/.fq, plain or .gz) is run through the entire pipeline -- map, extract,
 # per-cell consensus, genotypes, networks, report -- with outputs named after
-# the FASTQ, in results/<name>/. Adding a sample means dropping a file in.
+# the FASTQ. Adding a sample means dropping a file in.
 #
-# The directory is never written to: the SAM and everything after it go under
-# results/.
+# It is also where the run LIVES. Outputs go to <input_dir>/results/<name>/ and
+# the downloaded whitelist to <input_dir>/resources/, so the reads, this config
+# and everything derived from them are one self-contained directory -- the same
+# command gives the same files from any shell, and archiving the run means
+# archiving one folder. Your reads themselves are never written to.
+#
+# The intended layout, then, is this file sitting beside the FASTQs it describes:
+#
+#   my_experiment/
+#       config.yaml           <- this file
+#       sample_A.fastq.gz
+#       sample_B.fastq.gz
+#       resources/            <- appears on the first run
+#       results/sample_A/ ... <- appears on the first run
 input_dir: "tests/data/fastqs"
+
+# --- where the outputs go ---------------------------------------------------- #
+# Both default to a subdirectory of input_dir, which is what you want unless one
+# of these applies. Full paths.
+#
+# results_dir    the reads are on a read-only mount, or the outputs belong on a
+#                faster or larger disk than the reads
+# resources_dir  share one whitelist cache between runs -- the v3 list is ~100 MB
+#                and byte-identical every time, so downloading it per run is
+#                waste. Point every config at the same directory.
+#
+# results_dir: "/scratch/me/anchovy_runs/experiment1"
+# resources_dir: "/scratch/me/anchovy_whitelists"
+#
+# Snakemake's own .snakemake/ bookkeeping still lands wherever you launch from.
+# That one is Snakemake's, not anchovy's, and is safe to delete between runs.
 
 # --- 10X chemistry: one key, because the halves must agree ------------------- #
 # `chemistry` sets BOTH the signature and the whitelist, and they cannot come
@@ -29,18 +57,25 @@ input_dir: "tests/data/fastqs"
 #   v2  16 nt barcode + 10 nt UMI, 737K-august-2016.txt
 chemistry: "v3"
 
-# The whitelist is downloaded once into resources/ and shared by every sample,
-# and its barcode count is verified before anything is allowed to use it.
+# BOTH CHEMISTRIES DOWNLOAD AUTOMATICALLY. The whitelist is fetched once into
+# resources_dir, shared by every sample, and its barcode count is verified
+# before anything is allowed to use it -- so a mirror that quietly serves the
+# wrong file fails the run rather than producing wrong cells. Leave `whitelist`
+# unset and there is nothing to do.
 #
-# v2 downloads automatically. v3 does NOT: 10X does not publish that file
-# anywhere this could be verified as fetchable, and a URL that 404s at run time
-# is worse than asking. For v3, set one of these:
+# Override it when you have a run-specific barcode list -- the usual case being
+# the cell barcodes called from your own Illumina run by Cell Ranger and Seurat,
+# which restricts the analysis to cells you have already validated:
 #
-#   whitelist: "path/to/3M-february-2018.txt"   # Cell Ranger ships it, gzipped,
-#                 # at cellranger-x.y.z/lib/python/cellranger/barcodes/
-#   whitelist_url: "https://your-mirror/3M-february-2018.txt.gz"
+#   whitelist: "path/to/filtered_barcodes.txt"  # one 16 nt barcode per line
 #
-# Either key also overrides the v2 default, for a local copy or a mirror.
+# You still set `chemistry`, because it also sets the read signature; the
+# barcode is 16 nt in both v2 and v3, so a custom list does not tell the
+# workflow which chemistry produced it. A list is checked on load for the
+# things that silently produce nonsense -- the "-1" GEM-well suffix Cell Ranger
+# writes, mixed widths, non-ACGTN characters -- and the error names the fix.
+#
+# `whitelist_url` points the download at your own mirror instead.
 whitelist: "tests/data/whitelist.txt"
 
 # `signature` overrides the one derived from `chemistry`, for an assay whose

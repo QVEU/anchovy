@@ -3,11 +3,15 @@
 # Snakemake workflow for the anchovy pipeline. Replaces AnchovyJob.sh.
 #
 # USAGE (the config file IS the interface -- you don't edit this file to run on
-# your own data; you copy a config, edit its paths, and run):
-#   snakemake -s workflow/Snakefile --configfile config.yaml --cores 4 -n
-#   snakemake -s workflow/Snakefile --configfile config.yaml --cores 4
+# your own data; you copy a config into the folder holding your FASTQs, edit its
+# paths, and run):
+#   snakemake -s workflow/Snakefile --configfile /reads/config.yaml --cores 4 -n
+#   snakemake -s workflow/Snakefile --configfile /reads/config.yaml --cores 4
 #
-# See workflow/README.md for the config-swap pattern and examples.
+# Outputs land in <input_dir>/results/<sample>/, beside the reads, so they do
+# not depend on where you launched from. See "Pointing it at your own data" in
+# README.md for the config-swap pattern, and workflow/config_cluster.yaml for a
+# fully commented example.
 
 import glob
 import os
@@ -42,7 +46,36 @@ if INPUT_DIR is None and "samples" not in config:
         "config needs `input_dir` -- the folder holding the FASTQs to run. "
         "(Or `samples`, with `cells_dir`, to resume from per-cell FASTAs.)")
 
-RESOURCES = config.get("resources_dir", "resources")
+# --------------------------------------------------------------------------- #
+# Where the run lives: beside the reads, not beside the shell
+# --------------------------------------------------------------------------- #
+# EVERY GENERATED PATH IS ANCHORED TO input_dir, not to the working directory.
+# A run's home is the folder holding its FASTQs and its config, so the same
+# command produces the same files from any shell, on any node, and a run is a
+# self-contained directory you can archive or hand to someone whole.
+#
+# Anchoring to the working directory instead -- which is what these defaulted to
+# -- meant the outputs of a run depended on where it was launched from: the same
+# config run from a different cd wrote a second, empty results/ and re-did
+# everything, and results/ under a git checkout vanished with the checkout.
+#
+#   results_dir    <input_dir>/results     one subdirectory per sample
+#   resources_dir  <input_dir>/resources   the downloaded 10X whitelist
+#
+# Set either to an absolute path to move it. resources_dir is the one worth
+# sharing: the v3 whitelist is ~100 MB and identical for every run, so pointing
+# several runs at one cache downloads it once. results_dir is better left alone.
+#
+# The `samples` + `cells_dir` resume path has no input_dir to anchor to, so
+# there these fall back to the working directory as before.
+def _under_input(key, name):
+    explicit = config.get(key)
+    if explicit:
+        return explicit
+    return os.path.join(INPUT_DIR, name) if INPUT_DIR else name
+
+RESULTS_DIR = _under_input("results_dir", "results")
+RESOURCES   = _under_input("resources_dir", "resources")
 
 
 # Discovery lives in the package so it can be unit-tested and so there is one
@@ -163,7 +196,7 @@ REFNAME = config.get("reference_name") or _reference_name(TEMPLATE)
 # concatenation, so this turns each one into a per-sample pattern without
 # touching the rules.
 SAMPLE  = "{sample}"
-RESULTS = "results/{sample}"
+RESULTS = RESULTS_DIR + "/{sample}"
 
 ALL_CONSENSUS = RESULTS + "/" + SAMPLE + "_allConsensus.fasta"
 
@@ -281,7 +314,17 @@ CELL_ALLELE_FREQ   = RESULTS + "/" + SAMPLE + "_cellAlleleFreq.csv"
 # with something readable, not a directory of CSVs. Set `report: false` to skip
 # it -- the only reason to, since it is what makes R a hard requirement for a
 # complete run.
-REPORT_RMD = config.get("report_rmd", "visualization/anchovy_report.rmd")
+#
+# The template is resolved against the SNAKEFILE, not the working directory. It
+# ships with the code, so it is the one path here that does not belong to the
+# run -- and with everything else anchored to input_dir, a cwd-relative default
+# was the last thing making `snakemake -s /path/to/anchovy/workflow/Snakefile`
+# from outside the checkout fail, on the final rule, after the whole pipeline
+# had already run.
+REPORT_RMD = config.get(
+    "report_rmd",
+    os.path.normpath(os.path.join(workflow.basedir, os.pardir,
+                                  "visualization", "anchovy_report.rmd")))
 REPORT_ON  = bool(config.get("report", True))
 REPORT     = RESULTS + "/" + SAMPLE + "_report.html"
 
@@ -728,15 +771,17 @@ rule report:
         # Resolving them in the rule removes R's evaluation order from the
         # question entirely: by the time Rscript starts, every path is already
         # absolute and no longer depends on where anything thinks it is.
-        results_dir=lambda w: os.path.abspath(f"results/{w.sample}"),
+        results_dir=lambda w: os.path.abspath(f"{RESULTS_DIR}/{w.sample}"),
         html=lambda w: os.path.abspath(
-            f"results/{w.sample}/{w.sample}_report.html"),
+            f"{RESULTS_DIR}/{w.sample}/{w.sample}_report.html"),
         tmp=lambda w: os.path.abspath(
-            f"results/{w.sample}/.report_intermediates"),
+            f"{RESULTS_DIR}/{w.sample}/.report_intermediates"),
         rmd=lambda w: os.path.abspath(REPORT_RMD),
-        # knit_root_dir keeps chunk-relative paths meaning what they mean
-        # everywhere else in the workflow: relative to the run directory.
-        rundir=os.path.abspath("."),
+        # knit_root_dir gives a chunk-relative path a stable meaning: the
+        # sample's own results directory. The Rmd reaches everything through
+        # params$results_dir and so does not rely on it -- but cwd, which this
+        # used to be, is the one thing about a run that is not reproducible.
+        rundir=lambda w: os.path.abspath(f"{RESULTS_DIR}/{w.sample}"),
         sample=SAMPLE,
     shell:
         "mkdir -p {params.tmp} && "

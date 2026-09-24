@@ -112,10 +112,11 @@ steps that actually need it — not starting over from scratch.
 
 ## Pointing it at your own data
 
-Put your FASTQs in a folder, copy the example settings file, and point it at
-them. Every FASTQ in the folder is run through the whole pipeline — mapping,
-barcode extraction, per-cell consensus, genotypes, networks and a rendered
-report — with its outputs named after it, in `results/<name>/`.
+Put your FASTQs in a folder, copy the example settings file **into that same
+folder**, and point it at them. Every FASTQ in the folder is run through the
+whole pipeline — mapping, barcode extraction, per-cell consensus, genotypes,
+networks and a rendered report — with its outputs named after it, in
+`results/<name>/` *inside that folder*.
 
 ```yaml
 input_dir: "path/to/fastqs"         # a FOLDER of reads; one run covers all of them
@@ -132,6 +133,52 @@ barcode count before anything uses it.
 
 Optional settings — analysis window, depth and breadth filters, allele
 frequencies — are documented in `workflow/config.yaml`.
+
+### Where everything goes
+
+A run is a **self-contained folder**. You start with reads and a settings file;
+everything the pipeline makes is written underneath, so the same command gives
+the same result from any shell, and the whole run can be archived or handed to a
+colleague as one directory:
+
+```
+my_experiment/                     <- input_dir
+    config.yaml                    <- the settings file, kept with the data
+    sample_A.fastq.gz              <- your reads; never modified
+    sample_B.fastq.gz              <- add a second sample by dropping it in
+    resources/                     <- the 10X whitelist, downloaded once
+    results/
+        sample_A/
+            sample_A.sam
+            cells/  work/          <- per-cell intermediates, safe to delete
+            sample_A_anchovy.csv
+            sample_A_allConsensus.fasta
+            sample_A_filtConsensus.csv
+            sample_A_annot_v3.csv
+            sample_A_genotypeNetwork.csv
+            sample_A_genotypeNodes.csv
+            sample_A_epistaticNetwork.csv
+            sample_A_alleleFrequencies.csv
+            sample_A_cellAlleleFreq.csv
+            sample_A_report.html   <- start here
+        sample_B/
+```
+
+Nothing is ever written back over your reads. The reference, GFF and any
+whitelist you supply can live anywhere — give their full paths in the settings
+file — and the checkout itself stays clean, so you can delete and re-clone
+anchovy without touching a run.
+
+Two settings move things if you need them to:
+
+| Setting | Default | When to change it |
+|---|---|---|
+| `results_dir` | `<input_dir>/results` | Reads are on a read-only mount, or you want outputs on a faster disk |
+| `resources_dir` | `<input_dir>/resources` | Share one whitelist cache across runs — the v3 list is ~100 MB and identical every time |
+
+Both take a full path. Snakemake also writes its own bookkeeping to
+`.snakemake/` in whatever directory you launch from; that one is Snakemake's,
+not anchovy's, and is safe to delete between runs.
 
 Plan the run first, then do it:
 

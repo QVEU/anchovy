@@ -16,17 +16,20 @@
 # submissions if you submit.
 #
 # KEEP RUN DATA OUT OF THE REPOSITORY. Every path here points outside the
-# checkout, so deleting or re-cloning it cannot take the data with it. Results
-# land in results/ under the repo, which is cheap to regenerate.
+# checkout, and the outputs follow the reads rather than the shell: they land in
+# <input_dir>/results/<sample>/, so deleting or re-cloning anchovy cannot take a
+# run with it, and the same command gives the same files from any login node.
 
 # --- input ------------------------------------------------------------------ #
 # A FOLDER OF FASTQs, not a sample name. Every FASTQ in here is run through the
 # whole pipeline -- map, extract, per-cell consensus, genotypes, networks,
-# report -- and its outputs are named after it, in results/<name>/. Add a
-# second sample by dropping its FASTQ in beside the first.
+# report -- and its outputs are named after it, in <input_dir>/results/<name>/.
+# Add a second sample by dropping its FASTQ in beside the first.
 #
-# Nothing is written back here; the SAM and everything after it land under
-# results/.
+# This folder is also where the run lives: results/ and resources/ are created
+# inside it. Your reads are never written to. On a read-only data mount, set
+# `results_dir` and `resources_dir` (see workflow/config.yaml) to send them
+# somewhere writable instead.
 input_dir: "/data/lvd_qve/Sequencing_Data/QVEU_Seq_0065_PacBio_NDAS_SearchSeq-EVA71Passage/Analysis_r54242Ue_20230322_183435_8_H01/Sample_5_EVA71_6h_P5"
 
 # Genome the reads are mapped to. The reference NAME is read from this file's
@@ -50,8 +53,9 @@ map_threads: 64
 # chemistry-specific, and mismatching them does not fail -- every read is
 # assigned to its nearest entry in the wrong list and the output looks ordinary.
 #
-# This dataset is v2. The v2 whitelist downloads automatically into resources/;
-# the local copy below is used instead, so nothing is fetched.
+# This dataset is v2. Both chemistries download automatically into
+# <input_dir>/resources/; the local copy below is used instead, so nothing is
+# fetched.
 chemistry: "v2"
 whitelist: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run/737K-august-2016.txt"
 
