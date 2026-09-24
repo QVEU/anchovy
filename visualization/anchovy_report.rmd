@@ -460,8 +460,20 @@ if (is.null(epi) || is.null(nodes)) {
 } else {
   library(igraph); library(ggraph)
 
+  # REFERENCE EDGES STAY. This used to also drop `target != "reference"`, and
+  # reference appears only ever as a target -- so the node vanished from the
+  # picture while the node table printed directly above it still listed it.
+  #
+  # On a hub-and-spoke population it was not one missing node but the whole
+  # panel: a population derived from a molecular clone has every genotype one
+  # step off the modal one and nothing else, so every edge targets reference,
+  # the filter removed all of them, and the chunk reported "no single-step
+  # edges" for a network that is entirely single-step edges.
+  #
+  # Self-edges still go: igraph draws them as a loop on the node and the CSV
+  # keeps them only so an isolated genotype has a row to appear in.
   edges <- epi |>
-    filter(source != target, target != "reference") |>
+    filter(source != target) |>
     distinct(source, target)
 
   if (nrow(edges) == 0) {
@@ -480,9 +492,15 @@ if (is.null(epi) || is.null(nodes)) {
     ggraph(g, layout = "fr") +
       geom_edge_link(alpha = 0.25) +
       geom_node_point(aes(size = nCells, colour = nMutations)) +
+      # Only the reference carries zero mutations, so colour already separates
+      # it -- but on a big network you cannot tell which end of the scale you
+      # are looking at. One label, on the one node that anchors the picture.
+      geom_node_text(aes(label = ifelse(name == "reference", "reference", "")),
+                     size = 3, vjust = -1.2, colour = "grey30") +
       scale_size_continuous(range = c(1.5, 8), name = "cells") +
       scale_colour_viridis_c(name = "mutations") +
-      labs(title = "Genotype network (single-step edges)") +
+      labs(title = "Genotype network (single-step edges)",
+           subtitle = "Node size is cells carrying the genotype; colour is mutations from the reference") +
       theme_void(base_size = 12) +
       theme(legend.position = "right")
   }
