@@ -144,3 +144,21 @@ max_barcode_errors: 2
 # {reads carrying an allele} / {reads at that position}, with a per-position
 # denominator. Adds _alleleFrequencies.csv and _cellAlleleFreq.csv.
 allele_frequencies: true
+
+# --- extract stage resources ------------------------------------------------- #
+# MEMORY SCALES WITH THIS, NOT JUST SPEED, and it is the first thing to lower
+# if the stage is killed. Each worker is a forked process that ends up holding
+# its own copy of the payloads it is given, so the whole tree costs roughly
+#
+#     0.3 GB  +  extract_threads x 4.6 KB x (reads surviving the length filter)
+#
+# measured on a PacBio-shaped SAM. At 8 workers and a million reads that is
+# ~37 GB. A run that dies with "died with <Signals.SIGKILL: 9>" and no other
+# message was killed by the kernel for exactly this -- SIGKILL cannot be caught,
+# so the stage has no chance to say so itself.
+#
+# Halving extract_threads roughly halves the footprint and costs proportionally
+# more wall time. Setting it to 1 is the smallest the stage gets.
+#
+# Unset it defaults to 16, capped by snakemake's --cores.
+# extract_threads: 8

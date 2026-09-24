@@ -185,7 +185,7 @@ of these and says why. The complete list:
 | `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
 | `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor |
 | `max_distance` | `42` | How far the *signature* match may be before a read is dropped |
-| `extract_threads` | `16` | Worker pool inside `extract`. Not `--cores` |
+| `extract_threads` | `16` | Worker pool inside `extract`. Not `--cores`. **Sets the stage's memory too** — see below |
 | `min_reads` | `5` | Reads a barcode needs to become a cell. This decides the size of the run |
 | **Calling and filtering** | | |
 | `window` | unset | `cds` takes the analysis window from the GFF |
@@ -469,6 +469,24 @@ something you can interpret. Each row describes one genotype:
 | `nCells` | How many cells carry it |
 | `genoFreq` | What fraction of cells that is |
 | `idFreq` | What fraction of cells carry *any* genotype with this `genotypeID` |
+
+#### If `extract` is killed
+
+A run that stops with `died with <Signals.SIGKILL: 9>` and nothing else was
+killed by the kernel for using too much memory. SIGKILL cannot be caught, so the
+stage gets no chance to say so itself.
+
+`extract` holds the surviving reads in memory and forks a worker pool over them,
+so the whole process tree costs roughly:
+
+```
+0.3 GB  +  extract_threads x 4.6 KB x (reads surviving the length filter)
+```
+
+At 8 workers and a million reads that is about 37 GB. **Lower `extract_threads`
+first** — halving it roughly halves the footprint and costs proportionally more
+wall time; `1` is the smallest the stage gets. Note it defaults to 16 whatever
+you pass to `--cores`, so an unset value is not a small one.
 
 **`genotype` and `genotypeID` are not the same thing, and neither are their
 frequencies.** `genotype` is the nucleotide haplotype and is what a node *is* —

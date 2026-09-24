@@ -75,6 +75,23 @@ min_reads: 20
 # a single job whose pool is sized separately. Left unset it is 16 however
 # large the node, which is what made this stage take four hours on a 64-core
 # machine.
+#
+# MEMORY SCALES WITH THIS, NOT JUST SPEED, and it is the first thing to lower
+# if the stage is killed. Each worker is a forked process that ends up holding
+# its own copy of the payloads it is given, so the whole tree costs roughly
+#
+#     0.3 GB  +  extract_threads x 4.6 KB x (reads surviving the length filter)
+#
+# measured on a PacBio-shaped SAM. At 8 workers and a million reads that is
+# ~37 GB. A run that dies with "died with <Signals.SIGKILL: 9>" and no other
+# message was killed by the kernel for exactly this -- SIGKILL cannot be caught,
+# so the stage has no chance to say so itself.
+#
+# Halving extract_threads roughly halves the footprint and costs proportionally
+# more wall time. Setting it to 1 is the smallest the stage gets.
+#
+# 64 here suits a dedicated large-memory node and is far too many for a shared
+# one: at a million reads the formula above puts it near 300 GB.
 extract_threads: 64
 
 # THE CELL FILTER: a cell counts if the CODING SEQUENCE is complete at depth.

@@ -154,11 +154,22 @@ def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
             if len(seq) <= min_read_length:
                 continue
 
-            # to_string() re-renders the record as its SAM text line, so the 11
+            # to_string() re-renders the record as its SAM text line, so the
             # fields are the same STRINGS the text parse produced -- same values
             # and same object dtype. Taking pysam's native attributes instead
             # would silently turn FLAG and POS into ints and change the frame.
-            rows.append(read.to_string().split("\t")[:len(SamColumns.ORDER)])
+            #
+            # THE QUALITY STRING IS DROPPED HERE, and it is not a small saving:
+            # QUAL is one character per base, so it is exactly as large as SEQ,
+            # and on a PacBio frame the two together are 88% of it. Nothing
+            # reads it -- not this module, not extract, not any stage after --
+            # so every byte of it was carried through the whole stage, copied
+            # again by the frame duplicate below, and dropped at the end.
+            #
+            # SamColumns.ORDER still describes the 11-field SAM line; KEPT is
+            # the subset actually retained. Add a column back to KEPT if
+            # something starts needing it.
+            rows.append(read.to_string().split("\t")[:len(SamColumns.KEPT)])
 
             read_len, clip_len, offset = parse_cigar_lengths(read)
             read_lens.append(read_len)
@@ -169,7 +180,7 @@ def read_sam(path: str, min_read_length: int) -> pd.DataFrame:
 
     print("Total Candidate Reads: {}".format(n_records))
 
-    df = pd.DataFrame(rows, columns=SamColumns.ORDER)
+    df = pd.DataFrame(rows, columns=SamColumns.KEPT)
     df[SamColumns.READ_LEN] = read_lens
     df[SamColumns.CLIP_READ_LEN] = clip_lens
     df[SamColumns.OFFSET] = offsets

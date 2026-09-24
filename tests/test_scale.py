@@ -344,11 +344,14 @@ def test_read_sam_keeps_sam_fields_as_strings(tmp_path):
 
     df = read_sam(str(_sam(tmp_path, "types.sam", [("r", 0, "ref", "80M")])), 10)
 
-    assert list(df.columns)[:len(SamColumns.ORDER)] == SamColumns.ORDER
-    for column in SamColumns.ORDER:
+    assert list(df.columns)[:len(SamColumns.KEPT)] == SamColumns.KEPT
+    for column in SamColumns.KEPT:
         assert pd.api.types.is_string_dtype(df[column]), \
             f"{column} should stay text, got {df[column].dtype}"
         assert isinstance(df[column].iloc[0], str)
+    # QUAL is deliberately not retained: it is the same length as SEQ and
+    # nothing reads it. See the note in schema.SamColumns.
+    assert SamColumns.QSCORE not in df.columns
     # The two that pysam would hand back as ints if taken natively.
     assert df[SamColumns.FLAG].iloc[0] == "0"
     assert df[SamColumns.POS].iloc[0] == "1"
@@ -640,3 +643,73 @@ def test_anchovy_csv_is_written_atomically(tmp_path):
     assert target.exists()
     written = pd.read_csv(target)
     assert list(written.columns)[1:] == AnchovyColumns.ORDER
+
+
+# --------------------------------------------------------------------------- #
+# What the extract stage holds in memory
+# --------------------------------------------------------------------------- #
+# A colleague's v3 run died with SIGKILL 9 in `extract` -- the OOM killer, with
+# no other message. Measured on a synthetic PacBio-shaped SAM, the stage held
+# roughly 55 KB per read across the process tree at 8 workers. These pin the two
+# structural causes that were avoidable, both of which cost a full copy of every
+# base in the run.
+def test_read_sam_does_not_retain_the_quality_string(tmp_path):
+    """QUAL is exactly as long as SEQ, and nothing in the pipeline reads it.
+
+    Retained, it was ~44% of the frame -- carried through the whole stage,
+    duplicated by the frame copy that used to follow, and dropped at the end.
+    """
+    from anchovy.io import read_sam
+    from anchovy.schema import SamColumns
+
+    path = _sam(tmp_path, "qual.sam", [(f"r{i}", 0, "ref", "400M")
+                                       for i in range(20)], read_len=400)
+    df = read_sam(str(path), 10)
+
+    assert SamColumns.QSCORE not in df.columns
+    per_column = df.memory_usage(deep=True)
+    assert per_column[SamColumns.SEQ] > 0
+    # Nothing left in the frame is as heavy as the sequences themselves.
+    heaviest = per_column.drop(index=[SamColumns.SEQ, "Index"]).max()
+    assert heaviest < per_column[SamColumns.SEQ] / 4, (
+        "a per-base column other than SEQ is back in the frame")
+
+
+def test_signature_search_does_not_duplicate_the_frame():
+    """It used to copy the frame before adding its three columns.
+
+    The only caller reassigns its variable to the return value, so the original
+    was garbage the moment this returned -- the copy bought nothing and cost a
+    full duplicate of every sequence, live alongside the original.
+    """
+    import pandas as pd
+
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import find_signature_positions
+
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 28 + "TTTCTTATAT"
+    seq = "G" * 30 + query.replace("N" * 28, "A" * 28) + "C" * 100
+    frame = pd.DataFrame({"seq": [seq], "offset": [130]})
+
+    returned = find_signature_positions(frame, query,
+                                        ExtractConfig(signature=query, nthreads=1))
+    assert returned is frame, (
+        "find_signature_positions is copying the frame again; on a PacBio run "
+        "that duplicate was the largest single allocation in the stage")
+    assert {"minD", "minPos", "matchseq"} <= set(returned.columns)
+
+
+def test_the_worker_chunk_is_bounded():
+    """Pool.map's own rule hands each worker n/(4*workers) payloads.
+
+    Every payload carries a read's full sequence, so on a multi-million read run
+    that is a chunk of hundreds of thousands of sequences, pickled before the
+    first result comes back.
+    """
+    from anchovy.extract import _chunksize
+
+    assert _chunksize(10_000_000, 8) <= 1000, "the chunk is unbounded again"
+    # Small inputs still get whole-ish chunks: the per-chunk overhead is not
+    # worth paying when everything fits anyway.
+    assert _chunksize(40, 8) >= 1
+    assert _chunksize(0, 8) >= 1

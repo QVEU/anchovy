@@ -114,6 +114,19 @@ def _assign_worker(payload: tuple) -> tuple:
 # --------------------------------------------------------------------------- #
 # Pipeline passes
 # --------------------------------------------------------------------------- #
+def _chunksize(n_items: int, n_workers: int) -> int:
+    """How many items a worker takes at a time.
+
+    Pool.map's own rule is ceil(n / (4 * workers)), which on a multi-million
+    read run hands each worker a chunk of hundreds of thousands of payloads --
+    every one of which carries a full read sequence, and all of which are
+    pickled before the first result comes back. Capping the chunk bounds what
+    the queue holds at any moment; the floor keeps the per-chunk overhead off
+    the critical path on small inputs, where the whole thing fits anyway.
+    """
+    return max(1, min(1000, -(-n_items // max(1, n_workers * 4))))
+
+
 def find_signature_positions(sam: pd.DataFrame, query: str,
                              config: ExtractConfig) -> pd.DataFrame:
     """Pass 1: locate the best signature match per read. (was: poolBlocks)
@@ -124,19 +137,31 @@ def find_signature_positions(sam: pd.DataFrame, query: str,
     query_upper = query.upper()
     window = config.upstream_window
 
-    search_inputs = [
+    # A GENERATOR, NOT A LIST, and imap rather than map. Pool.map materializes
+    # the whole input, then pickles all of it into the task queue before any
+    # worker starts, so the parent holds the windows twice over -- once as
+    # objects and once as bytes. imap over a generator cuts the windows as the
+    # queue drains, and the parent never holds more than a few chunks.
+    search_inputs = (
         (row.seq[max(0, row.offset - window):row.offset].upper(), query_upper)
         for row in sam.itertuples()
-    ]
+    )
 
     with Pool(config.nthreads) as pool:
         print("\n1. Computing minimum distance hit position for {} reads."
               .format(len(sam)))
-        results = pool.map(_match_worker, search_inputs)
+        results = list(pool.imap(_match_worker, search_inputs,
+                                 chunksize=_chunksize(len(sam), config.nthreads)))
 
     # minD/minPos/matchseq are intermediate columns (not part of the SAM schema),
     # named literally to match what pass 2 reads by attribute.
-    sam = sam.copy()
+    #
+    # ASSIGNED IN PLACE. This used to copy the frame first, so that the caller's
+    # frame was left untouched -- but the only caller reassigns its variable to
+    # the return value, so the original became garbage the moment this returned
+    # and the copy bought nothing. It cost a full duplicate of the frame,
+    # sequences and all, live at the same time as the original: on a PacBio run
+    # that was the single largest allocation in the stage.
     sam["minD"], sam["minPos"], sam["matchseq"] = zip(*results)
     return sam
 
@@ -183,7 +208,12 @@ def assign_barcodes(sam: pd.DataFrame, query: str, whitelist: pd.DataFrame,
               initargs=(whitelist, barcode_blocks, barcode_index,
                         config.umi_start_offset, config.umi_end_trim,
                         config.max_barcode_errors)) as pool:
-        results = pool.map(_assign_worker, payloads)
+        # imap for the same reason as pass 1, and it matters more here: a
+        # payload carries the read's full sequence, so map's up-front pickle of
+        # every one of them is a second copy of every base in the run.
+        results = list(pool.imap(_assign_worker, payloads,
+                                 chunksize=_chunksize(len(payloads),
+                                                      config.nthreads)))
 
     # Reads whose barcode exceeded the limit come back as None. They were
     # never scanned -- that is the point of bounding the search rather than

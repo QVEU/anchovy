@@ -59,6 +59,14 @@ class SamColumns:
     ORDER = [READ, FLAG, TEMPLATE, POS, MAPQ, CIGAR,
              RNEXT, PNEXT, TLEN, SEQ, QSCORE]
 
+    # What read_sam actually retains. QSCORE is the per-base quality string --
+    # the same length as SEQ, so together they are the bulk of the frame -- and
+    # nothing in the pipeline reads it. ORDER still describes the SAM line; this
+    # is the subset kept in memory. Both are needed: the reader slices a parsed
+    # line by len(KEPT), and ORDER says what it is slicing.
+    KEPT = [READ, FLAG, TEMPLATE, POS, MAPQ, CIGAR,
+            RNEXT, PNEXT, TLEN, SEQ]
+
     # Columns added downstream by the CIGAR parse and the matching stage.
     READ_LEN = "readLen"
     CLIP_READ_LEN = "clipReadLen"
