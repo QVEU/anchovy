@@ -1,4 +1,8 @@
-# anchovy
+> **This directory is the archived original**, kept as the reference the current
+> implementation was migrated against — `tests/data/golden/` is frozen from its
+> output. It is not what you run. See the [top-level README](../README.md).
+
+# anchovy (original version)
 
 ![anchovies](https://github.com/QVEU/anchovy/blob/main/assets/northern-anchovies-rw07-130.webp)
 

@@ -52,15 +52,15 @@ WHITELIST_EXPECTED_BARCODES="${WHITELIST_EXPECTED_BARCODES:-737280}"
 # called. That used to be two definitions -- this script's and the config's --
 # which disagreed the moment you pointed it at different reads.
 
-# Defaults INSIDE the repo, which suits the example and not a real run: the
-# reference, whitelist and the mapped SAM all land here, so deleting or
-# re-cloning the checkout takes them with it. Point DATA_DIR somewhere beside
-# the repo for anything you would rather not re-download and re-map.
+# Defaults INSIDE the repo, which suits the example and not a real run: this is
+# the workflow's input_dir, so the reference, the reads AND every output land
+# here, and deleting or re-cloning the checkout takes them with it. Point
+# DATA_DIR somewhere beside the repo for anything you would rather not redo.
 DATA_DIR="${DATA_DIR:-examples/eva71_sra/data}"
 THREADS="${THREADS:-4}"
 
-# Downloading only. MAX_SPOTS limits the transfer (needs fastq-dump);
-# MAX_READS trims an already-downloaded FASTQ, saving mapping time only.
+# MAX_SPOTS limits the transfer (needs fastq-dump); MAX_READS trims an
+# already-downloaded FASTQ, saving pipeline time only.
 MAX_SPOTS="${MAX_SPOTS:-}"
 MAX_READS="${MAX_READS:-}"
 
@@ -211,16 +211,25 @@ fi
 
 # --------------------------------------------------------------------------- #
 say "5/5  Optional subsample"
-MAP_INPUT="$FASTQ"
+# THE SUBSAMPLE GETS ITS OWN DIRECTORY, and that is not tidiness. input_dir is a
+# FOLDER of FASTQs and every FASTQ in it is run as a separate sample -- so a
+# subsample written beside the full file would not replace it, it would add to
+# it, and the run you asked to shorten would do both and take longer.
+INPUT_DIR="$DATA_DIR"
 if [ -n "$MAX_READS" ]; then
-    SUB="$DATA_DIR/subsample.fastq"
+    SUB_DIR="$DATA_DIR/subsample"
+    mkdir -p "$SUB_DIR"
+    SUB="$SUB_DIR/$(basename "${FASTQ%.gz}")"
     if [ -s "$SUB" ]; then
         echo "    $SUB exists, skipping."
     else
         uncat "$FASTQ" | head -n "$(( MAX_READS * 4 ))" > "$SUB" || true
         echo "    took the first $MAX_READS reads into $SUB"
     fi
-    MAP_INPUT="$SUB"
+    # Same basename as the full file, so the sample keeps its name and the two
+    # runs stay comparable; they cannot collide because the results go under
+    # their own input_dir.
+    INPUT_DIR="$SUB_DIR"
 else
     echo "    MAX_READS unset -- using all reads."
 fi
@@ -230,14 +239,15 @@ cat <<EOF
 
 Done. Set these in your config:
 
-    input_dir: "$DATA_DIR"
+    input_dir: "$INPUT_DIR"
     template:  "$REF_FA"
     reference: "$REF_FA"
     gff:       "$REF_GFF"
     chemistry: "v2"
 
 reference_name is read from the FASTA header and the whitelist is fetched by
-the workflow, so neither is a config key any more.
+the workflow, so neither is a config key any more. Outputs land in
+$INPUT_DIR/results/, so it does not matter which directory you run from.
 
 Then:
 

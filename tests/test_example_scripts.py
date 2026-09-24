@@ -121,11 +121,36 @@ def test_the_whitelist_is_fetched_and_verified():
     assert "barcodes, got" in SNAKEFILE
 
 
+FETCH = (REPO / "examples" / "eva71_sra" / "fetch.sh").read_text()
+
+
 def test_fetch_no_longer_maps():
-    fetch = (REPO / "examples" / "eva71_sra" / "fetch.sh").read_text()
-    assert "minimap2" not in fetch, (
+    assert "minimap2" not in FETCH, (
         "fetch.sh maps again; that is the workflow's job and the two disagreed "
         "about the sample name when both did it")
+
+
+def test_the_subsample_does_not_become_a_second_sample():
+    """input_dir is a FOLDER, so a trimmed copy beside the full file is a sample.
+
+    MAX_READS exists to make a run shorter. Written into the same directory it
+    would instead have the workflow run both files -- the full one included --
+    and take longer than doing nothing.
+    """
+    assert 'SUB_DIR="$DATA_DIR/subsample"' in FETCH, (
+        "the subsample is back in input_dir, where it runs as its own sample "
+        "alongside the full FASTQ")
+    assert 'INPUT_DIR="$SUB_DIR"' in FETCH, (
+        "fetch.sh must print the subsample directory as the input_dir to use, "
+        "or the subsample is written and then not used")
+
+
+def test_fetch_reports_the_input_dir_it_actually_prepared():
+    """The closing block is how a user learns what to put in their config."""
+    tail = FETCH.split("Done. Set these in your config:")[1]
+    assert 'input_dir: "$INPUT_DIR"' in tail, (
+        "fetch.sh prints DATA_DIR again; with MAX_READS set that is the "
+        "directory holding the FULL reads, so the subsample is ignored")
 
 
 # --------------------------------------------------------------------------- #
@@ -150,3 +175,42 @@ def test_report_does_not_resolve_paths_inside_r():
         assert pattern not in rule, (
             f"{pattern} is back in the report rule; it runs after "
             f"rmarkdown::render() has already changed the working directory")
+
+
+# --------------------------------------------------------------------------- #
+# A run lives beside its reads, not beside the shell
+# --------------------------------------------------------------------------- #
+# Outputs used to go to `results/` relative to the working directory. That made
+# a run's location an accident of where it was launched: the same config run
+# after a `cd` wrote a second, empty results/ and re-did the whole pipeline, and
+# results/ under the checkout went away with the checkout. Anchoring every
+# generated path to input_dir makes a run one self-contained, movable folder.
+def test_outputs_are_anchored_to_the_input_directory():
+    assert 'RESULTS = RESULTS_DIR + "/{sample}"' in SNAKEFILE, (
+        "results moved off RESULTS_DIR; outputs are cwd-relative again")
+    assert 'RESULTS_DIR = _under_input("results_dir", "results")' in SNAKEFILE
+    assert 'RESOURCES   = _under_input("resources_dir", "resources")' in SNAKEFILE
+
+
+def test_no_generated_path_is_hardcoded_relative_to_the_shell():
+    """The report rule built its own 'results/<sample>' strings and was missed."""
+    assert '"results/' not in SNAKEFILE, (
+        "a literal results/ path is back in the Snakefile; it will disagree "
+        "with results_dir and write outside the run directory")
+    assert 'f"results/' not in SNAKEFILE
+
+
+def test_the_report_template_is_found_from_any_working_directory():
+    """It ships with the code, so it is resolved against the Snakefile."""
+    assert "workflow.basedir" in SNAKEFILE, (
+        "report_rmd defaults to a cwd-relative path again; running the "
+        "Snakefile by full path from outside the checkout then fails on the "
+        "last rule, after the whole pipeline has run")
+
+
+def test_the_resume_path_still_has_somewhere_to_write():
+    """`samples` + `cells_dir` has no input_dir to anchor to."""
+    src = SNAKEFILE.split("def _under_input")[1].split("\n\n")[0]
+    assert "if INPUT_DIR else name" in src, (
+        "without the fallback, a cells_dir resume config raises on "
+        "os.path.join(None, ...) instead of writing to ./results")

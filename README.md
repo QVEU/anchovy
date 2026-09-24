@@ -3,30 +3,47 @@
 ![anchovies](assets/northern-anchovies-rw07-130.webp)
 anchovy is an analysis pipeline designed for use with barcoded single-cell sequencing data to reconstruct viral haplotypes from individual cells.
 
-You provide sequencing reads that have already been mapped to a reference genome (in the form of SAM or BAM), anchovy:
-- sorts the reads by cell
-- builds a consensus genome for each cell, and produces tables describing the mutations and genotypes observed
-- how the different genotypes are related.
+It is the genotype-reconstruction half of **SEARCHLIGHT** (scRNAseq-Enabled
+Acquisition of mRNA and Consensus Haplotypes Linking Individual Genotypes and
+Host Transcriptomes), the method described in [Dábilla & Dolan
+(2024)](https://doi.org/10.1126/sciadv.ado1693). The wet-lab side is a 10x
+Genomics 5′ run with virus-specific reverse-transcription primers tiled across
+the viral genome, sequenced long-read; anchovy takes those reads and returns one
+consensus genome per cell, plus the genotype networks built from them. Host
+transcriptomes come from the matched short-read libraries through Cell Ranger
+and Seurat, which are outside this repository.
 
-The entire thing can be run as one automated pipeline (recommended), or run each step by hand.
+You provide a folder of sequencing reads (FASTQ, plain or gzipped) and a
+reference genome. anchovy:
+- maps the reads and sorts them by cell
+- builds a consensus genome for each cell, and produces tables describing the
+  mutations and genotypes observed
+- describes how the different genotypes are related.
+
+The entire thing can be run as one automated pipeline (recommended), or run each
+step by hand.
 
 ## What the pipeline does, step by step
 
-1. **extract** — sorts the reads by the cell barcode they carry
-2. **fasta** — writes out the reads for each cell into its own file
-3. **map** — lines up each cell's reads against the reference genome
-4. **cell consensus** — builds one consensus genome per cell from its reads
-5. **merge** — collects all the per-cell genomes into one file
-6. **consensus** — narrows to the region you care about and lists each cell's mutations
-7. **annotate** — works out which mutations change the protein, and builds tables
+1. **map** — lines up the reads against the reference genome
+2. **extract** — sorts the reads by the cell barcode they carry
+3. **fasta** — writes out the reads for each cell into its own file
+4. **map cell** — lines up each cell's reads against the reference
+5. **cell consensus** — builds one consensus genome per cell from its reads
+6. **merge** — collects all the per-cell genomes into one file
+7. **consensus** — narrows to the region you care about and lists each cell's mutations
+8. **annotate** — works out which mutations change the protein, and builds tables
    showing how genotypes relate. Given a GFF3 file describing your genome's
    regions, it can also annotate non-coding parts and number amino acids
    correctly per region (see below)
+9. **frequencies** — allele frequencies over *every* mapped cell, with a
+   per-position denominator, rather than only the cells that passed filtering
+10. **report** — renders it all as one HTML page you can read
 
-The final results are spreadsheet-style files (CSV) you can open in Excel or load
-into other analysis tools. Two of them describe the **genotype network** — how
-the different viral genotypes relate to one another — and can be opened directly
-in Cytoscape to view and explore the network visually (see below).
+The tables are spreadsheet-style files (CSV) you can open in Excel or load into
+other analysis tools. Two of them describe the **genotype network** — how the
+different viral genotypes relate to one another — and can be opened directly in
+Cytoscape to view and explore the network visually (see below).
 
 ## Setting it up
 
@@ -87,13 +104,21 @@ way that lets you edit it.)
 
 You control a run through a **settings file** — a plain text file that lists
 where your data is and a few options. You never need to edit anchovy's code; you
-just point it at a settings file. An example, `workflow/config.yaml`, is included.
+just point it at a settings file.
 
-To run everything:
+`workflow/config.yaml` is included and is **ready to run as-is**. It points at a
+small bundled dataset, so this is the quickest way to check your installation
+works — it finishes in seconds and exercises every stage:
 
 ```bash
 snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 8
 ```
+
+You should get six cells, two mutations (one in the polyprotein, one in the
+5'UTR), a genotype network and a rendered report, in
+`tests/data/fastqs/results/example/`. Open `example_report.html` and you have
+seen everything the pipeline produces. Delete that directory to start over;
+`tests/make_fastq_fixtures.py` documents what the bundled data contains.
 
 `--cores 8` lets it use 8 processor cores to work on multiple cells at once — set
 this to however many your machine has.
@@ -112,10 +137,11 @@ steps that actually need it — not starting over from scratch.
 
 ## Pointing it at your own data
 
-Put your FASTQs in a folder, copy the example settings file, and point it at
-them. Every FASTQ in the folder is run through the whole pipeline — mapping,
-barcode extraction, per-cell consensus, genotypes, networks and a rendered
-report — with its outputs named after it, in `results/<name>/`.
+Put your FASTQs in a folder, copy the example settings file **into that same
+folder**, and point it at them. Every FASTQ in the folder is run through the
+whole pipeline — mapping, barcode extraction, per-cell consensus, genotypes,
+networks and a rendered report — with its outputs named after it, in
+`results/<name>/` *inside that folder*.
 
 ```yaml
 input_dir: "path/to/fastqs"         # a FOLDER of reads; one run covers all of them
@@ -130,8 +156,100 @@ the reference name is read from the FASTA header, and the barcode whitelist is
 downloaded for you — matched to `chemistry` and checked against its expected
 barcode count before anything uses it.
 
-Optional settings — analysis window, depth and breadth filters, allele
-frequencies — are documented in `workflow/config.yaml`.
+### Every other setting
+
+`workflow/config_cluster.yaml` is the fully commented reference — it sets most
+of these and says why. The complete list:
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Input and output** | | |
+| `input_dir` | — | The folder of FASTQs. Required, unless resuming with `samples` + `cells_dir` |
+| `samples` | from the FASTQ names | Name the samples explicitly. Only for the `cells_dir` resume path, where there are no FASTQs to take a name from |
+| `cells_dir` | `<results>/cells` | Resume from per-cell FASTAs you already have |
+| `results_dir` | `<input_dir>/results` | Move the outputs |
+| `resources_dir` | `<input_dir>/resources` | Move the whitelist cache |
+| **Reference** | | |
+| `template` | — | Reference FASTA. Required |
+| `reference` | unset | Call genotypes against the genome rather than the consensus across cells. Set it to the same file as `template` |
+| `reference_name` | from the FASTA header | Override the contig name |
+| `gff` | unset | Region model (see below). Implies `whole_reference` |
+| `whole_reference` | `false` | Keep genome coordinates without a region model |
+| `minimap_preset` | `map-hifi` | `map-ont` for Nanopore |
+| `map_threads` | `8` | Threads for the initial mapping |
+| **Barcodes** | | |
+| `chemistry` | `v3` | `v2` or `v3`. Sets the read signature *and* the whitelist together |
+| `whitelist` | downloaded | A local or run-specific barcode list |
+| `whitelist_url` | 10X's | Fetch the whitelist from your own mirror |
+| `whitelist_barcodes` | per chemistry | Override the barcode count a download is checked against |
+| `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
+| `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor |
+| `max_distance` | `42` | How far the *signature* match may be before a read is dropped |
+| `extract_threads` | `16` | Worker pool inside `extract`. Not `--cores` |
+| `min_reads` | `5` | Reads a barcode needs to become a cell. This decides the size of the run |
+| **Calling and filtering** | | |
+| `window` | unset | `cds` takes the analysis window from the GFF |
+| `orf_start`, `orf_end` | — | The window explicitly, as 0-based slice bounds |
+| `cons_min_depth` | `5` | Reads a position needs before a base is called |
+| `cons_threshold` | `0.5` | Consensus threshold. Raising it emits *more* ambiguity codes, not fewer |
+| `min_breadth` | unset | Fraction of the window a cell must have called. `1.0` means a complete coding sequence |
+| `min_depth_called` | unset | Mean depth at the positions actually called |
+| `depth_min` | `10` | Legacy overall filter. Superseded by `min_breadth` — see the note in `config_cluster.yaml` |
+| `keep_ambiguous` | `false` | Keep IUPAC codes as genotype tokens |
+| `max_mutations_per_cell` | unset | Drop cells carrying more mutations than this |
+| **Output** | | |
+| `allele_frequencies` | `false` | Also write the two allele-frequency tables |
+| `min_alt_reads`, `min_alt_freq` | — | Thresholds for the per-cell frequency table |
+| `min_cells_per_allele` | — | Threshold for the population frequency table |
+| `self_edges` | `false` | Keep self-loops in the epistatic network |
+| `report` | `true` | Render the HTML report |
+| `report_rmd` | the bundled one | Use your own report template |
+
+### Where everything goes
+
+A run is a **self-contained folder**. You start with reads and a settings file;
+everything the pipeline makes is written underneath, so the same command gives
+the same result from any shell, and the whole run can be archived or handed to a
+colleague as one directory:
+
+```
+my_experiment/                     <- input_dir
+    config.yaml                    <- the settings file, kept with the data
+    sample_A.fastq.gz              <- your reads; never modified
+    sample_B.fastq.gz              <- add a second sample by dropping it in
+    resources/                     <- the 10X whitelist, downloaded once
+    results/
+        sample_A/
+            sample_A.sam
+            cells/  work/          <- per-cell intermediates, safe to delete
+            sample_A_anchovy.csv
+            sample_A_allConsensus.fasta
+            sample_A_filtConsensus.csv
+            sample_A_annot_v3.csv
+            sample_A_genotypeNetwork.csv
+            sample_A_genotypeNodes.csv
+            sample_A_epistaticNetwork.csv
+            sample_A_alleleFrequencies.csv
+            sample_A_cellAlleleFreq.csv
+            sample_A_report.html   <- start here
+        sample_B/
+```
+
+Nothing is ever written back over your reads. The reference, GFF and any
+whitelist you supply can live anywhere — give their full paths in the settings
+file — and the checkout itself stays clean, so you can delete and re-clone
+anchovy without touching a run.
+
+Two settings move things if you need them to:
+
+| Setting | Default | When to change it |
+|---|---|---|
+| `results_dir` | `<input_dir>/results` | Reads are on a read-only mount, or you want outputs on a faster disk |
+| `resources_dir` | `<input_dir>/resources` | Share one whitelist cache across runs — the v3 list is ~100 MB and identical every time |
+
+Both take a full path. Snakemake also writes its own bookkeeping to
+`.snakemake/` in whatever directory you launch from; that one is Snakemake's,
+not anchovy's, and is safe to delete between runs.
 
 Plan the run first, then do it:
 
@@ -181,7 +299,9 @@ gff: "path/to/regions.gff3"
 
 #### Writing your own
 
-Here is an example GFF3 for dengue virus 1, which can be found at: `tests/data/mapping/regions.gff3`. Copy it and edit for your own run. 
+Here is an example GFF3 for dengue virus 1. Copy it and edit it for your own
+run — or start from `tests/data/mapping/regions.gff3`, a smaller complete file
+the test suite uses.
 
 ```
 ##gff-version 3
@@ -232,9 +352,6 @@ by three, into codons. If it doesn't, anchovy warns you and names
 the region, that almost always means the coordinates are off. The
 warning doesn't stop the run, but you should double check the coordinates are correct, genomic nucleotide positions. 
 
-If you'd rather start from something known to work, `tests/data/mapping/regions.gff3`
-in this repository is a small, complete file used by the test suite.
-
 With that in place you get an extra results file,
 `{sample}_regionAnnotations.csv`, with one row per mutation **per region it falls
 in**. So a mutation inside NS5, which also sits inside the polyprotein, gets two
@@ -277,11 +394,16 @@ If you'd rather run steps individually instead of the full pipeline, each is its
 own command:
 
 ```bash
-anchovy extract   reads.sam whitelist.txt -o out_anchovy.csv
-anchovy fasta     out_anchovy.csv cells/
-anchovy consensus allConsensus.fasta 96 10272 --out-prefix results/sample
-anchovy annotate  filtConsensus.csv reference.txt results/sample
+anchovy extract     reads.sam whitelist.txt -o out_anchovy.csv
+anchovy fasta       out_anchovy.csv cells/
+anchovy consensus   allConsensus.fasta 96 10272 --out-prefix results/sample
+anchovy annotate    filtConsensus.csv reference.txt results/sample
+anchovy frequencies allConsensus.fasta --reference ref.fasta --out-prefix results/sample
 ```
+
+`96` and `10272` are the analysis window — the first and last positions to call
+variants over, as 0-based slice bounds. The mapping steps are plain `minimap2`
+and are not anchovy subcommands.
 
 To annotate by genome region (see above), the last two steps become:
 
@@ -297,11 +419,19 @@ Add `--help` to any command (e.g. `anchovy extract --help`) to see its options.
 Two of anchovy's output files describe how the viral genotypes relate to each
 other as a network:
 
-- `<sample>_genotypeNetwork.csv` — all the relationships between genotypes
-- `<sample>_epistaticNetwork.csv` — just the "single-step" links (genotypes that
-  differ by exactly one mutation), plus links back to the reference
+- `<sample>_epistaticNetwork.csv` — **"single-step" links**: pairs of genotypes
+  differing by exactly one mutation, plus links back to the reference
+- `<sample>_genotypeNetwork.csv` — **shared-mutation links**: every pair of
+  genotypes with at least one mutation in common, however far apart they are
 - `<sample>_genotypeNodes.csv` — one row per genotype, describing the genotypes
   themselves rather than the links between them
+
+**Which one you want is probably `_epistaticNetwork.csv`, despite the names.**
+The networks in Dábilla & Dolan (2024) — where "edges represent single-nucleotide
+substitutions linking individual genotypes" — are the *single-step* network.
+`_genotypeNetwork.csv` joins any two genotypes sharing a mutation, so it is much
+denser and its edges do not mean one mutational step. The file names are kept
+for compatibility with the original R output.
 
 You can explore these visually in **Cytoscape**, a free tool for viewing and
 analyzing networks that's widely used in biology. Download it from
@@ -334,17 +464,32 @@ something you can interpret. Each row describes one genotype:
 | Column | What it is |
 |--------|------------|
 | `genotype` | The genotype's identifier — this is what Cytoscape matches on |
-| `genotypeName` | The amino acid change(s), like `R5S` or `D3V_R5S`. If you annotated with a GFF3, non-coding changes appear here too, like `5UTR:A121C` |
+| `genotypeID` | The amino acid change(s), like `R5S` or `D3V_R5S`. If you annotated with a GFF3, non-coding changes appear here too, like `5UTR:A121C` |
 | `nMutations` | How many mutations the genotype carries |
 | `nCells` | How many cells carry it |
-| `genoFreq`, `haploFreq` | What fraction of cells that is |
+| `genoFreq` | What fraction of cells that is |
+| `idFreq` | What fraction of cells carry *any* genotype with this `genotypeID` |
+
+**`genotype` and `genotypeID` are not the same thing, and neither are their
+frequencies.** `genotype` is the nucleotide haplotype and is what a node *is* —
+one node per distinct nucleotide sequence. `genotypeID` is its translation, and
+the mapping is many-to-one: a synonymous change is written `X_n_X`, so several
+distinct genotypes can share one ID. Where that happens, `genoFreq` counts the
+cells carrying that one nucleotide genotype and `idFreq` counts every cell whose
+genotype translates the same way — for three synonymous genotypes in one cell
+each out of four, `genoFreq` is 0.25 and `idFreq` is 0.75.
+
+**Size nodes on `genoFreq` or `nCells`, not `idFreq`**, since a node is one
+nucleotide genotype; `idFreq` would size each member of a synonymous group by
+the whole group.
 
 Once it's imported, the useful moves in Cytoscape's **Style** panel are:
 
-- Set node **Label** to `genotypeName`, so each point is named by the amino acid
-  change rather than an internal identifier.
+- Set node **Label** to `genotypeID`, so each point is named by the amino acid
+  change rather than by its nucleotide haplotype.
 - Map node **Size** to `nCells` or `genoFreq` (continuous mapping), so common
-  genotypes are visibly bigger.
+  genotypes are visibly bigger. The two are the same quantity, counted and as a
+  fraction.
 - Map node **Fill Color** to `nMutations` (continuous mapping), so how far a
   genotype has drifted from the reference reads at a glance.
 
@@ -369,20 +514,40 @@ pytest tests/test_annotate.py -v   # run the tests for one step
 Test data lives in `tests/data/`. The `tests/make_*_fixtures.py` scripts
 regenerate it if ever needed.
 
+`anchovy_v3/` is the archived original this version was migrated from. It is
+kept because `tests/data/golden/` is frozen from its output, so the port can be
+checked against it. Nothing in the pipeline runs it.
+
 ## Good to know
 
 - The mapping/consensus step uses **sam2consensus**, a small existing tool by
   Edgardo Ortiz
   ([original here](https://github.com/edgardomortiz/sam2consensus)). A copy,
   updated to run on modern Python, is included in `workflow/scripts/`.
-- The original version of this analysis also made plots. This version produces the
-  data tables only; you can make figures from those in your tool of choice.
+- Every run ends with a rendered HTML report (`{sample}_report.html`) built from
+  `visualization/anchovy_report.rmd`. Set `report: false` in your settings file
+  to skip it — that is also what removes R from the requirements for a complete
+  run. The CSVs are written either way, so you can make your own figures from
+  them instead.
 - anchovy currently assumes you're mapping against a single reference sequence.
   A segmented genome (several reference pieces) would need a small extension.
 
 ## Citation
 
 N. Dábilla, P. T. Dolan, Structure and dynamics of enterovirus genotype networks. **Sci Adv** 10, eado1693 (2024).
+
+The data behind that paper:
+
+| | |
+|---|---|
+| Raw sequencing | GEO [GSE260709](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE260709), SRA [PRJNA1082267](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1082267) |
+| Processed data and analysis code | Dryad [10.5061/dryad.6hdr7sr76](https://doi.org/10.5061/dryad.6hdr7sr76) |
+
+anchovy also builds on two other tools, both of which should be cited if you use
+it: **minimap2** (H. Li, *Bioinformatics* 34, 3094–3100, 2018) for mapping, and
+**sam2consensus** (E. M. Ortiz,
+[github.com/edgardomortiz/sam2consensus](https://github.com/edgardomortiz/sam2consensus))
+for the per-cell consensus.
   
 
 ## License

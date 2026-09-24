@@ -49,23 +49,23 @@
   "genotypes": {
     "": {
       "name": "reference",
-      "haploFreq": 0.2857142857142857
+      "genoFreq": 0.2857142857142857
     },
     "13A": {
       "name": "R5S",
-      "haploFreq": 0.2857142857142857
+      "genoFreq": 0.2857142857142857
     },
     "13A_8T": {
       "name": "R5S_D3V",
-      "haploFreq": 0.14285714285714285
+      "genoFreq": 0.14285714285714285
     },
     "6G": {
       "name": "K2K",
-      "haploFreq": 0.14285714285714285
+      "genoFreq": 0.14285714285714285
     },
     "19T": {
       "name": "H7Y",
-      "haploFreq": 0.14285714285714285
+      "genoFreq": 0.14285714285714285
     }
   },
   "network": {

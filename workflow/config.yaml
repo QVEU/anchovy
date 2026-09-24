@@ -1,19 +1,30 @@
 # workflow/config.yaml
 #
-# Run-specific settings for the anchovy Snakemake workflow. Edit this file (not
-# the Snakefile) to point the pipeline at different data or tweak parameters --
-# the workflow-level equivalent of the package's config.py.
+# Run-specific settings for the anchovy Snakemake workflow. Edit this file, not
+# the Snakefile, to point the pipeline at different data. Every setting the
+# workflow accepts is listed in README.md; this file explains the ones whose
+# wrong value does not produce an error.
 #
-# Currently pointed at the test fixtures for development against known data.
+# AS SHIPPED THIS IS A RUNNABLE EXAMPLE, not a template to fill in:
+#
+#   snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 4
+#
+# runs the whole pipeline on the bundled fixture in seconds, which is the
+# quickest way to confirm an install works. Outputs go to
+# tests/data/fastqs/results/example/ and are gitignored; delete that directory
+# to start over. tests/make_fastq_fixtures.py says what the fixture contains.
 
 # --- input: a folder of FASTQs ----------------------------------------------- #
-# THIS IS THE WHOLE INTERFACE. Point it at a directory and every FASTQ in it
-# (.fastq/.fq, plain or .gz) is run through the entire pipeline -- map, extract,
-# per-cell consensus, genotypes, networks, report -- with outputs named after
-# the FASTQ, in results/<name>/. Adding a sample means dropping a file in.
+# THIS IS THE WHOLE INTERFACE. Every FASTQ in the directory (.fastq/.fq, plain
+# or .gz) is run through the entire pipeline, with outputs named after it, so
+# adding a sample means dropping a file in.
 #
-# The directory is never written to: the SAM and everything after it go under
-# results/.
+# It is also where the run LIVES: results/ and resources/ are created inside it
+# and your reads are never written to, which makes a run one self-contained
+# directory and its outputs independent of where you launched from. README.md
+# has the full layout, and `results_dir` / `resources_dir` move either half out
+# -- worth setting resources_dir when several runs can share one whitelist
+# cache, since the v3 list is ~100 MB and byte-identical every time.
 input_dir: "tests/data/fastqs"
 
 # --- 10X chemistry: one key, because the halves must agree ------------------- #
@@ -29,51 +40,107 @@ input_dir: "tests/data/fastqs"
 #   v2  16 nt barcode + 10 nt UMI, 737K-august-2016.txt
 chemistry: "v3"
 
-# The whitelist is downloaded once into resources/ and shared by every sample,
-# and its barcode count is verified before anything is allowed to use it.
+# BOTH CHEMISTRIES DOWNLOAD AUTOMATICALLY. The whitelist is fetched once into
+# resources_dir, shared by every sample, and its barcode count is verified
+# before anything is allowed to use it -- so a mirror that quietly serves the
+# wrong file fails the run rather than producing wrong cells. Leave `whitelist`
+# unset and there is nothing to do.
 #
-# v2 downloads automatically. v3 does NOT: 10X does not publish that file
-# anywhere this could be verified as fetchable, and a URL that 404s at run time
-# is worse than asking. For v3, set one of these:
+# Override it when you have a run-specific barcode list -- the usual case being
+# the cell barcodes called from your own Illumina run by Cell Ranger and Seurat,
+# which restricts the analysis to cells you have already validated:
 #
-#   whitelist: "path/to/3M-february-2018.txt"   # Cell Ranger ships it, gzipped,
-#                 # at cellranger-x.y.z/lib/python/cellranger/barcodes/
-#   whitelist_url: "https://your-mirror/3M-february-2018.txt.gz"
+#   whitelist: "path/to/filtered_barcodes.txt"  # one 16 nt barcode per line
 #
-# Either key also overrides the v2 default, for a local copy or a mirror.
-whitelist: "tests/data/whitelist.txt"
+# You still set `chemistry`, because it also sets the read signature; the
+# barcode is 16 nt in both v2 and v3, so a custom list does not tell the
+# workflow which chemistry produced it. A list is checked on load for the
+# things that silently produce nonsense -- the "-1" GEM-well suffix Cell Ranger
+# writes, mixed widths, non-ACGTN characters -- and the error names the fix.
+#
+# `whitelist_url` points the download at your own mirror instead.
+#
+# The fixture's six barcodes, sitting beside the reads -- which is also where a
+# real run-specific list belongs, since it comes from the same Illumina run.
+# Omit this key entirely and the chemistry-matched 10X list downloads instead.
+whitelist: "tests/data/fastqs/whitelist.txt"
 
 # `signature` overrides the one derived from `chemistry`, for an assay whose
 # handles differ from 10X's. The N count still has to match the whitelist.
 
-# Reference/template FASTA that minimap2 maps each per-cell FASTA against.
-# (This was the $3 argument to AnchovyJob.sh.)
-template: "tests/data/template.fasta"
+# Reference/template FASTA. minimap2 maps the raw reads against it, and then
+# each per-cell FASTA.
+#
+# The fixture's 600 nt template, whose region model is the gff below. Note this
+# is NOT tests/data/template.fasta -- that one belongs to the barcode-extraction
+# fixture and nothing aligns to it.
+template: "tests/data/mapping/template.fasta"
 
-# --- Region-aware annotation (optional) ------------------------------------- #
-# Uncomment `gff` to annotate mutations against a genome region model instead of
-# assuming a single ORF read in frame 1 from its first base. A GFF3 gets you:
+# PacBio CCS. Use map-ont for Nanopore; getting this wrong costs alignment
+# sensitivity rather than failing.
+minimap_preset: "map-hifi"
+
+# Call genotypes against the GENOME, not against the consensus across cells.
+# Must be the same file as `template`. Unset, anything the population shares is
+# absorbed into the "reference" and vanishes -- and at a variant column that
+# splits evenly the tie is broken alphabetically, so the reference base comes
+# out arbitrary and the cells matching the template are reported as the mutants.
+reference: "tests/data/mapping/template.fasta"
+
+# --- Region-aware annotation ------------------------------------------------- #
+# A GFF3 annotates mutations against a genome region model instead of assuming
+# one ORF read in frame 1 from base 1, which gets UTRs and residue numbering
+# wrong on a real viral genome. README.md's "Annotating by genome region"
+# explains the format and what it adds; `whole_reference: true` gets genome
+# coordinates without one.
 #
-#   * non-coding regions annotated at all (UTRs, stem-loops), instead of silently
-#     translated as though they were coding;
-#   * frame-correct residue numbers, taken from the feature's own start and phase
-#     rather than from position 1 of the reference;
-#   * one row per (mutation x containing region), so a variant inside both a
-#     polyprotein and a mature protein is numbered in BOTH frames of reference;
-#   * both strands handled, driven by the GFF3's strand and phase columns.
-#
-# It adds {sample}_regionAnnotations.csv to the outputs. The existing
-# {sample}_annot_v3.csv is still written, with its columns filled in from each
-# mutation's primary (first-listed containing) region, so nothing downstream
-# needs to change.
-#
-# Setting `gff` also switches the consensus stage into whole-reference mode,
+# Setting it also switches the consensus stage into whole-reference mode,
 # because region lookup needs genome coordinates and the default mode renumbers
-# positions relative to the ORF. In that mode orf_start/orf_end stop being a cut
-# and become an optional analysis window over the covered core.
+# positions relative to the ORF.
 #
-#   gff: "path/to/regions.gff3"
+# The fixture's region model: 5'UTR 1-149, CDS 150-500 (+ strand, phase 0),
+# 3'UTR 501-600. The CDS deliberately does not start at position 1, so a run
+# exercises frame-correct residue numbering rather than assuming frame 1.
+gff: "tests/data/mapping/regions.gff3"
+
+# --- the analysis window and the cell filter --------------------------------- #
+# Setting `gff` above puts the consensus stage in whole-reference mode, where
+# these bounds stop being a cut and become the columns variants are called over.
+# Positions stay genome coordinates either way.
 #
-# To keep genome coordinates WITHOUT a region model, set this instead:
+# `window: cds` takes the window from the GFF's CDS, which is what a real run
+# wants -- see workflow/config_cluster.yaml. Here it is given explicitly for two
+# reasons: the fixture's reads cover only template [50, 550), so the window has
+# to sit inside that, and one of the two planted variants is in the 5'UTR, which
+# a CDS window would exclude. Keeping both in view is the point of the example:
+# it produces a coding call AND a non-coding one.
+orf_start: 60
+orf_end: 540
+
+# THE CELL FILTER: a cell counts if the coding sequence is complete at depth.
+# min_breadth 1.0 says every position in the window must be called;
+# cons_min_depth says how many reads that takes. This pair is the published
+# rule -- Dábilla & Dolan (2024) kept cells with the full coding sequence at
+# 10-fold depth per site -- and it replaced depth_min, which conflated depth
+# with breadth. workflow/config_cluster.yaml has the numbers behind that.
 #
-#   whole_reference: true
+# 5 here is the package default, kept because the fixture has 8 reads per cell.
+# A real run reproducing the paper wants 10.
+min_breadth: 1.0
+cons_min_depth: 5
+cons_threshold: 0.5
+depth_min: 0
+
+# Reads a barcode needs before it becomes a cell. The fixture gives each of its
+# six cells 8, so this keeps all of them and would drop stray mis-assignments.
+min_reads: 8
+
+# The fixture's barcodes are exact whitelist entries, so nothing needs correcting
+# -- but leaving this unset means any read is assigned to its NEAREST entry with
+# no floor, which on real data turns unreadable barcodes into plausible cells.
+max_barcode_errors: 2
+
+# The second analysis, over every mapped cell rather than the filtered subset:
+# {reads carrying an allele} / {reads at that position}, with a per-position
+# denominator. Adds _alleleFrequencies.csv and _cellAlleleFreq.csv.
+allele_frequencies: true

@@ -59,7 +59,7 @@ def test_reference_is_a_node(annot_fixture, tmp_path):
                  str(tmp_path / "x"), network=True)
     ref = result["nodes"].set_index("genotype").loc["reference"]
     # It has no substitutions, so it gets a label saying so rather than a blank.
-    assert ref["genotypeName"] == "reference"
+    assert ref["genotypeID"] == "reference"
     assert ref["nMutations"] == 0
 
 
@@ -84,8 +84,8 @@ def test_node_attributes_are_the_ones_worth_styling_by(annot_fixture, tmp_path):
 
     # Labels are amino-acid level, not bare nucleotide tokens. This is what
     # makes a rendered network readable.
-    assert nodes.loc["13A", "genotypeName"] == "R5S"
-    assert nodes.loc["13A_8T", "genotypeName"] == "D3V_R5S"
+    assert nodes.loc["13A", "genotypeID"] == "R5S"
+    assert nodes.loc["13A_8T", "genotypeID"] == "D3V_R5S"
 
     assert nodes.loc["13A", "nMutations"] == 1
     assert nodes.loc["13A_8T", "nMutations"] == 2
@@ -139,7 +139,47 @@ def test_frequencies_come_through(annot_fixture, tmp_path):
     nodes = result["nodes"].set_index("genotype")
     # 7 cells in the fixture; 13A is carried by 2 of them.
     assert nodes.loc["13A", "genoFreq"] == pytest.approx(2 / 7)
-    assert nodes.loc["13A", "haploFreq"] == pytest.approx(2 / 7)
+    # Nothing in this fixture is synonymous-degenerate, so the two agree here.
+    assert nodes.loc["13A", "idFreq"] == pytest.approx(2 / 7)
+    assert "haploFreq" not in nodes.columns
+
+
+def test_the_node_frequency_counts_cells_carrying_THAT_genotype(tmp_path):
+    """Synonymous variation is where the old two columns disagreed.
+
+    genoFreq used to group on the amino-acid ID, which renders a silent change as
+    X_n_X -- so three cells each carrying a different third-base change in one
+    codon became three genotypes sharing the name G4G, and each of their rows
+    got the whole group's frequency. nCells said 1, genoFreq said 3/4, on the
+    same row. Cytoscape sizes nodes on it.
+    """
+    reference = "ATGAAACCCGGGTTTTAA"          # codon 4 = GGG (Gly), 1-based 10-12
+    cells = {
+        "cellA": ("", reference),
+        "cellB": ("12A", reference[:11] + "A" + reference[12:]),   # GGG->GGA
+        "cellC": ("12C", reference[:11] + "C" + reference[12:]),   # GGG->GGC
+        "cellD": ("12T", reference[:11] + "T" + reference[12:]),   # GGG->GGT
+    }
+    csv = tmp_path / "filtConsensus.csv"
+    pd.DataFrame({"CBC_ID": list(cells),
+                  "genotype": [g for g, _ in cells.values()],
+                  "sequence": [s for _, s in cells.values()]}).to_csv(csv, index=False)
+    (tmp_path / "reference.txt").write_text(reference + "\n")
+
+    nodes = run(str(csv), str(tmp_path / "reference.txt"),
+                str(tmp_path / "o"), network=True)["nodes"].set_index("genotype")
+
+    # The premise: all three really do collapse onto one name.
+    assert set(nodes.loc[["12A", "12C", "12T"], "genotypeID"]) == {"G4G"}
+    for genotype in ("12A", "12C", "12T"):
+        assert nodes.loc[genotype, "nCells"] == 1
+        assert nodes.loc[genotype, "genoFreq"] == pytest.approx(1 / 4), (
+            "the node frequency is grouped on genotypeID again, so every "
+            "synonymous genotype is sized by its whole group")
+        # idFreq is the amino-acid view and SHOULD be the group's frequency.
+        # It exists so the two questions have two columns instead of one
+        # column that silently answered the wrong one.
+        assert nodes.loc[genotype, "idFreq"] == pytest.approx(3 / 4)
 
 
 # --------------------------------------------------------------------------- #
@@ -192,12 +232,12 @@ def test_region_aware_names_reach_the_nodes(tmp_path):
     result = run(str(cons), str(ref_file), str(tmp_path / "out"),
                  network=True, gff=str(gff))
     nodes = result["nodes"].set_index("genotype")
-    assert nodes.loc["10G", "genotypeName"] == "5UTR:C10G"
+    assert nodes.loc["10G", "genotypeID"] == "5UTR:C10G"
 
 
 def test_empty_input_gives_an_empty_table():
-    empty = pd.DataFrame(columns=["genotype", "genotypeName", "CBC_ID",
-                                  "genoFreq", "haploFreq"])
+    empty = pd.DataFrame(columns=["genotype", "genotypeID", "CBC_ID",
+                                  "genoFreq", "idFreq"])
     out = genotype_nodes(empty)
     assert out.empty and list(out.columns) == NODE_COLUMNS
 
@@ -237,7 +277,7 @@ def test_reference_node_exists_when_no_cell_is_wild_type(tmp_path):
     assert nodes.loc["reference", "nCells"] == 0
     assert nodes.loc["reference", "genoFreq"] == 0.0
     assert nodes.loc["reference", "nMutations"] == 0
-    assert nodes.loc["reference", "genotypeName"] == "reference"
+    assert nodes.loc["reference", "genotypeID"] == "reference"
 
 
 def test_every_edge_endpoint_has_a_node_row(tmp_path):
@@ -339,3 +379,39 @@ def test_self_edges_true_keeps_every_loop(tmp_path):
     ep, _ = _network(tmp_path, ISOLATED_CASE, self_edges=True)
     loops = set(ep[ep["source"] == ep["target"]]["source"].astype(str))
     assert {"5T", "5T_9A", "100G_200C"} <= loops
+
+
+# --------------------------------------------------------------------------- #
+# The two networks are not the same network, and the names suggest otherwise
+# --------------------------------------------------------------------------- #
+# The published figures ("edges represent single-nucleotide substitutions
+# linking individual genotypes") are the SINGLE-STEP network, which this code
+# writes to _epistaticNetwork.csv. _genotypeNetwork.csv joins any two genotypes
+# sharing a mutation, so it is denser and its edges mean something else. Anyone
+# reproducing a figure will reach for the file called "genotypeNetwork" first,
+# so the distinction is pinned here rather than left to the names.
+def test_the_single_step_network_is_a_subset_of_the_overlap_network():
+    import pandas as pd
+    from anchovy.annotate import hap_network_gen
+
+    # Two genotypes one step apart, and a third sharing a mutation with the
+    # first but two steps from it -- the pair that separates the two networks.
+    rows = []
+    for genotype, muts in [("A", ["A"]), ("A_B", ["A", "B"]),
+                           ("A_B_C", ["A", "B", "C"])]:
+        for m in muts:
+            rows.append({"genotype": genotype, "mutants": m,
+                         "count": 1, "freq": 1.0})
+    single, overlap = hap_network_gen(pd.DataFrame(rows))
+
+    def pairs(df):
+        return {frozenset((s, t)) for s, t in zip(df["source"], df["target"])
+                if s != t and "reference" not in (s, t)}
+
+    # A and A_B_C share mutation A, so the overlap network links them; they are
+    # two mutations apart, so the single-step network must not.
+    assert frozenset(("A", "A_B_C")) in pairs(overlap)
+    assert frozenset(("A", "A_B_C")) not in pairs(single)
+    assert pairs(single) < pairs(overlap), (
+        "the single-step network is no longer a strict subset of the overlap "
+        "network; one of the two edge criteria has changed")

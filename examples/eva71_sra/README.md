@@ -45,13 +45,15 @@ Using the wrong chemistry doesn't produce an error. The signature search still
 runs, it just matches badly, and you end up with fewer cells than you should
 have. You can see it in the extract stage's own output:
 
+Run the workflow as far as the extract stage and read its output:
+
 ```bash
-anchovy extract examples/eva71_sra/data/SRR28178313.sam \
-    /path/to/737K-august-2016.txt -o /tmp/check.csv
+snakemake -s workflow/Snakefile --configfile examples/eva71_sra/config.yaml \
+    --cores 8 examples/eva71_sra/data/results/SRR28178313/SRR28178313_anchovy.csv
 
 python -c "
 import pandas as pd
-d = pd.read_csv('/tmp/check.csv')
+d = pd.read_csv('examples/eva71_sra/data/results/SRR28178313/SRR28178313_anchovy.csv')
 print(f'reads assigned : {len(d)}')
 print(f'distinct cells : {d.CBC.nunique()}')
 print(d.minD.describe())
@@ -95,14 +97,12 @@ snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --core
 The `-n` first is a dry run: it lists the jobs and the samples found, without
 doing any work.
 
-Run it from the repo root so `results/` lands there.
-
 ### Keep real-run data outside the repository
 
 `DATA_DIR` defaults to `examples/eva71_sra/data`, **inside the checkout**. That
 suits the example, whose inputs are all re-downloadable, and is a trap for a
-real run: the mapped SAM lands there too, so an `rm -rf anchovy/` or a fresh
-clone takes 11 GB of mapping with it. For anything you would rather not redo,
+real run: outputs land in `<input_dir>/results/`, so an `rm -rf anchovy/` or a
+fresh clone takes the whole run with it. For anything you would rather not redo,
 point it beside the repo and set the config to match:
 
 ```bash
@@ -111,9 +111,8 @@ FASTQ=/path/to/reads.fastq DATA_DIR="$DATA" THREADS=64 \
   bash examples/eva71_sra/fetch.sh
 ```
 
-`workflow/config_cluster.yaml` is already written that way. Note `results/` is
-still relative to wherever you run snakemake from, so run it from the repo root
-or the outputs will follow you around.
+`workflow/config_cluster.yaml` is already written that way. Because every path
+is anchored to `input_dir`, it does not matter which directory you launch from.
 
 ### Use the whole machine
 
@@ -155,22 +154,27 @@ There's a second, different knob:
 MAX_READS=200000 bash examples/eva71_sra/fetch.sh
 ```
 
-`MAX_READS` trims a FASTQ you've **already downloaded** before mapping. It saves
-mapping time only — by the time it applies, the whole run has come down. Use it
-when you have the full data and want a faster mapping pass, not to shorten the
-download.
+`MAX_READS` trims a FASTQ you've **already downloaded**. It saves pipeline time
+only — by the time it applies, the whole run has come down. Use it when you have
+the full data and want a faster pass, not to shorten the download.
+
+The trimmed copy goes in its own directory, `$DATA_DIR/subsample/`, and
+`fetch.sh` prints that as the `input_dir` to use. It has to: `input_dir` is a
+folder of FASTQs and every FASTQ in it runs as a separate sample, so a subsample
+sitting beside the full file would be run *as well as* it.
 
 ### Then go bigger
 
 A subsample is for checking the pipeline runs, not for reading the biology off.
 Spots are spread across ~750,000 possible barcodes, so cutting the download cuts
 *per-cell depth*, and per-cell depth is what every downstream number rests on.
-At 500,000 spots this run yields on the order of five cells past `depth_min: 3`,
+At 500,000 spots this run yields on the order of five cells past this example's
+filters,
 each covered thinly enough that over half their genotype tokens come back as
 ambiguity codes rather than called bases — see
 [Ambiguity codes](#ambiguity-codes-and-why-they-arent-mutations) below.
 
-Lowering `depth_min` does not fix that; it admits more cells at the same thin
+Lowering the filters does not fix that; it admits more cells at the same thin
 coverage. The fix is more reads per barcode: raise `MAX_SPOTS` by an order of
 magnitude, or drop it entirely.
 
@@ -192,10 +196,11 @@ can fix it and re-run without starting over. Delete a file to redo that step.
 4. **Gets the sequencing reads** — your own file if you set `FASTQ`, otherwise
    downloaded with `fasterq-dump`.
 5. **Optionally takes a subsample**, if you set `MAX_READS`.
-6. **Maps the reads to the reference** with minimap2.
 
-What comes out is `SRR28178313.sam`, which is exactly what the pipeline's first
-stage expects. From there it's the ordinary workflow.
+What comes out is a directory holding the reads, the reference and the region
+file — which is exactly what `input_dir` means. Mapping is a pipeline stage, so
+`fetch.sh` does not do it: when both did, the two disagreed about the sample
+name and the workflow quietly reused the previous run's SAM.
 
 ## Why the region file is generated, not written by hand
 
@@ -251,10 +256,22 @@ format.
 
 By default anchovy works out its own reference: the consensus of whatever cells
 survived filtering. That answers "which cells differ from the crowd", which is
-often what you want — but it needs a crowd. With a single surviving cell, the
-reference *is* that cell, so its genotype comes out empty no matter what it
-carries. An empty genotype then means "there was nothing to compare against",
-which reads identically to "matches the virus".
+often what you want — but it needs a crowd, and it is worth being clear about
+what that consensus is.
+
+**The consensus is not the modal genotype.** The modal genotype is the single
+most common genotype actually observed in a cell; the consensus is the most
+common base at each position taken independently, so it is an aggregate that
+need not correspond to any genotype in the population — and on a population of
+co-circulating genotypes, it may correspond to none of them. Dábilla & Dolan
+(2024) make this distinction the reason for reporting the modal genotype:
+the consensus can sit still while the genotypes underneath it move.
+
+Two further failure modes follow from comparing against it. With a single
+surviving cell, the reference *is* that cell, so its genotype comes out empty no
+matter what it carries — and an empty genotype reads identically to "matches the
+virus". At a position where the population splits evenly, the tie is broken
+alphabetically, so which base counts as reference is arbitrary.
 
 This example sets `reference` to the genome instead:
 
@@ -282,13 +299,24 @@ Delete the line to go back to the cross-cell consensus.
 Two filters drop cells, and both are set low in this example so it produces
 something to look at:
 
-- `cons_min_depth` — coverage a cell needs *at a position* for sam2consensus to
-  call it. A cell that never reaches it produces no consensus at all.
-- `depth_min` — coverage a cell needs overall to enter the consensus stage.
+- `cons_min_depth` (3 here, default 5) — reads a position needs before
+  sam2consensus calls a base. A cell that never reaches it produces no consensus
+  at all.
+- `depth_min` (3 here, default 10) — an overall filter applied at the consensus
+  stage.
 
-On a real run most barcodes carry few reads, so the package defaults (5 and 10)
-can leave very few cells standing on a subsample. Raise them for a deeply
-sequenced run, where you can afford to demand more evidence per cell.
+On a real run most barcodes carry few reads, so the defaults can leave very few
+cells standing on a subsample.
+
+**`depth_min` is not what its name suggests, and a real run should use
+`min_breadth` instead.** The number it tests is sam2consensus's `coverage:`
+field, computed as summed depth over covered positions divided by the *full*
+reference length — so it falls whenever a cell spans less of the genome, however
+deep its reads were, and it will keep a cell covering a fifth of the genome over
+one with twice the depth. Set `depth_min: 0` and state the rule you actually
+want: `min_breadth: 1.0` with a `window`, which means *the coding sequence is
+complete at `cons_min_depth`*. `workflow/config_cluster.yaml` does this and
+explains the numbers behind it.
 
 anchovy warns if fewer than two cells survive with no reference supplied, since
 that combination cannot produce a genotype.
@@ -307,7 +335,7 @@ cells both reading `R` at 3185 would be grouped as *sharing a mutation*, when
 what they actually share is not having enough reads to call one. The consensus
 stage prints how many calls it dropped, so the filtering is never silent.
 
-On this example's data at `depth_min: 3` it mattered a lot. Five cells gave
+On this example's data at `cons_min_depth: 3` it mattered a lot. Five cells gave
 eleven distinct tokens, six of which were ambiguity codes:
 
 ```
@@ -347,3 +375,9 @@ without renumbering anything. They're left unset here on purpose: the right
 window depends on where *this* run actually has coverage. Run it once, look at
 the per-cell consensus sequences, then set the window to the well-covered core
 and run again.
+
+Usually the answer is the coding sequence, and you have already described where
+that is in the GFF3. `window: cds` takes the bounds from it, which avoids the
+off-by-one in copying them across by hand — GFF3 is 1-based inclusive and the
+window is 0-based half-open, and getting it wrong shifts which positions are
+called without failing.

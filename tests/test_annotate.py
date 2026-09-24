@@ -103,37 +103,53 @@ def test_annotate_matches_r_golden(tmp_path):
         f"annotation calls differ:\n got: {calls(got)}\n exp: {calls(exp)}"
     )
 
-    # genotypeName too. This column was NOT compared for a long time, and a
-    # divergence hid there: the port joined the per-mutation names in the order
-    # the tokens appeared in the genotype string, while the R joined them in
-    # genome-position order, so "13A_8T" came out "R5S_D3V" against the R's
-    # "D3V_R5S". Only multi-mutation genotypes were affected, which is why
-    # nothing noticed. It is a user-visible label -- it names nodes in the
-    # network files -- so it is worth holding to the golden.
-    def genotype_names(df):
-        d = df[["genotype", "genotypeName"]].drop_duplicates()
-        return {row["genotype"]: row["genotypeName"]
+    # The amino-acid label too -- genotypeID here, genotypeName in the R. Only
+    # the column name differs; the values must still match. It was NOT compared
+    # for a long time, and a divergence hid there: the port joined the
+    # per-mutation names in the order the tokens appeared in the genotype
+    # string, while the R joined them in genome-position order, so "13A_8T"
+    # came out "R5S_D3V" against the R's "D3V_R5S". Only multi-mutation
+    # genotypes were affected, which is why nothing noticed. It is a
+    # user-visible label -- it names nodes in the network files -- so it is
+    # worth holding to the golden.
+    def labels(df, column):
+        d = df[["genotype", column]].drop_duplicates()
+        return {row["genotype"]: row[column]
                 for _, row in d.iterrows()
                 # reference cells have no substitutions; the two sides render
                 # that as "" and NaN respectively, which is not a disagreement.
-                if isinstance(row["genotypeName"], str) and row["genotypeName"]}
+                if isinstance(row[column], str) and row[column]}
 
-    assert genotype_names(got) == genotype_names(exp), (
-        f"genotype names differ:\n got: {genotype_names(got)}"
-        f"\n exp: {genotype_names(exp)}"
+    assert labels(got, "genotypeID") == labels(exp, "genotypeName"), (
+        f"genotype labels differ:\n got: {labels(got, 'genotypeID')}"
+        f"\n exp: {labels(exp, 'genotypeName')}"
     )
+    assert "genotypeName" not in got.columns, (
+        "genotypeName is back; the column holds an amino-acid translation of "
+        "the nucleotide genotype, not the genotype's name, and reading it as a "
+        "name is what put an amino-acid-grouped frequency on a node")
 
-    # And the per-genotype frequencies, which are what a network node gets
-    # sized by.
-    def freqs(df):
-        d = df[["genotype", "genoFreq", "haploFreq"]].drop_duplicates()
-        return {row["genotype"]: (round(row["genoFreq"], 9),
-                                  round(row["haploFreq"], 9))
-                for _, row in d.iterrows()}
+    # Both frequencies. THE NAMES ARE SWAPPED RELATIVE TO THE R, deliberately,
+    # so this comparison is crosswise:
+    #
+    #     R genoFreq   grouped on the amino-acid name  ->  port idFreq
+    #     R haploFreq  grouped on the nucleotide one   ->  port genoFreq
+    #
+    # The numbers are unchanged; what changed is which one is called genoFreq,
+    # and therefore which one _genotypeNodes.csv offers Cytoscape as the node
+    # frequency. A node is one nucleotide genotype, so it has to be the
+    # genotype-grouped figure. See annotate.py.
+    def freqs(df, column):
+        d = df[["genotype", column]].drop_duplicates()
+        return {row["genotype"]: round(row[column], 9) for _, row in d.iterrows()}
 
-    assert freqs(got) == freqs(exp), (
-        f"genotype frequencies differ:\n got: {freqs(got)}\n exp: {freqs(exp)}"
-    )
+    assert freqs(got, "genoFreq") == freqs(exp, "haploFreq"), (
+        f"nucleotide-genotype frequencies differ:\n got: {freqs(got, 'genoFreq')}"
+        f"\n exp: {freqs(exp, 'haploFreq')}")
+    assert freqs(got, "idFreq") == freqs(exp, "genoFreq"), (
+        f"amino-acid-ID frequencies differ:\n got: {freqs(got, 'idFreq')}"
+        f"\n exp: {freqs(exp, 'genoFreq')}")
+    assert "haploFreq" not in got.columns
 
 
 def test_network_matches_r_golden(tmp_path):
