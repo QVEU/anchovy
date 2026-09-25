@@ -529,6 +529,41 @@ the term that counts, and it costs wall time in proportion.
 The stage prints what it is about to need before it starts, so a subsequent kill
 is at least diagnosable.
 
+#### Running on a cluster
+
+Submit with Snakemake's SLURM executor, which distributes the per-cell jobs —
+thousands of independent `map_cell`/`cell_consensus` pairs — across nodes:
+
+```bash
+snakemake -s workflow/Snakefile --configfile <config> \
+    --executor slurm --jobs 200 --group-components cell=200
+```
+
+**Every rule declares `mem_mb` and `runtime`.** Without them each job is
+submitted at the partition default, and `extract` is killed on a node with
+plenty free — the same SIGKILL as too small a hand-made allocation, only now
+blamed on the cluster. The defaults are computed in the Snakefile from measured
+figures, and `extract`'s follows `chemistry`, `extract_threads`,
+`extract_chunk_size` and the whitelist's own line count automatically. Override
+any of them from the config:
+
+```yaml
+reads_estimate: 10000000   # reads expected after mapping; sizes the fasta stage
+mem_mb:
+  extract: 200000
+runtime:                   # minutes
+  extract: 480
+```
+
+`reads_estimate` matters because `fasta` loads the whole anchovy table — every
+read's mapped sequence — at a measured 6.3 KB per read. At 10 million reads that
+is ~84 GB, the second largest reservation in the pipeline. Nothing else scales
+with it: `extract` is chunked, and the per-cell rules see one cell each.
+
+**Only the per-cell stages scale out.** `map_reads`, `extract` and everything
+after `merge_consensus` are single jobs on one node, so `extract` is capped at
+that node's core count however many nodes you have.
+
 #### If `extract` is slow
 
 Barcode assignment is about **90% of the stage's time** on real data — the

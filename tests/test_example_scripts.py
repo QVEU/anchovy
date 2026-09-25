@@ -214,3 +214,65 @@ def test_the_resume_path_still_has_somewhere_to_write():
     assert "if INPUT_DIR else name" in src, (
         "without the fallback, a cells_dir resume config raises on "
         "os.path.join(None, ...) instead of writing to ./results")
+
+
+# --------------------------------------------------------------------------- #
+# Cluster reservations
+# --------------------------------------------------------------------------- #
+# Under --executor slurm a rule with no `resources` is submitted at the
+# partition default. That is how extract gets killed on a node with a terabyte
+# free -- the same SIGKILL as too small a hand-made allocation, only blamed on
+# the cluster. Every rule must carry one.
+def test_every_rule_reserves_memory_and_time():
+    import re
+
+    bodies = re.split(r"^(?:rule|checkpoint) (\w+):$", SNAKEFILE, flags=re.M)[1:]
+    rules = dict(zip(bodies[::2], bodies[1::2]))
+    assert "extract" in rules and "map_cell" in rules, "rule parsing broke"
+
+    for name, body in rules.items():
+        if name == "all":                     # a target, not a job
+            continue
+        assert f'mem_mb=mem_mb("{name}")' in body, (
+            f"rule {name} reserves no memory; under --executor slurm it goes "
+            f"in at the partition default")
+        assert f'runtime=runtime("{name}")' in body, (
+            f"rule {name} reserves no wall clock; SLURM kills at the limit and "
+            f"a job killed for time looks exactly like one that hung")
+
+
+def test_the_whitelist_term_reproduces_what_was_measured():
+    """W is a line through two measured points; check it still hits them.
+
+    0.19/1.12 GB per worker bounded and 0.36/2.75 unbounded, at 737,280 and
+    6,794,880 barcodes. If someone retunes the constants, they have to keep
+    passing through the numbers those constants came from.
+    """
+    import re
+
+    bounded = re.search(r"\(0\.077 \+ ([\d.e-]+) \* _whitelist_barcodes\(\)\)",
+                        SNAKEFILE)
+    unbounded = re.search(r"\(0\.069 \+ ([\d.e-]+) \* _whitelist_barcodes\(\)\)",
+                          SNAKEFILE)
+    assert bounded and unbounded, "the W fit is gone or was rewritten"
+
+    for icept, slope, points in (
+            (0.077, float(bounded.group(1)), ((737280, 0.19), (6794880, 1.12))),
+            (0.069, float(unbounded.group(1)), ((737280, 0.36), (6794880, 2.75)))):
+        for barcodes, measured in points:
+            assert abs(icept + slope * barcodes - measured) < 0.01, (
+                f"{barcodes:,} barcodes: the fit gives "
+                f"{icept + slope * barcodes:.2f} GB, measured {measured}")
+
+
+def test_extract_is_sized_from_the_whitelist_not_the_chemistry():
+    """A run-specific list costs the intercept, not v3's 1.12 GB per worker.
+
+    Keyed on `chemistry` this reserved 36 GB for the bundled fixture's
+    six-barcode list, where 13 is right.
+    """
+    assert "def _whitelist_barcodes():" in SNAKEFILE
+    assert 'config.get("whitelist")' in SNAKEFILE
+    assert 'CHEM["barcodes"]' in SNAKEFILE, (
+        "a whitelist still to be downloaded has no file to count, so it has to "
+        "fall back to the chemistry's published count")

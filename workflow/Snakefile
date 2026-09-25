@@ -382,6 +382,108 @@ def aggregate_cell_counts(wildcards):
 
 
 # --------------------------------------------------------------------------- #
+# Cluster resources
+# --------------------------------------------------------------------------- #
+# WITHOUT THESE, --executor slurm SUBMITS EVERY JOB AT THE PARTITION DEFAULT.
+# On a node with a terabyte free, extract still gets whatever the scheduler
+# hands out and the kernel kills it -- the same SIGKILL as running it by hand
+# with too small an allocation, only now blamed on the cluster. Every figure
+# below is measured on this pipeline rather than guessed; see README.md.
+#
+# mem_mb is what SLURM reserves. Anything here can be overridden from the
+# config with a `mem_mb` mapping keyed by rule name, e.g.
+#
+#     mem_mb:
+#       extract: 200000
+#
+# Running locally these are ignored unless you pass --resources.
+def _mb(gb):
+    return int(gb * 1024)
+
+
+# Reads the run is expected to yield AFTER mapping and the length filter. Only
+# the fasta stage needs it: pd.read_csv pulls the whole anchovy table into
+# memory, and that table carries every read's mapped sequence. Measured at
+# 6.3 KB per assigned read at peak, so 10 million reads is ~60 GB -- easily the
+# second largest allocation in the pipeline, and the one nobody had sized.
+# Nothing else scales with it: extract is chunked, and the per-cell rules see
+# one cell each.
+READS_ESTIMATE = config.get("reads_estimate", 10_000_000)
+
+# The two knobs extract's own footprint is built from. Defaults mirror the
+# package: 16 workers (see the extract rule's threads) and ExtractConfig's
+# 100,000-read chunk. Named here so the reservation below and the rule itself
+# cannot drift apart.
+EXTRACT_THREADS = int(config.get("extract_threads", 16))
+CHUNK_SIZE = int(config.get("extract_chunk_size", 100_000))
+
+# Per-worker cost of the whitelist lookup tables, as a line through two
+# measured points per mode -- 737,280 and 6,794,880 barcodes, the real v2 and
+# v3 lists:
+#
+#     bounded    0.19 GB and 1.12 GB    ->  0.077 + 1.54e-7 x barcodes
+#     unbounded  0.36 GB and 2.75 GB    ->  0.069 + 3.95e-7 x barcodes
+#
+# Bounded is cheaper because the per-barcode template array is only built when
+# the exhaustive scan will read it -- see _BarcodeState. The ~0.07 GB intercept
+# is the fixed cost a worker pays whatever the list holds.
+#
+# SIZED FROM THE LIST ITSELF WHEN THERE IS ONE. A run-specific Cell Ranger list
+# of a few thousand barcodes costs essentially the intercept, and keying this on
+# `chemistry` instead would reserve v3's 1.12 GB per worker for it -- 36 GB for
+# a run that needs 13. The line count is knowable here because the file already
+# exists; only a list still to be downloaded falls back to the chemistry's
+# published count.
+def _whitelist_barcodes():
+    path = config.get("whitelist")
+    if path and os.path.exists(path):
+        with open(path) as handle:
+            return sum(1 for line in handle if line.strip())
+    return CHEM["barcodes"]
+
+
+_W = ((0.077 + 1.535e-7 * _whitelist_barcodes())
+      if config.get("max_barcode_errors") is not None
+      else (0.069 + 3.945e-7 * _whitelist_barcodes()))
+
+# extract holds the tables once in the parent and once per worker, plus the
+# chunk. It does NOT scale with the size of the run.
+_EXTRACT_GB = _W + EXTRACT_THREADS * (_W + 4.6e-6 * CHUNK_SIZE)
+
+_DEFAULT_MEM_MB = {
+    "get_whitelist":   _mb(2),            # a download and a line count
+    "map_reads":       _mb(16),           # minimap2 on a viral genome is small;
+                                          # the SAM is streamed, not buffered
+    "extract":         _mb(_EXTRACT_GB * 1.3 + 2),      # 30% headroom
+    "fasta":           _mb(READS_ESTIMATE * 6.3e-6 * 1.3 + 2),
+    "map_cell":        _mb(2),            # one cell's reads
+    "cell_consensus":  _mb(2),            # one cell's SAM
+    "merge_consensus": _mb(2),            # streamed with copyfileobj
+    "consensus":       _mb(16),           # every cell's consensus, once
+    "annotate":        _mb(16),           # genotype table + pairwise network
+    "frequencies":     _mb(16),           # the pileups, one pass
+    "report":          _mb(16),           # R holds the tables it plots
+}
+
+
+def mem_mb(rule):
+    return int(config.get("mem_mb", {}).get(rule, _DEFAULT_MEM_MB[rule]))
+
+
+# Wall clock, generous: SLURM kills at the limit, and a job killed for time
+# looks exactly like a job that hung. Override with a `runtime` mapping.
+_DEFAULT_RUNTIME = {
+    "map_reads": 240, "extract": 240, "fasta": 120, "consensus": 120,
+    "annotate": 60, "frequencies": 120, "report": 60, "merge_consensus": 60,
+    "get_whitelist": 60, "map_cell": 30, "cell_consensus": 30,
+}
+
+
+def runtime(rule):
+    return int(config.get("runtime", {}).get(rule, _DEFAULT_RUNTIME[rule]))
+
+
+# --------------------------------------------------------------------------- #
 # Default target
 # --------------------------------------------------------------------------- #
 # The pipeline now builds through the filtered consensus genotype table.
@@ -423,6 +525,9 @@ rule get_whitelist:
         url=WHITELIST_URL or "",
         expected=config.get("whitelist_barcodes", CHEM["barcodes"]),
         chemistry=CHEMISTRY,
+    resources:
+        mem_mb=mem_mb("get_whitelist"),
+        runtime=runtime("get_whitelist"),
     shell:
         r"""
         set -euo pipefail
@@ -467,6 +572,9 @@ rule map_reads:
         # map-hifi for PacBio CCS, map-ont for Nanopore. Getting this wrong
         # costs alignment sensitivity rather than failing, so it is explicit.
         preset=config.get("minimap_preset", "map-hifi"),
+    resources:
+        mem_mb=mem_mb("map_reads"),
+        runtime=runtime("map_reads"),
     shell:
         "minimap2 -ax {params.preset} -t {threads} "
         "{input.template} {input.fastq} > {output.sam}"
@@ -484,7 +592,7 @@ rule extract:
     # node is. Declared as `threads` rather than a bare param so the scheduler
     # reserves the cores rather than oversubscribing them, and so snakemake
     # scales it down when --cores is smaller.
-    threads: config.get("extract_threads", 16)
+    threads: EXTRACT_THREADS
     params:
         sig=SIGNATURE,
         # How wrong the SIGNATURE match may be before a read is discarded.
@@ -505,6 +613,9 @@ rule extract:
         # the stage's footprint -- it no longer scales with the size of the run.
         chunk_size=(f"--chunk-size {config['extract_chunk_size']}"
                     if "extract_chunk_size" in config else ""),
+    resources:
+        mem_mb=mem_mb("extract"),
+        runtime=runtime("extract"),
     shell:
         "anchovy extract {input.sam} {input.whitelist} "
         "--signature {params.sig} -o {output} --threads {threads} "
@@ -533,6 +644,9 @@ checkpoint fasta:
         cells=directory(RESULTS + "/cells"),
     params:
         min_reads=f"--min-reads {config['min_reads']}" if "min_reads" in config else "",
+    resources:
+        mem_mb=mem_mb("fasta"),
+        runtime=runtime("fasta"),
     shell:
         "anchovy fasta {input.csv} {output.cells} {params.min_reads}"
 
@@ -561,6 +675,9 @@ rule map_cell:
         sam=WORK + "/{cell}_BC.sam",
     group:
         "cell"
+    resources:
+        mem_mb=mem_mb("map_cell"),
+        runtime=runtime("map_cell"),
     shell:
         "minimap2 -ax map-hifi {input.template} {input.fa} > {output.sam}"
 
@@ -606,6 +723,9 @@ rule cell_consensus:
         counts="--counts" if FREQUENCIES else "",
     group:
         "cell"
+    resources:
+        mem_mb=mem_mb("cell_consensus"),
+        runtime=runtime("cell_consensus"),
     shell:
         "python {input.script} -c {params.cons_threshold} -m {params.min_depth} "
         "{params.counts} --outfolder {params.outfolder} -i {input.sam} && "
@@ -633,6 +753,9 @@ rule merge_consensus:
         aggregate_cell_consensuses,
     output:
         ALL_CONSENSUS,
+    resources:
+        mem_mb=mem_mb("merge_consensus"),
+        runtime=runtime("merge_consensus"),
     run:
         with open(output[0], "wb") as out_fh:
             for path in input:
@@ -671,6 +794,9 @@ rule consensus:
                  if "min_breadth" in config else ""),
         depth_called=(f"--min-depth-called {config['min_depth_called']}"
                       if "min_depth_called" in config else ""),
+    resources:
+        mem_mb=mem_mb("consensus"),
+        runtime=runtime("consensus"),
     shell:
         "anchovy consensus {input.fasta} {params.window} {params.flags} "
         "--depth-min {params.depth_min} --out-prefix {params.out_prefix} "
@@ -710,6 +836,9 @@ rule annotate:
         flags=ANNOTATE_FLAGS,
         max_mutations=(f"--max-mutations {config['max_mutations_per_cell']}"
                        if "max_mutations_per_cell" in config else ""),
+    resources:
+        mem_mb=mem_mb("annotate"),
+        runtime=runtime("annotate"),
     shell:
         "anchovy annotate {input.csv} {input.reference} {params.out_prefix} "
         "{params.flags} {params.max_mutations}"
@@ -746,6 +875,9 @@ rule frequencies:
                       if "min_alt_freq" in config else ""),
         min_cells=(f"--min-cells {config['min_cells_per_allele']}"
                    if "min_cells_per_allele" in config else ""),
+    resources:
+        mem_mb=mem_mb("frequencies"),
+        runtime=runtime("frequencies"),
     shell:
         "anchovy frequencies {input.fasta} --reference {input.reference} "
         "--out-prefix {params.out_prefix} --counts-dir {params.counts_dir} "
@@ -804,6 +936,9 @@ rule report:
         # used to be, is the one thing about a run that is not reproducible.
         rundir=lambda w: os.path.abspath(f"{RESULTS_DIR}/{w.sample}"),
         sample=SAMPLE,
+    resources:
+        mem_mb=mem_mb("report"),
+        runtime=runtime("report"),
     shell:
         "mkdir -p {params.tmp} && "
         "Rscript -e 'rmarkdown::render("
