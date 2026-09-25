@@ -138,6 +138,11 @@ min_reads: 8
 # The fixture's barcodes are exact whitelist entries, so nothing needs correcting
 # -- but leaving this unset means any read is assigned to its NEAREST entry with
 # no floor, which on real data turns unreadable barcodes into plausible cells.
+#
+# On a real run this is also the stage's biggest RUNTIME lever: barcode
+# assignment is ~90% of extract's time, and 2 costs roughly 7.6x what 1 does to
+# recover the last 15% of reads. workflow/config_cluster.yaml has the measured
+# table, including the case where leaving it unset beats setting it.
 max_barcode_errors: 2
 
 # The second analysis, over every mapped cell rather than the filtered subset:

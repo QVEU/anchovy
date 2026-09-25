@@ -207,9 +207,42 @@ allele_frequencies: true
 #     2 errors  0.194   usually unique
 #     3 errors  2.789   AMBIGUOUS -- "nearest" is a coin flip
 #
-# Setting this also makes the stage far faster, because a bounded search
-# enumerates the neighbourhood (1,128 lookups at 2 errors) instead of scanning
-# all 737,280 entries. Reads beyond the limit are never scanned at all.
+# IT IS ALSO THE STAGE'S BIGGEST RUNTIME LEVER, and not in the direction this
+# comment used to claim. Barcode assignment is ~90% of extract's time on real
+# data -- the signature search is noise beside it -- and essentially all of that
+# is spent on the reads whose barcode is NOT an exact whitelist hit. Measured on
+# 40,000 reads, 44% of them inexact, 4 workers:
+#
+# THE WHOLE STAGE, end to end, against a 20,000-barcode list:
+#
+#     2      21.6 s   1,849 reads/s   100% of reads assigned
+#     1       6.4 s   6,235 reads/s    85%
+#     0       4.7 s   8,482 reads/s    56%
+#
+# So 1 is 3.4x faster than 2 in wall clock. The barcode step alone differs by
+# 7.6x (14.4 s against 1.9 s) -- quote the 3.4x, since that is what a run
+# actually takes; the 7.6x is the part of it this setting touches.
+#
+# The same step against a 2,000-barcode list, which is where the second point
+# below comes from:
+#
+#     1       1.8 s
+#     2      10.8 s
+#     unset   8.4 s
+#
+# TWO THINGS TO READ OFF THAT. First, the 15% that 2 recovers over 1 are the
+# reads whose barcode needed TWO corrections -- the least trustworthy
+# assignments in the run -- so dropping them tightens the data as well as the
+# clock. The 2-error neighbourhood of a 16-mer is ~1,128 candidates against 48
+# for one error, which is where the time goes. If a run is taking hours, this
+# is the knob.
+#
+# Second, the bounded search is NOT unconditionally faster than the scan it
+# replaces. Its cost is fixed -- the same ~1,128 lookups whatever the whitelist
+# holds -- while the scan is linear in the list. Against 10X's 737,280 entries
+# the bound wins enormously; against a run-specific list of a couple of thousand
+# barcodes from Cell Ranger, leaving it unset was faster than setting it to 2.
+# Check your own list's length before assuming.
 #
 # Note it switches assignment from nearest-neighbour Levenshtein to exact-or-
 # within-k substitutions, which is what 10X's own correction does. A barcode

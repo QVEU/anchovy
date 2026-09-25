@@ -183,7 +183,7 @@ of these and says why. The complete list:
 | `whitelist_url` | 10X's | Fetch the whitelist from your own mirror |
 | `whitelist_barcodes` | per chemistry | Override the barcode count a download is checked against |
 | `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
-| `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor |
+| `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor. **The stage's biggest runtime lever** — see below |
 | `max_distance` | `42` | How far the *signature* match may be before a read is dropped |
 | `extract_threads` | `16` | Worker pool inside `extract`. Not `--cores`. **Sets the stage's memory** — see below |
 | `extract_chunk_size` | `100000` | Reads held at once. The other half of the memory setting |
@@ -491,6 +491,43 @@ costs almost nothing until the chunks get small enough that dispatch shows up.
 
 The stage prints what it is about to need before it starts, so a subsequent kill
 is at least diagnosable.
+
+#### If `extract` is slow
+
+Barcode assignment is about **90% of the stage's time** on real data — the
+signature search is noise beside it — and nearly all of that is spent on reads
+whose barcode is *not* an exact whitelist hit. So `max_barcode_errors` is the
+lever, not the hardware. Measured on 40,000 reads with 44% of them inexact, 4
+workers:
+
+| `max_barcode_errors` | whole stage | reads/s | reads assigned |
+|---|---:|---:|---:|
+| `0` | 4.7 s | 8,482 | 56% |
+| **`1`** | **6.4 s** | **6,235** | **85%** |
+| `2` | 21.6 s | 1,849 | 100% |
+
+**`1` is 3.4× faster than `2` in wall clock.** (The barcode step alone differs
+by 7.6× — 14.4 s against 1.9 s — but plan against the 3.4×, since that is what a
+run actually takes.) The 2-error neighbourhood of a 16-mer is ~1,128 candidates
+against 48 for one error, which is where the time goes.
+
+The 15% that `2` recovers are the reads whose barcode needed *two* corrections —
+the least trustworthy cell assignments in the run — so dropping them tightens
+the data as well as the clock. Still a judgement about your experiment rather
+than a performance question, but if a run is taking hours, start here.
+
+Note also that the bounded search is **not** unconditionally faster than the
+scan it replaces. Its cost is fixed whatever the whitelist holds, while the scan
+is linear in the list — so against 10x's 737,280 entries the bound wins
+enormously, but against a run-specific Cell Ranger list of a couple of thousand
+barcodes, leaving it unset was *faster* than setting it to `2` (8.4 s against
+10.8 s for that step), and loses no reads. Check `wc -l` on your whitelist first.
+
+**More cores help; more memory and more nodes do not.** Memory is bounded (see
+above) and was never the time constraint, and `extract` is a single Snakemake
+job using one machine's process pool — `--executor slurm` distributes the
+per-cell jobs, not this one. Raise `extract_threads` and lower
+`extract_chunk_size` to pay for it.
 
 **`genotype` and `genotypeID` are not the same thing, and neither are their
 frequencies.** `genotype` is the nucleotide haplotype and is what a node *is* —
