@@ -42,6 +42,58 @@ from anchovy.schema import (SamColumns, AnchovyColumns,
 
 
 # --------------------------------------------------------------------------- #
+# What the stage will cost
+# --------------------------------------------------------------------------- #
+# ONE DEFINITION, BECAUSE TWO DRIFTED. The workflow sizes its SLURM reservation
+# from this and the stage prints it on the way in; when they were separate
+# expressions the printed one kept a formula the reservation had already
+# outgrown, and the run that most needed the warning was told 7.7 GB where 54
+# was right.
+def whitelist_worker_gb(n_barcodes: int, bounded: bool) -> float:
+    """Per-worker cost of the whitelist lookup tables, in GB.
+
+    A line through two measured points per mode -- 737,280 and 6,794,880
+    barcodes, the real v2 and v3 lists:
+
+        bounded    0.19 GB and 1.12 GB
+        unbounded  0.36 GB and 2.75 GB
+
+    PAID ONCE PER WORKER, not once. The tables are read-only and identical in
+    every worker, but fork's copy-on-write does not save them: CPython's
+    refcounts touch every object, so each worker ends up holding its own copy.
+
+    Bounded is cheaper because the per-barcode template array is only built
+    when the exhaustive scan will read it -- see _BarcodeState. The ~0.07 GB
+    intercept is what a worker pays whatever the list holds.
+
+    Args:
+        n_barcodes: how many barcodes the whitelist actually holds.
+        bounded: whether max_barcode_errors is set.
+    """
+    if bounded:
+        return 0.077 + 1.535e-7 * n_barcodes
+    return 0.069 + 3.945e-7 * n_barcodes
+
+
+def projected_memory_gb(n_barcodes: int, threads: int, chunk_size: int,
+                        bounded: bool) -> float:
+    """What extract will hold at once, in GB.
+
+    The tables once in the parent and once per worker, plus the chunk each
+    worker is holding. Bounded by the chunk, NOT by the size of the run: this
+    is the same number whether the SAM carries forty thousand reads or eleven
+    million.
+
+    On a full whitelist the table term dwarfs the chunk term -- 2.75 GB against
+    0.46 GB at a 100,000-read chunk -- so `threads` is effectively the only
+    memory knob that matters, and lowering chunk_size buys much less than it
+    does on a small run-specific list.
+    """
+    w = whitelist_worker_gb(n_barcodes, bounded)
+    return w + threads * (w + 4.6e-6 * chunk_size)
+
+
+# --------------------------------------------------------------------------- #
 # Multiprocessing workers (module-level so they pickle cleanly)
 # --------------------------------------------------------------------------- #
 def _match_worker(seq_query: tuple[str, str]) -> tuple[int, int, str]:
@@ -416,12 +468,14 @@ def run(sam: str, whitelist: str, signature: str | None = None,
                 continue
             if n_chunk == 1:
                 print("\nProcessing in chunks of up to {:,} reads, {} worker(s)"
-                      " -- roughly {:.1f} GB at a time. A run killed with no "
-                      "message is the kernel: lower extract_threads or "
-                      "extract_chunk_size."
-                      .format(config.chunk_size, config.nthreads,
-                              0.3 + config.nthreads * 4.6e-6
-                              * config.chunk_size))
+                      " against {:,} barcodes -- roughly {:.0f} GB at a time. "
+                      "A run killed with no message is the kernel: lower "
+                      "extract_threads or extract_chunk_size."
+                      .format(config.chunk_size, config.nthreads, len(wl_df),
+                              projected_memory_gb(
+                                  len(wl_df), config.nthreads,
+                                  config.chunk_size,
+                                  config.max_barcode_errors is not None)))
 
             chunk = find_signature_positions(chunk, query, config, pool=pool)
             tally.mapped_hits += int((chunk.minPos >= 0).sum())

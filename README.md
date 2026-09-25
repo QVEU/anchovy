@@ -564,6 +564,23 @@ with it: `extract` is chunked, and the per-cell rules see one cell each.
 after `merge_consensus` are single jobs on one node, so `extract` is capped at
 that node's core count however many nodes you have.
 
+**Inside an interactive allocation, pass `--resources mem_mb=` as well.**
+`salloc`ing a node and running Snakemake on it locally is the natural way to do
+a first run, but there the `mem_mb` declarations are inert: Snakemake only
+enforces a resource it has been given a global budget for, so two samples' worth
+of `extract` start at the same instant and each reserves nothing.
+
+```bash
+salloc --cpus-per-task=64 --mem=150G --time=4:00:00
+snakemake -s workflow/Snakefile --configfile <config> \
+    --cores 64 --resources mem_mb=150000     # match --mem
+```
+
+With the budget declared, Snakemake serialises the jobs that will not fit
+together; without it, whether the allocation holds is down to how many samples
+happen to be ready at once. Under `--executor slurm` this does not arise — each
+job carries its own reservation to the scheduler.
+
 #### If `extract` is slow
 
 Barcode assignment is about **90% of the stage's time** on real data — the
@@ -595,11 +612,18 @@ enormously, but against a run-specific Cell Ranger list of a couple of thousand
 barcodes, leaving it unset was *faster* than setting it to `2` (8.4 s against
 10.8 s for that step), and loses no reads. Check `wc -l` on your whitelist first.
 
-**More cores help; more memory and more nodes do not.** Memory is bounded (see
-above) and was never the time constraint, and `extract` is a single Snakemake
-job using one machine's process pool — `--executor slurm` distributes the
-per-cell jobs, not this one. Raise `extract_threads` and lower
-`extract_chunk_size` to pay for it.
+**More cores help; more nodes do not.** `extract` is a single Snakemake job
+using one machine's process pool — `--executor slurm` distributes the per-cell
+jobs, not this one — so `extract_threads` is the hardware lever, and it is
+capped at one node.
+
+Memory is bounded by the chunk rather than the run, but it is *not* free of the
+thread count: each worker holds its own copy of the whitelist's lookup tables
+(2.75 GB against a v3 list), so raising `extract_threads` raises the
+reservation roughly in proportion. Lowering `extract_chunk_size` does not pay
+for it on a full whitelist — that term is 0.46 GB per worker against the
+tables' 2.75. Budget for `threads × W` and check what the stage prints on the
+way in.
 
 **`genotype` and `genotypeID` are not the same thing, and neither are their
 frequencies.** `genotype` is the nucleotide haplotype and is what a node *is* —

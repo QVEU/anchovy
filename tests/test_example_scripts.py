@@ -248,21 +248,60 @@ def test_the_whitelist_term_reproduces_what_was_measured():
     6,794,880 barcodes. If someone retunes the constants, they have to keep
     passing through the numbers those constants came from.
     """
+    from anchovy.extract import whitelist_worker_gb
+
+    for bounded, points in ((True, ((737280, 0.19), (6794880, 1.12))),
+                            (False, ((737280, 0.36), (6794880, 2.75)))):
+        for barcodes, measured in points:
+            got = whitelist_worker_gb(barcodes, bounded)
+            assert abs(got - measured) < 0.01, (
+                f"{barcodes:,} barcodes, bounded={bounded}: the fit gives "
+                f"{got:.2f} GB, measured {measured}")
+
+
+def test_the_reservation_and_the_printed_warning_are_one_formula():
+    """They drifted once, and the run that needed the warning got the old one.
+
+    The workflow sized extract from the whitelist while the stage went on
+    printing `0.3 + threads x 4.6 KB x chunk` -- so a v3 run was told it would
+    hold 7.7 GB where 54 was right. Both now call projected_memory_gb.
+    """
     import re
 
-    bounded = re.search(r"\(0\.077 \+ ([\d.e-]+) \* _whitelist_barcodes\(\)\)",
-                        SNAKEFILE)
-    unbounded = re.search(r"\(0\.069 \+ ([\d.e-]+) \* _whitelist_barcodes\(\)\)",
-                          SNAKEFILE)
-    assert bounded and unbounded, "the W fit is gone or was rewritten"
+    assert "from anchovy.extract import projected_memory_gb" in SNAKEFILE
+    assert "_EXTRACT_GB = projected_memory_gb(" in SNAKEFILE, (
+        "the reservation restates the formula instead of calling it")
 
-    for icept, slope, points in (
-            (0.077, float(bounded.group(1)), ((737280, 0.19), (6794880, 1.12))),
-            (0.069, float(unbounded.group(1)), ((737280, 0.36), (6794880, 2.75)))):
-        for barcodes, measured in points:
-            assert abs(icept + slope * barcodes - measured) < 0.01, (
-                f"{barcodes:,} barcodes: the fit gives "
-                f"{icept + slope * barcodes:.2f} GB, measured {measured}")
+    src = (REPO / "src" / "anchovy" / "extract.py").read_text()
+    warning = re.search(r"Processing in chunks.*?\)\)\)", src, re.S)
+    assert warning and "projected_memory_gb(" in warning.group(0), (
+        "the stage prints a number it worked out for itself")
+    assert "len(wl_df)" in warning.group(0), (
+        "the printed figure has to be sized from the whitelist in hand, not "
+        "from the chemistry -- that is the whole correction")
+
+
+def test_extract_projects_the_same_gb_the_cluster_reserves():
+    """A worked example, so the fit is checked end to end and not term by term.
+
+    v3, bounded, 16 workers, 100,000-read chunks: the tables cost 1.12 GB in
+    the parent and again in each worker, the chunk 0.46 GB per worker.
+    """
+    from anchovy.extract import projected_memory_gb
+
+    got = projected_memory_gb(6_794_880, 16, 100_000, bounded=True)
+    assert abs(got - 26.4) < 0.5, f"expected ~26.4 GB, got {got:.1f}"
+
+    unbounded = projected_memory_gb(6_794_880, 16, 100_000, bounded=False)
+    assert abs(unbounded - 54.1) < 0.5, f"expected ~54.1 GB, got {unbounded:.1f}"
+
+    # Threads, not chunk size, is the knob on a full whitelist: halving the
+    # workers saves more than halving the chunk does.
+    fewer = projected_memory_gb(6_794_880, 8, 100_000, bounded=True)
+    smaller = projected_memory_gb(6_794_880, 16, 50_000, bounded=True)
+    assert fewer < smaller, (
+        f"halving threads gives {fewer:.1f} GB and halving the chunk "
+        f"{smaller:.1f} -- the guidance to lower threads first is backwards")
 
 
 def test_extract_is_sized_from_the_whitelist_not_the_chemistry():
