@@ -500,24 +500,28 @@ whose barcode is *not* an exact whitelist hit. So `max_barcode_errors` is the
 lever, not the hardware. Measured on 40,000 reads with 44% of them inexact, 4
 workers:
 
-| `max_barcode_errors` | 20,000-barcode list | reads kept | 2,000-barcode list |
+| `max_barcode_errors` | whole stage | reads/s | reads assigned |
 |---|---:|---:|---:|
-| `0` | 1.4 s | 56% | |
-| `1` | 1.9 s | 85% | 1.8 s |
-| `2` | 14.4 s | 100% | 10.8 s |
-| unset | 105.9 s | 100% | 8.4 s |
+| `0` | 4.7 s | 8,482 | 56% |
+| **`1`** | **6.4 s** | **6,235** | **85%** |
+| `2` | 21.6 s | 1,849 | 100% |
 
-`2` costs roughly **7.6× what `1` does** to recover the last 15% of reads: the
-2-error neighbourhood of a 16-mer is ~1,128 candidates against 48 for one error.
-Whether those reads are worth the time is a judgement about your data, not a
-performance question — but if a run is taking hours, start here.
+**`1` is 3.4× faster than `2` in wall clock.** (The barcode step alone differs
+by 7.6× — 14.4 s against 1.9 s — but plan against the 3.4×, since that is what a
+run actually takes.) The 2-error neighbourhood of a 16-mer is ~1,128 candidates
+against 48 for one error, which is where the time goes.
+
+The 15% that `2` recovers are the reads whose barcode needed *two* corrections —
+the least trustworthy cell assignments in the run — so dropping them tightens
+the data as well as the clock. Still a judgement about your experiment rather
+than a performance question, but if a run is taking hours, start here.
 
 Note also that the bounded search is **not** unconditionally faster than the
 scan it replaces. Its cost is fixed whatever the whitelist holds, while the scan
 is linear in the list — so against 10x's 737,280 entries the bound wins
 enormously, but against a run-specific Cell Ranger list of a couple of thousand
-barcodes, leaving it unset was *faster* than setting it to `2`. Check `wc -l` on
-your whitelist first.
+barcodes, leaving it unset was *faster* than setting it to `2` (8.4 s against
+10.8 s for that step), and loses no reads. Check `wc -l` on your whitelist first.
 
 **More cores help; more memory and more nodes do not.** Memory is bounded (see
 above) and was never the time constraint, and `extract` is a single Snakemake

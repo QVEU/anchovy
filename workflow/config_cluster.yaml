@@ -213,15 +213,29 @@ allele_frequencies: true
 # is spent on the reads whose barcode is NOT an exact whitelist hit. Measured on
 # 40,000 reads, 44% of them inexact, 4 workers:
 #
-#                        20,000-barcode list      2,000-barcode list
-#     0                   1.4 s   56% kept
-#     1                   1.9 s   85% kept         1.8 s
-#     2                  14.4 s  100% kept        10.8 s
-#     unset             105.9 s  100% kept         8.4 s
+# THE WHOLE STAGE, end to end, against a 20,000-barcode list:
 #
-# TWO THINGS TO READ OFF THAT. First, 2 costs about 7.6x what 1 does, for the
-# last 15% of reads: the 2-error neighbourhood of a 16-mer is ~1,128 candidates
-# against 48 for one error. If a run is taking hours, this is the knob.
+#     2      21.6 s   1,849 reads/s   100% of reads assigned
+#     1       6.4 s   6,235 reads/s    85%
+#     0       4.7 s   8,482 reads/s    56%
+#
+# So 1 is 3.4x faster than 2 in wall clock. The barcode step alone differs by
+# 7.6x (14.4 s against 1.9 s) -- quote the 3.4x, since that is what a run
+# actually takes; the 7.6x is the part of it this setting touches.
+#
+# The same step against a 2,000-barcode list, which is where the second point
+# below comes from:
+#
+#     1       1.8 s
+#     2      10.8 s
+#     unset   8.4 s
+#
+# TWO THINGS TO READ OFF THAT. First, the 15% that 2 recovers over 1 are the
+# reads whose barcode needed TWO corrections -- the least trustworthy
+# assignments in the run -- so dropping them tightens the data as well as the
+# clock. The 2-error neighbourhood of a 16-mer is ~1,128 candidates against 48
+# for one error, which is where the time goes. If a run is taking hours, this
+# is the knob.
 #
 # Second, the bounded search is NOT unconditionally faster than the scan it
 # replaces. Its cost is fixed -- the same ~1,128 lookups whatever the whitelist
