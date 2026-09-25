@@ -481,13 +481,38 @@ stage gets no chance to say so itself.
 depend on how big the run is** — only on the chunk and the worker count:
 
 ```
-0.3 GB  +  extract_threads x 4.6 KB x extract_chunk_size
+GB  =  W  +  extract_threads × ( W  +  4.6 KB × extract_chunk_size )
+
+       W = 0.4 GB   v2 whitelist    (737,280 barcodes)
+       W = 2.8 GB   v3 whitelist  (6,794,880 barcodes)
+       W ≈ 0        a small run-specific list
 ```
 
-At the defaults (16 workers, 100,000 reads per chunk) that is about 7 GB,
-whether the file holds one million reads or twenty. Lower either knob on a tight
-node: `extract_threads` costs wall time in proportion, `extract_chunk_size`
-costs almost nothing until the chunks get small enough that dispatch shows up.
+**`W` is the whitelist's lookup tables, and every worker holds its own copy.**
+They are read-only and identical, but fork's copy-on-write does not save them —
+CPython's refcounts touch every object. Measured: 0.42 GB per worker at v2,
+2.75 GB at v3, linear in the worker count.
+
+On a full 10x whitelist `W` dwarfs the chunk term (2.75 GB against 0.46 GB at a
+100,000-read chunk), so **`extract_threads` is effectively the only memory knob
+that matters** and chunking buys much less than it does against a small list:
+
+| v3, 100,000-read chunks | memory |
+|---|---:|
+| 4 threads | 16 GB |
+| 8 threads | 28 GB |
+| 16 threads | 54 GB |
+| 64 threads | 208 GB |
+
+
+It does not depend on how big the run is — that is what chunking bought. It does
+depend heavily on the whitelist: at the defaults (16 workers, 100,000-read
+chunks) a small custom list costs about 7 GB, a v2 whitelist about 14 GB and a
+v3 whitelist about 54 GB.
+
+Lower `extract_threads` first on a tight node — against a full whitelist it is
+the term that counts, and it costs wall time in proportion.
+`extract_chunk_size` is worth trimming only when the whitelist is small.
 
 The stage prints what it is about to need before it starts, so a subsequent kill
 is at least diagnosable.
