@@ -79,7 +79,40 @@ min_reads: 20
 # MEMORY IS BOUNDED BY THE CHUNK, NOT BY THE RUN. extract reads the SAM, runs
 # both passes and writes its output a chunk at a time, so its footprint is
 #
-#     0.3 GB  +  extract_threads x 4.6 KB x extract_chunk_size
+#     GB  =  W  +  extract_threads x ( W  +  4.6 KB x extract_chunk_size )
+#
+#                     W = 0.4 GB   v2 whitelist    (737,280 barcodes)
+#                     W = 2.8 GB   v3 whitelist  (6,794,880 barcodes)
+#                     W ~ 0        a small run-specific list
+#
+# W IS THE WHITELIST'S LOOKUP TABLES, AND IT IS PAID ONCE PER WORKER. They are
+# read-only and identical in every worker, but fork's copy-on-write does not
+# save them: CPython's refcounts touch every object, so each worker ends up
+# holding its own copy. Measured, not assumed -- 0.42 GB per worker at v2,
+# 2.75 GB at v3, dead linear in the worker count.
+#
+# On a full whitelist W dwarfs the chunk term -- 2.75 GB against 0.46 GB at a
+# 100,000-read chunk -- so extract_threads is effectively the only memory knob
+# that matters, and chunking buys much less than it does on a small list:
+#
+#     v3, 100,000-read chunks:   4 threads   16 GB
+#                                8 threads   28 GB
+#                               16 threads   54 GB
+#                               64 threads  208 GB
+#
+# An earlier version of this comment gave the chunk term alone and put 64
+# threads at 7.7 GB. Against a v3 whitelist the real figure is 208 GB.
+#
+# W DEPENDS ON max_barcode_errors TOO. The per-barcode template array is only
+# built when something will scan it, which is only when max_barcode_errors is
+# unset -- a bounded search resolves to one index and rebuilds that one
+# template. Setting it therefore cuts W as well as the runtime:
+#
+#                        W bounded     W unset
+#     v2                   0.2 GB       0.4 GB
+#     v3                   1.1 GB       2.8 GB
+#
+# and the v3 tables build in 10s rather than 31s.
 #
 # measured on a PacBio-shaped SAM, whatever the size of the run. Before it was
 # chunked this scaled with the read count instead: at eleven million reads the
