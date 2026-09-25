@@ -497,12 +497,24 @@ On a full 10x whitelist `W` dwarfs the chunk term (2.75 GB against 0.46 GB at a
 100,000-read chunk), so **`extract_threads` is effectively the only memory knob
 that matters** and chunking buys much less than it does against a small list:
 
-| v3, 100,000-read chunks | memory |
-|---|---:|
-| 4 threads | 16 GB |
-| 8 threads | 28 GB |
-| 16 threads | 54 GB |
-| 64 threads | 208 GB |
+`W` also depends on `max_barcode_errors`: the per-barcode template array is
+only built when something will scan it, which is only when that setting is
+unset. A bounded search resolves to one index and rebuilds one template, so
+setting it cuts memory as well as runtime.
+
+| | `W` bounded | `W` unset |
+|---|---:|---:|
+| v2 | 0.2 GB | 0.4 GB |
+| v3 | **1.1 GB** | 2.8 GB |
+
+| v3, 100,000-read chunks | `max_barcode_errors: 2` | unset |
+|---|---:|---:|
+| 4 threads | 7 GB | 16 GB |
+| 8 threads | 14 GB | 28 GB |
+| 16 threads | 26 GB | 54 GB |
+| 64 threads | 102 GB | 208 GB |
+
+The v3 tables also build in 10 s rather than 31 s, once, before the first read.
 
 
 It does not depend on how big the run is — that is what chunking bought. It does

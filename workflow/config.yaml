@@ -178,6 +178,17 @@ allele_frequencies: true
 # An earlier version of this comment gave the chunk term alone and put 64
 # threads at 7.7 GB. Against a v3 whitelist the real figure is 208 GB.
 #
+# W DEPENDS ON max_barcode_errors TOO. The per-barcode template array is only
+# built when something will scan it, which is only when max_barcode_errors is
+# unset -- a bounded search resolves to one index and rebuilds that one
+# template. Setting it therefore cuts W as well as the runtime:
+#
+#                        W bounded     W unset
+#     v2                   0.2 GB       0.4 GB
+#     v3                   1.1 GB       2.8 GB
+#
+# and the v3 tables build in 10s rather than 31s.
+#
 # measured on a PacBio-shaped SAM, whatever the size of the run. Before it was
 # chunked this scaled with the read count instead: at eleven million reads the
 # sequences alone are ~22 GB, and such a run dies to the kernel with

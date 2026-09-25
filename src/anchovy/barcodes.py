@@ -178,8 +178,34 @@ def validate_signature(query: str) -> None:
             f"{umi} nt UMI).")
 
 
+def barcode_query_block(query: str, barcode: str) -> str:
+    """The one search template for a single barcode.
+
+    The element build_barcode_query_blocks would have put at that barcode's
+    index, built on demand. Both go through this, so the array and the
+    reconstruction cannot drift.
+
+    WHY IT EXISTS SEPARATELY. The whole array is only needed by the exhaustive
+    scan. Every other path -- an exact index hit, or the bounded neighbourhood
+    search -- resolves to ONE index and then wants ONE template, and building
+    that one from the barcode costs a string concatenation against the 1.6 GB
+    the v3 array occupies in every worker.
+    """
+    n = len(query)
+    return (query[0:SIGNATURE_PREFIX_LEN]
+            + barcode
+            + "N" * (n - SIGNATURE_NON_UMI_LEN)      # UMI width, derived
+            + query[n - SIGNATURE_SUFFIX_LEN:n])
+
+
 def build_barcode_query_blocks(query: str, barcodes) -> np.ndarray:
     """Build one barcode-augmented query template per whitelist barcode.
+
+    ONLY THE EXHAUSTIVE SCAN NEEDS THIS. It is one 60-character template per
+    whitelist entry, held as numpy UCS-4, so 1.6 GB for a v3 list -- and it is
+    rebuilt in every worker, because fork's copy-on-write does not survive
+    CPython's refcounting. With max_barcode_errors set the scan never runs, and
+    _BarcodeState skips building this entirely; see barcode_query_block.
 
     Reproduces cellIDPool's construction:
         query[0:22] + barcode + "N"*(len(query)-48) + query[len-10:len]
@@ -243,9 +269,10 @@ def _substitution_neighbours(barcode: str, errors: int):
                 yield radius, "".join(candidate)
 
 
-def assign_barcode(matchseq: str, barcode_blocks: np.ndarray, whitelist,
+def assign_barcode(matchseq: str, barcode_blocks: np.ndarray | None, whitelist,
                    barcode_index: dict[str, int] | None = None,
-                   max_barcode_errors: int | None = None):
+                   max_barcode_errors: int | None = None,
+                   query: str | None = None):
     """Assign a read's matched signature to its closest whitelist barcode.
 
     The pure core of the original cellMatch: given the read's matched signature
@@ -253,7 +280,13 @@ def assign_barcode(matchseq: str, barcode_blocks: np.ndarray, whitelist,
 
     Args:
         matchseq: the read's matched signature block.
-        barcode_blocks: output of build_barcode_query_blocks.
+        barcode_blocks: output of build_barcode_query_blocks, or None when
+            only an index lookup or a bounded search will be needed -- those
+            resolve to one index and rebuild that template from `query`, which
+            is why the caller can skip the whole array. None with no `query`,
+            or None on a path that falls through to the scan, is a programming
+            error and raises rather than silently answering differently.
+        query: the signature, required when barcode_blocks is None.
         whitelist: the barcode DataFrame (single 'CBC' column).
         barcode_index: optional output of build_barcode_index. When given, a
             read whose barcode region is an exact whitelist entry skips the
@@ -286,11 +319,20 @@ def assign_barcode(matchseq: str, barcode_blocks: np.ndarray, whitelist,
     2.x tries label-based lookup of column 0 and raises KeyError. We use
     positional .iat[minPos, 0] -- the behavior the original intended.
     """
+    def _block(position):
+        if barcode_blocks is not None:
+            return barcode_blocks[position]
+        if query is None:
+            raise ValueError(
+                "assign_barcode needs either barcode_blocks or query; with "
+                "neither it cannot report the matched block.")
+        return barcode_query_block(query, whitelist.iat[position, 0])
+
     if barcode_index is not None:
         candidate = matchseq[SIGNATURE_PREFIX_LEN:SIGNATURE_UMI_START]
         position = barcode_index.get(candidate)
         if position is not None:
-            block = barcode_blocks[position]
+            block = _block(position)
             # One distance, not 737,280 -- the same value the scan would report
             # for this block, since it is the block the scan would have picked.
             return (whitelist.iat[position, 0],
@@ -313,11 +355,18 @@ def assign_barcode(matchseq: str, barcode_blocks: np.ndarray, whitelist,
                     best = hit
             if best is None:
                 return None            # beyond the limit: the caller drops it
-            block = barcode_blocks[best]
+            block = _block(best)
             return (whitelist.iat[best, 0],
                     int(Levenshtein.distance(block, matchseq)),
                     best, block)
 
+    if barcode_blocks is None:
+        # The scan is the one path that genuinely needs every template. Reaching
+        # here without them means the caller skipped the array but did not set
+        # max_barcode_errors, so a read that misses the index has nowhere to go.
+        raise ValueError(
+            "the exhaustive scan needs barcode_blocks; build them, or set "
+            "max_barcode_errors so unmatched reads are bounded instead.")
     min_d, min_pos, matchblock = min_distance_block(barcode_blocks, matchseq)
     barcode = whitelist.iat[min_pos, 0]
     return barcode, min_d, min_pos, matchblock

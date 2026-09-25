@@ -69,14 +69,18 @@ _ASSIGN_STATE: dict = {}
 
 
 def _assign_init(whitelist, barcode_blocks, barcode_index,
-                 umi_start, umi_end_trim, max_barcode_errors=None) -> None:
+                 umi_start, umi_end_trim, max_barcode_errors=None,
+                 query=None) -> None:
     """Pool initializer: publish the shared read-only state to this worker."""
     _ASSIGN_STATE["whitelist"] = whitelist
+    # None when max_barcode_errors is set: see _BarcodeState. `query` then
+    # stands in for it, one rebuilt template at a time.
     _ASSIGN_STATE["barcode_blocks"] = barcode_blocks
     _ASSIGN_STATE["barcode_index"] = barcode_index
     _ASSIGN_STATE["umi_start"] = umi_start
     _ASSIGN_STATE["umi_end_trim"] = umi_end_trim
     _ASSIGN_STATE["max_barcode_errors"] = max_barcode_errors
+    _ASSIGN_STATE["query"] = query
 
 
 def _assign_worker(payload: tuple) -> tuple:
@@ -100,6 +104,7 @@ def _assign_worker(payload: tuple) -> tuple:
     assigned = barcodes.assign_barcode(
         matchseq, barcode_blocks, whitelist, barcode_index=barcode_index,
         max_barcode_errors=_ASSIGN_STATE["max_barcode_errors"],
+        query=_ASSIGN_STATE["query"],
     )
     if assigned is None:
         return None          # barcode beyond the limit; dropped by the caller
@@ -188,7 +193,20 @@ class _BarcodeState:
     def __init__(self, query, whitelist, config):
         self.whitelist = whitelist
         self.config = config
-        self.blocks = barcodes.build_barcode_query_blocks(query, whitelist.CBC)
+        self.query = query
+        # THE BIG ARRAY IS ONLY BUILT WHEN SOMETHING WILL SCAN IT.
+        #
+        # One 60-character template per whitelist entry, numpy UCS-4, rebuilt in
+        # every worker because fork's copy-on-write does not survive CPython's
+        # refcounting. On a v3 list that is 1.6 GB per worker -- 59% of what a
+        # worker holds -- and with max_barcode_errors set nothing ever reads it:
+        # an index hit and a bounded search each resolve to one index, and
+        # barcodes.barcode_query_block rebuilds that single template from the
+        # barcode. Unset, the exhaustive scan needs all of them and this is the
+        # cost of asking for it.
+        self.blocks = (None if config.max_barcode_errors is not None
+                       else barcodes.build_barcode_query_blocks(query,
+                                                                whitelist.CBC))
         # Exact-match index over the whitelist. Every block differs from every
         # other in only the 16 barcode characters, so a read whose barcode
         # region is a whitelist entry can be resolved by lookup instead of by
@@ -201,7 +219,8 @@ class _BarcodeState:
                     initargs=(self.whitelist, self.blocks, self.index,
                               self.config.umi_start_offset,
                               self.config.umi_end_trim,
-                              self.config.max_barcode_errors))
+                              self.config.max_barcode_errors,
+                              self.query))
 
 
 class _Tally:

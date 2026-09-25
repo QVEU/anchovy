@@ -895,3 +895,99 @@ def test_the_stage_forks_exactly_one_pool():
     assert "Pool(config.nthreads)" not in body, (
         "run() builds a pool of its own again; it must reuse the one from "
         "_BarcodeState so there is a single fork, before any pool thread exists")
+
+
+# --------------------------------------------------------------------------- #
+# The whitelist array is only built for the path that scans it
+# --------------------------------------------------------------------------- #
+# build_barcode_query_blocks makes one 60-character template per whitelist
+# entry, held as numpy UCS-4 -- 1.6 GB for a v3 list -- and it is rebuilt in
+# every worker, because fork's copy-on-write does not survive CPython's
+# refcounting. Only the exhaustive scan reads all of it. An index hit and a
+# bounded search each resolve to ONE index, so with max_barcode_errors set the
+# array is never touched and is no longer built: v3 went from 2.75 GB per
+# worker to 1.12, and the tables from 31s to build to 10s.
+def test_one_block_matches_the_array_it_replaces():
+    """The reconstruction has to be the same string, not merely equivalent.
+
+    It is written to the output as reconQuery, so a difference would be a
+    silent change to every row.
+    """
+    from anchovy.barcodes import barcode_query_block, build_barcode_query_blocks
+
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 28 + "TTTCTTATAT"
+    codes = ["AAACCCAAGAAACACT", "AACGTGATCCTTAGGC", "TTTTTTTTTTTTTTTT"]
+    blocks = build_barcode_query_blocks(query, codes)
+    for i, code in enumerate(codes):
+        assert barcode_query_block(query, code) == blocks[i]
+
+    # And for a v2 signature, whose UMI padding is two bases shorter.
+    v2 = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    assert barcode_query_block(v2, codes[0]) == build_barcode_query_blocks(v2, codes)[0]
+
+
+def test_the_array_is_skipped_when_the_search_is_bounded():
+    import pandas as pd
+
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import _BarcodeState
+
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    wl = pd.DataFrame({"CBC": ["AAACCCAAGAAACACT", "AACGTGATCCTTAGGC"]})
+
+    bounded = _BarcodeState(query, wl, ExtractConfig(signature=query,
+                                                     max_barcode_errors=2))
+    assert bounded.blocks is None, (
+        "the per-barcode array is being built for a bounded run again; on a v3 "
+        "whitelist that is 1.6 GB in every worker that never reads it")
+
+    # Unset, the scan needs every template and this is the cost of asking.
+    unbounded = _BarcodeState(query, wl, ExtractConfig(signature=query))
+    assert unbounded.blocks is not None
+    assert len(unbounded.blocks) == 2
+
+
+def test_the_scan_refuses_to_run_without_its_array():
+    """Rather than answering differently, which is how this would hide."""
+    import pandas as pd
+    import pytest as _pytest
+
+    from anchovy.barcodes import assign_barcode, build_barcode_index
+
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    wl = pd.DataFrame({"CBC": ["AAACCCAAGAAACACT"]})
+    index = build_barcode_index(wl.CBC)
+    # A barcode region matching nothing, with no error budget: the scan path.
+    matchseq = query[:22] + "GGGGGGGGGGGGGGGG" + "T" * 26 + query[-10:]
+
+    with _pytest.raises(ValueError, match="exhaustive scan needs"):
+        assign_barcode(matchseq, None, wl, barcode_index=index, query=query)
+
+
+def test_dropping_the_array_does_not_change_any_assignment():
+    """Same reads, same whitelist, array present and absent."""
+    import pandas as pd
+
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+    codes = ["AAACCCAAGAAACACT", "AACGTGATCCTTAGGC", "ACTTGATTGCCAGTAC"]
+    wl = pd.DataFrame({"CBC": codes})
+    blocks = build_barcode_query_blocks(query, codes)
+    index = build_barcode_index(codes)
+
+    reads = [codes[0],                              # exact
+             "AAACCCAAGAAACACA",                    # one substitution
+             "AAACCCAAGAAACAAA",                    # two
+             "GGGGGGGGGGGGGGGG"]                    # beyond any budget
+    for observed in reads:
+        matchseq = query[:22] + observed + "T" * 26 + query[-10:]
+        for limit in (1, 2):
+            with_array = assign_barcode(matchseq, blocks, wl,
+                                        barcode_index=index,
+                                        max_barcode_errors=limit)
+            without = assign_barcode(matchseq, None, wl, barcode_index=index,
+                                     max_barcode_errors=limit, query=query)
+            assert with_array == without, (
+                f"{observed!r} at limit {limit}: {with_array} vs {without}")
