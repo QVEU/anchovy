@@ -539,6 +539,19 @@ snakemake -s workflow/Snakefile --configfile <config> \
     --executor slurm --jobs 200 --group-components cell=200
 ```
 
+**The executor is a separate package.** Snakemake ships only `local`, `dryrun`
+and `touch`; everything else is a plugin, and neither `snakemake-minimal` nor
+the full `snakemake` metapackage pulls one in. `environment.yml` now declares
+it, but an environment created before that needs it adding by hand:
+
+```bash
+conda install -n anchovy -c bioconda -c conda-forge snakemake-executor-plugin-slurm
+```
+
+Without it the run stops at argument parsing — `invalid choice: 'slurm'
+(choose from local, dryrun, touch)` — which reads like a typo rather than a
+missing dependency.
+
 **Every rule declares `mem_mb` and `runtime`.** Without them each job is
 submitted at the partition default, and `extract` is killed on a node with
 plenty free — the same SIGKILL as too small a hand-made allocation, only now

@@ -41,6 +41,17 @@ dependencies:
 
   # --- workflow manager ---
   - snakemake-minimal>=9
+  # SNAKEMAKE SHIPS NO EXECUTORS OF ITS OWN. Every executor past local/dryrun/
+  # touch is a separate package, and neither snakemake-minimal nor the full
+  # snakemake metapackage depends on one -- so without this line
+  # `--executor slurm` fails at argument parsing:
+  #
+  #     invalid choice: 'slurm' (choose from local, dryrun, touch)
+  #
+  # which reads like a typo rather than a missing dependency. Declared here
+  # because the README's cluster instructions are otherwise unrunnable from
+  # the environment this file creates.
+  - snakemake-executor-plugin-slurm>=2
 
   # --- Python libraries the anchovy package builds on (conda-provided so their
   #     compiled parts stay compatible; pip installs only the package itself) ---

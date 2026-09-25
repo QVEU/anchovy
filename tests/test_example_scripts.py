@@ -281,6 +281,28 @@ def test_the_reservation_and_the_printed_warning_are_one_formula():
         "from the chemistry -- that is the whole correction")
 
 
+def test_the_executor_the_readme_tells_you_to_use_is_installable():
+    """`--executor slurm` needs a plugin the environment has to declare.
+
+    Snakemake registers only local/dryrun/touch on its own, and neither
+    snakemake-minimal nor the full metapackage depends on an executor -- so
+    the cluster instructions failed at argument parsing, reading like a typo
+    rather than a missing dependency.
+    """
+    import yaml
+
+    readme = (REPO / "README.md").read_text()
+    if "--executor slurm" not in readme:
+        pytest.skip("the README no longer documents the SLURM executor")
+
+    env = yaml.safe_load((REPO / "environment.yml").read_text())
+    deps = [d for d in env["dependencies"] if isinstance(d, str)]
+    assert any(d.startswith("snakemake-executor-plugin-slurm") for d in deps), (
+        "README documents --executor slurm, but environment.yml installs no "
+        "executor plugin -- the documented command cannot run in the "
+        "environment the repo tells you to create")
+
+
 def test_extract_projects_the_same_gb_the_cluster_reserves():
     """A worked example, so the fit is checked end to end and not term by term.
 
