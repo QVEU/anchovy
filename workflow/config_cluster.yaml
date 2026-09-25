@@ -186,6 +186,27 @@ cons_min_depth: 3
 # Leave at 0.5. Raising it emits MORE IUPAC ambiguity codes, not fewer.
 cons_threshold: 0.5
 
+# --- cluster resources ------------------------------------------------------- #
+# Read when you submit with --executor slurm. WITHOUT THEM EVERY JOB GOES IN AT
+# THE PARTITION DEFAULT, and extract is killed on a node with a terabyte free --
+# the same SIGKILL as too small a hand-made allocation, only blamed on the
+# cluster.
+#
+# reads_estimate: reads expected AFTER mapping and the length filter. It sizes
+# the fasta stage, which pulls the whole anchovy table into memory -- every
+# read's mapped sequence -- at a measured 6.3 KB per read, so 10 million reads
+# is ~84 GB. Nothing else scales with it: extract is chunked, and the per-cell
+# rules see one cell each.
+reads_estimate: 10000000
+
+# Overrides, if a reservation is wrong for your data. The defaults are computed
+# in the Snakefile from measured figures, and extract's follows chemistry,
+# extract_threads and extract_chunk_size on its own.
+#   mem_mb:
+#     extract: 200000
+#   runtime:            # minutes
+#     extract: 480
+
 # --- allele frequencies --------------------------------------------------- #
 # A SECOND ANALYSIS OVER ALL MAPPED CELLS, not the subset above.
 #

@@ -150,6 +150,26 @@ max_barcode_errors: 2
 # denominator. Adds _alleleFrequencies.csv and _cellAlleleFreq.csv.
 allele_frequencies: true
 
+# --- cluster resources ------------------------------------------------------- #
+# Only read when you submit with --executor slurm; ignored on a local run.
+# Without them every job goes in at the partition default, and extract is killed
+# on a node with plenty free.
+#
+# reads_estimate is how many reads the run is expected to yield after mapping.
+# It sizes the fasta stage, which pulls the whole anchovy table into memory --
+# every read's mapped sequence -- at a measured 6.3 KB per read. Nothing else
+# scales with it. The default of 10 million asks for ~84 GB; this fixture has
+# 48 reads, hence the small value here.
+reads_estimate: 1000
+
+# Per-rule overrides, if a reservation is wrong for your data. The defaults are
+# computed in the Snakefile from measured figures; extract's follows chemistry,
+# extract_threads and extract_chunk_size on its own.
+#   mem_mb:
+#     extract: 200000
+#   runtime:            # minutes
+#     extract: 480
+
 # --- extract stage resources ------------------------------------------------- #
 # MEMORY IS BOUNDED BY THE CHUNK, NOT BY THE RUN. extract reads the SAM, runs
 # both passes and writes its output a chunk at a time, so its footprint is
