@@ -599,24 +599,27 @@ job carries its own reservation to the scheduler.
 Barcode assignment is about **90% of the stage's time** on real data — the
 signature search is noise beside it — and nearly all of that is spent on reads
 whose barcode is *not* an exact whitelist hit. So `max_barcode_errors` is the
-lever, not the hardware. Measured on 40,000 reads with 44% of them inexact, 4
-workers:
+lever, not the hardware. Measured end to end on 40,000 reads with 44% of them
+inexact, against a 100,000-barcode whitelist, 4 workers:
 
-| `max_barcode_errors` | whole stage | reads/s | reads assigned |
-|---|---:|---:|---:|
-| `0` | 4.7 s | 8,482 | 56% |
-| **`1`** | **6.4 s** | **6,235** | **85%** |
-| `2` | 21.6 s | 1,849 | 100% |
+| `max_barcode_errors` | whole stage | reads assigned |
+|---|---:|---:|
+| `0` | 1.8 s | 56% |
+| `1` | 2.1 s | 85% |
+| **`2`** | **5.4 s** | **100%** |
 
-**`1` is 3.4× faster than `2` in wall clock.** (The barcode step alone differs
-by 7.6× — 14.4 s against 1.9 s — but plan against the 3.4×, since that is what a
-run actually takes.) The 2-error neighbourhood of a 16-mer is ~1,128 candidates
-against 48 for one error, which is where the time goes.
+**`2` now costs 2.5× what `1` does, not the 5.2× it used to.** The search stops
+at the first shell that hits, so a read whose barcode is one error out is
+settled in 48 candidates instead of 1,128 — the 2-error neighbourhood is only
+enumerated for reads that actually need it. That halved the `2` row (11.6 s →
+5.4 s) and left `1` alone.
 
-The 15% that `2` recovers are the reads whose barcode needed *two* corrections —
-the least trustworthy cell assignments in the run — so dropping them tightens
-the data as well as the clock. Still a judgement about your experiment rather
-than a performance question, but if a run is taking hours, start here.
+That changes the recommendation. `1` used to be the pragmatic default because
+`2` was punitive; now `2` keeps every read for a cost much closer to `1`'s.
+Prefer `2` unless the stage is genuinely your bottleneck. The 15% that only `2`
+recovers are the reads whose barcode needed *two* corrections — the least
+trustworthy assignments in the run — so dropping them is a judgement about your
+experiment, and it is no longer mostly a performance question.
 
 Note also that the bounded search is **not** unconditionally faster than the
 scan it replaces. Its cost is fixed whatever the whitelist holds, while the scan
