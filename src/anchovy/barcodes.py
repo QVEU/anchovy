@@ -249,24 +249,35 @@ def build_barcode_index(barcodes) -> dict[str, int]:
     return index
 
 
-def _substitution_neighbours(barcode: str, errors: int):
-    """Every barcode within `errors` substitutions, nearest radius first.
+def _substitution_shell(barcode: str, radius: int):
+    """Every barcode EXACTLY `radius` substitutions from this one.
 
     48 strings at one error, 1,080 at two -- against 737,280 Levenshtein
     computations for the same question.
+
+    ONE SHELL AT A TIME, so a caller that finds a match can stop without
+    building the next shell at all. Yielding the whole neighbourhood with the
+    radius attached forces the caller to test the radius on every candidate,
+    which costs more than it saves on the common single-radius search.
     """
     from itertools import combinations, product
 
+    for positions in combinations(range(len(barcode)), radius):
+        originals = [barcode[i] for i in positions]
+        for replacements in product("ACGT", repeat=radius):
+            if any(r == o for r, o in zip(replacements, originals)):
+                continue
+            candidate = list(barcode)
+            for i, base in zip(positions, replacements):
+                candidate[i] = base
+            yield "".join(candidate)
+
+
+def _substitution_neighbours(barcode: str, errors: int):
+    """Every barcode within `errors` substitutions, nearest radius first."""
     for radius in range(1, errors + 1):
-        for positions in combinations(range(len(barcode)), radius):
-            originals = [barcode[i] for i in positions]
-            for replacements in product("ACGT", repeat=radius):
-                if any(r == o for r, o in zip(replacements, originals)):
-                    continue
-                candidate = list(barcode)
-                for i, base in zip(positions, replacements):
-                    candidate[i] = base
-                yield radius, "".join(candidate)
+        for candidate in _substitution_shell(barcode, radius):
+            yield radius, candidate
 
 
 def assign_barcode(matchseq: str, barcode_blocks: np.ndarray | None, whitelist,
@@ -346,13 +357,40 @@ def assign_barcode(matchseq: str, barcode_blocks: np.ndarray | None, whitelist,
             # discards it. Enumerating the neighbourhood answers the real
             # question -- is there a whitelist barcode within the limit --
             # and enumerating it costs 48 lookups at one error.
+            # NEAREST SHELL WINS; THE INDEX ONLY BREAKS TIES WITHIN ONE.
+            #
+            # Ranking by index across the whole neighbourhood -- which is what
+            # ignoring the radius amounted to -- returned a 2-error barcode
+            # over an available 1-error one whenever it happened to sit earlier
+            # in the whitelist, and reported the worse distance with it. On a
+            # 40,000-read fixture that was 148 reads assigned to the wrong
+            # cell; shell order brings it to 1.
+            #
+            # THE REMAINING 1 IS A DIFFERENT METRIC, NOT A BUG TO CHASE. The
+            # scan ranks by Levenshtein over the whole 60-character block,
+            # this ranks by substitutions over the 16-character barcode, and
+            # the N-padding across the UMI can make a 2-substitution barcode
+            # tie a 1-substitution one on the block. Matching the scan there
+            # would mean enumerating the outer shell after the inner one has
+            # already hit -- giving up the saving below to move one read in
+            # 40,000 onto the answer with MORE substitutions in it. See
+            # test_the_two_searches_rank_by_different_metrics_when_they_tie.
+            #
+            # Searching a shell at a time is what lets this stop: once a shell
+            # has produced a hit, no shell further out can beat it on error
+            # count, and at a limit of 2 that is 1,080 candidates never built
+            # -- half the stage's wall clock. Testing the radius per candidate
+            # instead would tax the single-shell search, which is the common
+            # one, to speed up the rarer one.
             best = None
-            for _, neighbour in _substitution_neighbours(candidate,
-                                                         max_barcode_errors):
-                hit = barcode_index.get(neighbour)
-                # Lowest index among equals, matching argmin's tie-breaking.
-                if hit is not None and (best is None or hit < best):
-                    best = hit
+            for radius in range(1, max_barcode_errors + 1):
+                for neighbour in _substitution_shell(candidate, radius):
+                    hit = barcode_index.get(neighbour)
+                    # Lowest index among equals, matching argmin's tie-break.
+                    if hit is not None and (best is None or hit < best):
+                        best = hit
+                if best is not None:
+                    break
             if best is None:
                 return None            # beyond the limit: the caller drops it
             block = _block(best)
