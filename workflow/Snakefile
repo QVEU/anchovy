@@ -563,7 +563,12 @@ rule get_whitelist:
         RESOURCES + "/" + CHEM["whitelist"],
     params:
         url=WHITELIST_URL or "",
-        expected=config.get("whitelist_barcodes", CHEM["barcodes"]),
+        # Empty, not None, when the chemistry publishes no count: rendered
+        # into the shell below, a literal "None" makes `[ "$n" -ne None ]`
+        # exit 2, which an `if` reads as false -- so the count check would
+        # skip itself silently and accept whatever was downloaded. That is
+        # the failure this rule exists to prevent.
+        expected=config.get("whitelist_barcodes", CHEM["barcodes"]) or "",
         chemistry=CHEMISTRY,
     resources:
         mem_mb=mem_mb("get_whitelist"),
@@ -580,7 +585,20 @@ rule get_whitelist:
         fi
         rm -f "{output}.dl"
         n=$(grep -c . "{output}.part" || true)
-        if [ "$n" -ne {params.expected} ]; then
+        if [ -z "{params.expected}" ]; then
+            # No published figure for this chemistry (5p-v3). Nothing to
+            # compare against, so check only that a plausible list arrived --
+            # a mirror serving an error page or a truncated file is the thing
+            # that must not get through silently.
+            if [ "$n" -lt 1000 ]; then
+                echo "error: {params.chemistry} whitelist downloaded only $n line(s)." >&2
+                echo "       That is not a 10x barcode list. Left at {output}.part." >&2
+                exit 1
+            fi
+            echo "note: no published barcode count for {params.chemistry}, so the" >&2
+            echo "      downloaded list ($n barcodes) was not checked against one." >&2
+            echo "      Set whitelist_barcodes to have that figure verified." >&2
+        elif [ "$n" -ne {params.expected} ]; then
             echo "error: {params.chemistry} whitelist should have {params.expected} barcodes, got $n." >&2
             echo "       Left at {output}.part. A wrong or truncated whitelist does not fail the" >&2
             echo "       run -- it silently assigns every read to a nearest entry in the wrong" >&2
