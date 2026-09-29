@@ -155,6 +155,33 @@ CHEMISTRIES = {
         "url": ("https://teichlab.github.io/scg_lib_structs/data/"
                 "10X-Genomics/3M-february-2018.txt.gz"),
     },
+    # 5' KITS USE A DIFFERENT LIST FROM 3' KITS, AND THAT IS NOT A DETAIL.
+    # The two are disjoint sets of 16-mers, so running 5' data against the 3'
+    # list does not fail -- it assigns almost every read to a coincidental
+    # neighbour two substitutions away. Measured on a real 8.2M-read run: 0.5%
+    # of reads matched exactly against 3M-february-2018, and 88.6% against
+    # this one. Both runs produced cells, consensuses and genotypes; only one
+    # of them meant anything. extract now refuses the first case outright --
+    # see anchovy.config.min_exact_rate.
+    "5p-v3": {
+        # UNVERIFIED, AND WORTH CHECKING AGAINST YOUR OWN RUN. 28 assumes a
+        # 12 nt UMI. The barcode sits before the UMI so this does not affect
+        # barcode matching, but it does set the UMI slice and the distance
+        # baseline, and a wrong width mis-groups molecules silently. The
+        # 3' handle's position in an existing anchovy CSV gives the true
+        # width:
+        #   collections.Counter(m.find("TTTCTTATAT", 38) - 38 for m in matchseq)
+        # modal 12 -> ns 28; modal 10 -> ns 26.
+        "ns": 28,
+        "whitelist": "3M-5pgex-jan-2023.txt",
+        # Counted from the file when one is supplied, which it must be (below).
+        "barcodes": None,
+        # NO URL ON PURPOSE. Every mirror for this list is one this repo has
+        # not fetched and verified, and shipping an unverified whitelist URL
+        # is the same class of mistake as the wrong whitelist itself. Supply a
+        # local copy; the WorkflowError below names where Cell Ranger keeps it.
+        "url": None,
+    },
 }
 
 CHEMISTRY = config.get("chemistry", "v3")
@@ -448,7 +475,10 @@ def _whitelist_barcodes():
     if path and os.path.exists(path):
         with open(path) as handle:
             return sum(1 for line in handle if line.strip())
-    return CHEM["barcodes"]
+    # A chemistry whose list has no published count and no URL (5p-v3) can
+    # only reach here before its local file exists -- a dry run, say. Size it
+    # as a full 10x list rather than as nothing, so the reservation errs high.
+    return CHEM["barcodes"] or CHEMISTRIES["v3"]["barcodes"]
 
 
 # THE SAME FUNCTION THE STAGE ITSELF PRINTS FROM. The reservation and the
