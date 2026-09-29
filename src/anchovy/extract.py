@@ -37,7 +37,7 @@ from anchovy import barcodes
 from anchovy.config import ExtractConfig
 from anchovy.io import AnchovyCsvSink, iter_sam_chunks, read_whitelist
 from anchovy.schema import (SamColumns, AnchovyColumns,
-                            SIGNATURE_NON_UMI_LEN,
+                            SIGNATURE_BARCODE_LEN, SIGNATURE_NON_UMI_LEN,
                             SIGNATURE_PREFIX_LEN, SIGNATURE_UMI_START)
 
 
@@ -301,6 +301,44 @@ class _Tally:
         self.assigned = 0
         self.distances = Counter()
 
+    def verify_whitelist_matches(self, config, whitelist_size):
+        """Raise when the barcodes in the data are not in this whitelist.
+
+        Called once, on the first chunk, before anything downstream is
+        written. See config.min_exact_rate for why this failure needs a loud
+        check: it is silent in every output the pipeline produces.
+        """
+        floor = getattr(config, "min_exact_rate", 0.0)
+        if not floor or not self.payloads:
+            return
+        rate = self.exact / self.payloads
+        if rate >= floor:
+            return
+
+        # The list's own density -- what blind coincidence alone would give.
+        chance = whitelist_size / 4 ** SIGNATURE_BARCODE_LEN
+        raise ValueError(
+            "only {:.2%} of the first {:,} reads carry a barcode that is an "
+            "EXACT entry in this whitelist.\n"
+            "  A whitelist matching the data gives 60-90%. This list holds "
+            "{:,} barcodes, so blind chance alone gives {:.2%} -- and the "
+            "observed rate is down in that region, which means the barcodes "
+            "in these reads are not in this list.\n"
+            "\n"
+            "  The reads are probably fine; the pairing is what to check:\n"
+            "    - 5' and 3' kits use DIFFERENT whitelists. 3' v3 is "
+            "3M-february-2018.txt, 5' v3 is 3M-5pgex-jan-2023.txt. Swapping "
+            "those two looks exactly like this.\n"
+            "    - `chemistry` and `whitelist` in the config have to agree.\n"
+            "    - Cell Ranger's own barcodes.tsv for these samples is the "
+            "definitive list, if you have that run.\n"
+            "\n"
+            "  Allowed to continue, the search assigns nearly every read to a "
+            "coincidental neighbour two substitutions away, and the cells, "
+            "consensuses and genotypes that come out of it look ordinary.\n"
+            "  Set `min_exact_rate: 0` to proceed anyway."
+            .format(rate, self.payloads, whitelist_size, chance))
+
     def report(self, config, baseline):
         if self.payloads:
             rest = ("the rest are resolved within {} error(s) or dropped"
@@ -522,6 +560,11 @@ def run(sam: str, whitelist: str, signature: str | None = None,
             chunk = chunk[chunk.matchseq != ""]
 
             rows = _assign_chunk(chunk, state, pool, tally)
+            if n_chunk == 1:
+                # ONE CHUNK IS ENOUGH TO KNOW, AND IT IS THE LAST CHEAP MOMENT.
+                # The exact-match rate is settled statistically by the first
+                # hundred thousand reads, and nothing has been written yet.
+                tally.verify_whitelist_matches(config, len(wl_df))
             frame = pd.DataFrame(rows, columns=AnchovyColumns.ORDER)
             if sink is not None:
                 sink.write(frame)

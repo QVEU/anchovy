@@ -1159,3 +1159,97 @@ def test_dropping_the_array_does_not_change_any_assignment():
                                      max_barcode_errors=limit, query=query)
             assert with_array == without, (
                 f"{observed!r} at limit {limit}: {with_array} vs {without}")
+
+
+# --------------------------------------------------------------------------- #
+# Refusing a whitelist that does not correspond to the data
+# --------------------------------------------------------------------------- #
+# The failure this catches produced 8.2 million reads of plausible-looking
+# nonsense. 5' and 3' kits use disjoint whitelists, so running one against the
+# other does not fail -- every read finds a coincidental neighbour two
+# substitutions away in a 6.8M-entry list. Measured on that run: 0.5% exact
+# against the wrong list, 88.6% against the right one.
+def _mismatch_fixture(tmp_path, matching):
+    """A SAM whose barcodes are, or are not, in the whitelist it ships with."""
+    import random
+
+    rng = random.Random(4)
+    query = "CTACACGACGCTCTTCCGATCT" + "N" * 26 + "TTTCTTATAT"
+
+    def rand16():
+        return "".join(rng.choice("ACGT") for _ in range(16))
+
+    in_reads = [rand16() for _ in range(12)]
+    listed = in_reads if matching else [rand16() for _ in range(12)]
+    (tmp_path / "wl.txt").write_text("\n".join(listed) + "\n")
+
+    lines = ["@SQ\tSN:ref\tLN:900"]
+    for i in range(60):
+        bc = in_reads[i % len(in_reads)]
+        umi = "".join(rng.choice("ACGT") for _ in range(10))
+        sig = query[:22] + bc + umi + query[-10:]
+        left = "".join(rng.choice("ACGT") for _ in range(20))
+        right = "".join(rng.choice("ACGT") for _ in range(300))
+        seq = left + sig + right
+        lines.append("\t".join([f"r{i}", "0", "ref", "1", "60",
+                                f"{len(left) + len(sig)}S{len(right)}M",
+                                "*", "0", "0", seq, "I" * len(seq)]))
+    (tmp_path / "s.sam").write_text("\n".join(lines) + "\n")
+    return str(tmp_path / "s.sam"), str(tmp_path / "wl.txt"), query
+
+
+def test_a_whitelist_that_does_not_match_the_data_is_refused(tmp_path, capsys):
+    """The guard that would have saved an 8.2M-read run."""
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run
+
+    sam, wl, query = _mismatch_fixture(tmp_path, matching=False)
+    with pytest.raises(ValueError) as excinfo:
+        run(sam=sam, whitelist=wl, signature=query,
+            config=ExtractConfig(signature=query, nthreads=1))
+    capsys.readouterr()
+
+    message = str(excinfo.value)
+    assert "EXACT entry in this whitelist" in message
+    # It has to name the cause, because the bare number helped nobody.
+    assert "3M-5pgex-jan-2023" in message and "3M-february-2018" in message
+    assert "min_exact_rate" in message
+
+
+def test_the_guard_does_not_fire_when_the_whitelist_matches(tmp_path, capsys):
+    """It must not cry wolf: the bundled example has to keep running."""
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run
+
+    sam, wl, query = _mismatch_fixture(tmp_path, matching=True)
+    df = run(sam=sam, whitelist=wl, signature=query,
+             config=ExtractConfig(signature=query, nthreads=1))
+    capsys.readouterr()
+    assert len(df) == 60
+
+
+def test_the_guard_can_be_switched_off(tmp_path, capsys):
+    """A library where a low rate is genuinely expected is still runnable."""
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run
+
+    sam, wl, query = _mismatch_fixture(tmp_path, matching=False)
+    df = run(sam=sam, whitelist=wl, signature=query,
+             config=ExtractConfig(signature=query, nthreads=1,
+                                  min_exact_rate=0))
+    capsys.readouterr()
+    assert len(df) == 60, "disabled, the old permissive behaviour is intact"
+
+
+def test_the_guard_fires_before_anything_is_written(tmp_path, capsys):
+    """Refusing after the CSV exists would be no better than not refusing."""
+    from anchovy.config import ExtractConfig
+    from anchovy.extract import run_to_csv
+
+    sam, wl, query = _mismatch_fixture(tmp_path, matching=False)
+    out = tmp_path / "out.csv"
+    with pytest.raises(ValueError):
+        run_to_csv(sam=sam, whitelist=wl, out_path=str(out), signature=query,
+                   config=ExtractConfig(signature=query, nthreads=1))
+    capsys.readouterr()
+    assert not out.exists(), "a refused run must leave no output behind"

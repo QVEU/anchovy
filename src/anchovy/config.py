@@ -116,6 +116,27 @@ class ExtractConfig:
     # blocks on a 200-base window, against a pass that is ~10% of the stage.
     downstream_window: int = 12
 
+    # Floor on the fraction of reads whose barcode is an EXACT whitelist
+    # entry, checked once on the first chunk. Below it, extract raises.
+    #
+    # THIS EXISTS BECAUSE THE FAILURE IT CATCHES IS INVISIBLE. A whitelist that
+    # does not correspond to the data -- most easily by pairing a 5' library
+    # with a 3' list, which are entirely different sets -- passes
+    # validate_whitelist, because the entries are well-formed barcodes. They
+    # are just not THESE barcodes. The search then assigns nearly every read to
+    # a coincidental neighbour: in a 6.8 million-entry list almost any 16-mer
+    # has something two substitutions away. A real run did 8.2 million reads
+    # that way and produced cells, consensuses and genotypes that all looked
+    # ordinary.
+    #
+    # The rates separate cleanly. Measured on that run: 0.5% against the wrong
+    # list, 88.6% against the right one. Blind chance gives the list's own
+    # density -- 0.16% for 6,794,880 entries, 0.02% for 737,280 -- so anything
+    # down in that region is the wrong list rather than poor data.
+    #
+    # Set to 0 to disable, for a library where a low rate is genuinely expected.
+    min_exact_rate: float = 0.05
+
     # Minimum read length filter, applied as length > this value. The original
     # used the query/signature length itself (minL = quL) as the threshold.
     # None means "use len(signature)", preserving the original behavior exactly;
