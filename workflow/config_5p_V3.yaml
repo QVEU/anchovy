@@ -1,0 +1,58 @@
+# config_5p_V3.yaml -- 10x Chromium 5' v3, cluster run.
+#
+# Copy this next to your FASTQs and fill in the five paths marked FILL IN.
+# Everything below them has a working default; change only what you need.
+#
+# Run:
+#   snakemake -s workflow/Snakefile --configfile <this file> \
+#       --executor slurm --jobs 200 --group-components cell=200
+#
+# Locally inside an salloc, add --resources mem_mb=<your --mem in MB>, or the
+# per-rule reservations are ignored and two samples can overrun the node.
+
+# --- paths -------------------------------------------------------------------
+input_dir: "/FILL/IN/path/to/folder/of/fastqs"    # every FASTQ here is run
+template:  "/FILL/IN/path/to/genome.fasta"        # minimap2 target
+reference: "/FILL/IN/path/to/genome.fasta"        # usually the same file
+gff:       "/FILL/IN/path/to/genome.gff3"         # region names; omit to skip
+
+# --- 5' v3 chemistry ---------------------------------------------------------
+chemistry: "5p-v3"
+# 5' kits use a DIFFERENT whitelist from 3' kits. Must be the 5' one, gunzipped.
+# Cell Ranger: cellranger-x.y.z/lib/python/cellranger/barcodes/3M-5pgex-jan-2023.txt.gz
+# There is no download for this list, so a local path is required.
+whitelist: "/FILL/IN/path/to/3M-5pgex-jan-2023.txt"
+
+# --- mapping -----------------------------------------------------------------
+minimap_preset: "map-hifi"     # map-ont for Nanopore
+map_threads: 64                # under --executor slurm there is no --cores to follow
+
+# --- extract -----------------------------------------------------------------
+extract_threads: 64            # ~102 GB reserved at this count against a full whitelist
+extract_chunk_size: 100000
+max_barcode_errors: 2          # 2 keeps every read at ~2.5x the cost of 1
+
+# --- sizing ------------------------------------------------------------------
+reads_estimate: 10000000       # reads expected after mapping; sizes the fasta stage
+
+# --- per-cell consensus ------------------------------------------------------
+min_reads: 20
+cons_min_depth: 3
+cons_threshold: 0.5
+min_breadth: 1.0
+
+# --- genotypes ---------------------------------------------------------------
+window: cds
+depth_min: 0
+allele_frequencies: true
+
+# --- optional ----------------------------------------------------------------
+# mem_mb:                      # MB, per rule; defaults are computed
+#   extract: 200000
+#   fasta: 120000
+# runtime:                     # minutes, per rule
+#   extract: 480
+# orf_start: 1                 # 1-based CDS bounds, if no gff
+# orf_end: 900
+# keep_ambiguous: true         # keep IUPAC codes as genotype tokens
+# report: false                # skip the R report
