@@ -204,9 +204,11 @@ def build_parser() -> argparse.ArgumentParser:
                                 "only exact barcodes, 1 allows one substitution.")
     p_extract.add_argument("--chunk-size", type=int, dest="chunk_size",
                            help="Reads held in memory at once (default: 100000). "
-                                "This sets the stage's footprint, roughly "
-                                "0.3 GB + threads x 4.6 KB x chunk-size; lower "
-                                "it on a tight node.")
+                                "Costs threads x 4.6 KB x chunk-size, on top of "
+                                "the whitelist's lookup tables -- which are the "
+                                "larger term on a full 10X list, so lower "
+                                "--threads first on a tight node. The stage "
+                                "prints what it will hold before it starts.")
     p_extract.set_defaults(func=_cmd_extract)
 
     # --- fasta ---

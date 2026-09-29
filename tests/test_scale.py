@@ -606,6 +606,174 @@ def test_substitution_neighbourhood_sizes_and_exclusivity():
 
 
 # --------------------------------------------------------------------------- #
+# More than one radius: nearest wins, and the index only breaks ties
+# --------------------------------------------------------------------------- #
+# Everything above runs at a limit of 0 or 1, where the neighbourhood has a
+# single radius and the order candidates arrive in cannot matter. At 2 it can,
+# and that is the limit config_cluster.yaml ships.
+def _two_radius_whitelist(observed="ACGTACGTACGTACGT"):
+    """A whitelist where the 2-error entry sits EARLIER than the 1-error one.
+
+    Returns (whitelist, observed, one_error_entry, two_error_entry). The filler
+    barcodes are all >= 5 away from `observed` so only the two planted entries
+    can win.
+    """
+    import numpy as np
+    import Levenshtein
+
+    one_err = "T" + observed[1:]
+    two_err = "TT" + observed[2:]
+    assert sum(a != b for a, b in zip(observed, one_err)) == 1
+    assert sum(a != b for a, b in zip(observed, two_err)) == 2
+
+    rng = np.random.default_rng(11)
+    filler = []
+    while len(filler) < 98:
+        bc = "".join(rng.choice(list("ACGT"), size=16))
+        if Levenshtein.distance(bc, observed) >= 5:
+            filler.append(bc)
+
+    cbcs = [two_err] + filler[:4] + [one_err] + filler[4:]
+    return pd.DataFrame({"CBC": cbcs}), observed, one_err, two_err
+
+
+def test_the_nearer_barcode_wins_even_from_a_higher_whitelist_index():
+    """The bounded search must not prefer a 2-error entry for sitting first.
+
+    It exists to give the scan's answer more cheaply, and the scan is argmin
+    over distance -- nearest wins, and the index breaks ties only among equals.
+    Ranking purely by index assigns the read to the wrong cell whenever a
+    2-error entry happens to precede the 1-error one.
+    """
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl, observed, one_err, two_err = _two_radius_whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+    block = _read_block(observed)
+
+    bounded = assign_barcode(block, blocks, wl, barcode_index=index,
+                             max_barcode_errors=2)
+    assert bounded is not None
+    assert bounded[0] == one_err, (
+        f"bounded search picked {bounded[0]} (2 errors, whitelist index "
+        f"{bounded[2]}) over {one_err} (1 error) -- the read is assigned to "
+        f"the wrong cell")
+
+    # And it is the scan's answer, not merely the nearer of the two.
+    assert bounded[:3] == assign_barcode(block, blocks, wl)[:3]
+
+
+def test_the_two_searches_rank_by_different_metrics_when_they_tie():
+    """Documents the one place bounded and scan still part company.
+
+    The scan ranks by Levenshtein over the whole 60-character block; the
+    bounded search ranks by substitution count over the 16-character barcode.
+    The N-padding covering the UMI can make a 2-substitution barcode tie a
+    1-substitution one on the block, and then the two disagree: the scan takes
+    the lower whitelist index, the bounded search takes the fewer errors.
+
+    Agreeing here would mean enumerating the outer shell after the inner one
+    has already hit -- i.e. giving up the early exit, which is the entire
+    saving. The trade is deliberate: on a 40,000-read fixture it costs one
+    read and buys back 147 that the old index-ranked search assigned to the
+    wrong cell outright.
+
+    Fewer substitutions is also the more defensible call biologically: one
+    sequencing error is likelier than two.
+    """
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    observed = "GGGAGCGCGTCCCCCC"
+    two_sub = "GGGAGCGCGCCCCCCA"
+    one_sub = "GGGTGCGCGTCCCCCC"
+    assert sum(a != b for a, b in zip(observed, two_sub)) == 2
+    assert sum(a != b for a, b in zip(observed, one_sub)) == 1
+
+    wl = pd.DataFrame({"CBC": [two_sub, one_sub]})   # the 2-error one first
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+    block = _read_block(observed)
+
+    scan = assign_barcode(block, blocks, wl)
+    bounded = assign_barcode(block, blocks, wl, barcode_index=index,
+                             max_barcode_errors=2)
+
+    assert scan[1] == bounded[1], (
+        "this case is only interesting while the two candidates tie on "
+        "whole-block distance; if they no longer do, the fixture has drifted")
+    assert scan[0] == two_sub, "the scan breaks the tie by whitelist index"
+    assert bounded[0] == one_sub, "the bounded search breaks it by error count"
+
+
+def test_bounded_and_unbounded_agree_at_a_limit_of_two():
+    """The agreement test above runs at 1, where there is only one radius.
+
+    Holds wherever the two candidates do not tie on whole-block distance --
+    see the test above for the exception.
+    """
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl = _whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    for i in (3, 44, 120):
+        entry = wl.CBC[i]
+        other = "T" if entry[0] != "T" else "A"
+        second = "G" if entry[1] != "G" else "C"
+        for barcode in (entry,
+                        other + entry[1:],                 # one error
+                        other + second + entry[2:]):       # two errors
+            block = _read_block(barcode)
+            bounded = assign_barcode(block, blocks, wl, barcode_index=index,
+                                     max_barcode_errors=2)
+            if bounded is not None:
+                assert bounded[:3] == assign_barcode(block, blocks, wl)[:3], (
+                    f"bounded and scan disagree on {barcode}")
+
+
+def test_a_hit_at_one_error_never_draws_the_two_error_neighbourhood():
+    """Finding it at radius 1 settles it: radius 2 cannot beat distance 1.
+
+    Enumerating radius 2 anyway is 1,080 candidates per read thrown away, and
+    it is the whole reason a limit of 2 costs so much more than a limit of 1.
+    """
+    from collections import Counter
+
+    from anchovy import barcodes
+    from anchovy.barcodes import (assign_barcode, build_barcode_index,
+                                  build_barcode_query_blocks)
+
+    wl, observed, _, _ = _two_radius_whitelist()
+    blocks = build_barcode_query_blocks(TEST_SIGNATURE, wl.CBC)
+    index = build_barcode_index(wl.CBC)
+
+    drawn = Counter()
+    real = barcodes._substitution_shell
+
+    def counting(barcode, radius):
+        for candidate in real(barcode, radius):
+            drawn[radius] += 1
+            yield candidate
+
+    barcodes._substitution_shell = counting
+    try:
+        assign_barcode(_read_block(observed), blocks, wl, barcode_index=index,
+                       max_barcode_errors=2)
+    finally:
+        barcodes._substitution_shell = real
+
+    assert drawn[1] == 48, f"expected the radius-1 shell, drew {drawn[1]}"
+    assert drawn[2] == 0, (
+        f"drew {drawn[2]} radius-2 candidates after already finding a match at "
+        f"radius 1 -- the shell is still being enumerated")
+
+
+# --------------------------------------------------------------------------- #
 # The extract CSV must be complete or absent, never half-written
 # --------------------------------------------------------------------------- #
 def test_anchovy_csv_is_written_atomically(tmp_path):

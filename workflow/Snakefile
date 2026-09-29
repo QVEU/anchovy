@@ -99,6 +99,9 @@ RESOURCES   = _under_input("resources_dir", "resources")
 # definition of what a sample is called. ValueError becomes WorkflowError here
 # because that is what snakemake reports cleanly.
 from anchovy.io import discover_fastqs
+# The extract stage's own memory model, so the reservation below and the figure
+# the stage prints cannot disagree.
+from anchovy.extract import projected_memory_gb
 
 
 # `samples` names them explicitly instead of discovering them, which is what
@@ -417,23 +420,12 @@ READS_ESTIMATE = config.get("reads_estimate", 10_000_000)
 EXTRACT_THREADS = int(config.get("extract_threads", 16))
 CHUNK_SIZE = int(config.get("extract_chunk_size", 100_000))
 
-# Per-worker cost of the whitelist lookup tables, as a line through two
-# measured points per mode -- 737,280 and 6,794,880 barcodes, the real v2 and
-# v3 lists:
-#
-#     bounded    0.19 GB and 1.12 GB    ->  0.077 + 1.54e-7 x barcodes
-#     unbounded  0.36 GB and 2.75 GB    ->  0.069 + 3.95e-7 x barcodes
-#
-# Bounded is cheaper because the per-barcode template array is only built when
-# the exhaustive scan will read it -- see _BarcodeState. The ~0.07 GB intercept
-# is the fixed cost a worker pays whatever the list holds.
-#
 # SIZED FROM THE LIST ITSELF WHEN THERE IS ONE. A run-specific Cell Ranger list
-# of a few thousand barcodes costs essentially the intercept, and keying this on
-# `chemistry` instead would reserve v3's 1.12 GB per worker for it -- 36 GB for
-# a run that needs 13. The line count is knowable here because the file already
-# exists; only a list still to be downloaded falls back to the chemistry's
-# published count.
+# of a few thousand barcodes costs essentially the fixed per-worker overhead,
+# and keying this on `chemistry` instead would reserve v3's 1.12 GB per worker
+# for it -- 36 GB for a run that needs 13. The line count is knowable here
+# because the file already exists; only a list still to be downloaded falls
+# back to the chemistry's published count.
 def _whitelist_barcodes():
     path = config.get("whitelist")
     if path and os.path.exists(path):
@@ -442,13 +434,14 @@ def _whitelist_barcodes():
     return CHEM["barcodes"]
 
 
-_W = ((0.077 + 1.535e-7 * _whitelist_barcodes())
-      if config.get("max_barcode_errors") is not None
-      else (0.069 + 3.945e-7 * _whitelist_barcodes()))
-
-# extract holds the tables once in the parent and once per worker, plus the
-# chunk. It does NOT scale with the size of the run.
-_EXTRACT_GB = _W + EXTRACT_THREADS * (_W + 4.6e-6 * CHUNK_SIZE)
+# THE SAME FUNCTION THE STAGE ITSELF PRINTS FROM. The reservation and the
+# warning extract writes on the way in have to be the same number, and when
+# each carried its own expression they stopped being: the stage went on
+# promising 7.7 GB long after this had been corrected to account for the
+# whitelist. See anchovy.extract.projected_memory_gb for the measurements.
+_EXTRACT_GB = projected_memory_gb(
+    _whitelist_barcodes(), EXTRACT_THREADS, CHUNK_SIZE,
+    bounded=config.get("max_barcode_errors") is not None)
 
 _DEFAULT_MEM_MB = {
     "get_whitelist":   _mb(2),            # a download and a line count

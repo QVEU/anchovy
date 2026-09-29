@@ -104,14 +104,19 @@ class ExtractConfig:
 
     # Reads held in memory at once. The stage reads the SAM, runs both passes
     # and builds its output a chunk at a time, so this -- not the size of the
-    # run -- is what sets its footprint, roughly
+    # run -- is one of the two terms in its footprint:
     #
-    #     0.3 GB + nthreads x 4.6 KB x chunk_size
+    #     GB = W + nthreads x ( W + 4.6 KB x chunk_size )
     #
-    # measured on a PacBio-shaped SAM. 100,000 costs about 4 GB at 8 workers and
-    # keeps the per-chunk overhead (one pool dispatch) irrelevant. Lower it on a
-    # tight node; there is little to gain from raising it, because the pool is
-    # already saturated well below this.
+    # where W is the whitelist's lookup tables, paid once per worker. See
+    # extract.projected_memory_gb, which is what both the stage and the
+    # workflow's SLURM reservation compute this from.
+    #
+    # CHUNK SIZE IS THE SMALLER KNOB ON A FULL WHITELIST. At v3's 6.8 million
+    # barcodes W is 2.75 GB against the chunk term's 0.46 GB, so nthreads is
+    # what to lower on a tight node; chunking only dominates on a small
+    # run-specific list. There is little to gain from raising this either way,
+    # because the pool is already saturated well below it.
     chunk_size: int = 100_000
 
     def effective_min_read_length(self) -> int:

@@ -267,15 +267,19 @@ allele_frequencies: true
 # is spent on the reads whose barcode is NOT an exact whitelist hit. Measured on
 # 40,000 reads, 44% of them inexact, 4 workers:
 #
-# THE WHOLE STAGE, end to end, against a 20,000-barcode list:
+# THE WHOLE STAGE, end to end, against a 100,000-barcode list:
 #
-#     2      21.6 s   1,849 reads/s   100% of reads assigned
-#     1       6.4 s   6,235 reads/s    85%
-#     0       4.7 s   8,482 reads/s    56%
+#     2       5.4 s   100% of reads assigned
+#     1       2.1 s    85%
+#     0       1.8 s    56%
 #
-# So 1 is 3.4x faster than 2 in wall clock. The barcode step alone differs by
-# 7.6x (14.4 s against 1.9 s) -- quote the 3.4x, since that is what a run
-# actually takes; the 7.6x is the part of it this setting touches.
+# So 2 costs 2.5x what 1 does, and keeps every read. It used to cost 5.2x
+# (11.6 s): the search now stops at the first shell that produces a hit, so a
+# barcode one error out is settled in 48 candidates rather than 1,128, and the
+# 2-error neighbourhood is built only for the reads that need it.
+#
+# PREFER 2 UNLESS extract IS ACTUALLY YOUR BOTTLENECK. The old gap is what made
+# 1 the pragmatic default; it is much smaller now.
 #
 # The same step against a 2,000-barcode list, which is where the second point
 # below comes from:
@@ -286,14 +290,15 @@ allele_frequencies: true
 #
 # TWO THINGS TO READ OFF THAT. First, the 15% that 2 recovers over 1 are the
 # reads whose barcode needed TWO corrections -- the least trustworthy
-# assignments in the run -- so dropping them tightens the data as well as the
-# clock. The 2-error neighbourhood of a 16-mer is ~1,128 candidates against 48
-# for one error, which is where the time goes. If a run is taking hours, this
-# is the knob.
+# assignments in the run -- so dropping them is a judgement about the data, and
+# now much less of one about the clock. The 2-error neighbourhood of a 16-mer
+# is ~1,128 candidates against 48 for one error, and it is only enumerated for
+# the reads the 48 could not settle.
 #
 # Second, the bounded search is NOT unconditionally faster than the scan it
-# replaces. Its cost is fixed -- the same ~1,128 lookups whatever the whitelist
-# holds -- while the scan is linear in the list. Against 10X's 737,280 entries
+# replaces. Its cost does not depend on the whitelist's length -- 48 lookups,
+# or up to ~1,128 when the barcode is two errors out -- while the scan is
+# linear in the list. Against 10X's 737,280 entries
 # the bound wins enormously; against a run-specific list of a couple of thousand
 # barcodes from Cell Ranger, leaving it unset was faster than setting it to 2.
 # Check your own list's length before assuming.
