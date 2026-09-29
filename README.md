@@ -147,8 +147,8 @@ networks and a rendered report — with its outputs named after it, in
 input_dir: "path/to/fastqs"         # a FOLDER of reads; one run covers all of them
 template: "path/to/reference.fasta" # the reference genome
 gff: "path/to/reference.gff3"       # region model, for frame-correct annotation
-chemistry: "v3"                     # v2 or v3 -- sets the barcode signature AND
-                                    # the whitelist, which have to agree
+chemistry: "v3"                     # v2, v3 or 5p-v3 -- sets the barcode signature
+                                    # AND the whitelist, which have to agree
 ```
 
 That is the whole required set. The sample names come from the FASTQ filenames,
@@ -159,7 +159,9 @@ barcode count before anything uses it.
 ### Every other setting
 
 `workflow/config_cluster.yaml` is the fully commented reference — it sets most
-of these and says why. The complete list:
+of these and says why. `workflow/config_5p_V3.yaml` is the opposite: a
+minimally commented 5' v3 cluster config with five paths to fill in and
+working defaults for the rest. The complete list:
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -178,7 +180,7 @@ of these and says why. The complete list:
 | `minimap_preset` | `map-hifi` | `map-ont` for Nanopore |
 | `map_threads` | `--cores` | Threads for the initial mapping. Follows the run's core count unless set |
 | **Barcodes** | | |
-| `chemistry` | `v3` | `v2` or `v3`. Sets the read signature *and* the whitelist together |
+| `chemistry` | `v3` | `v2`, `v3` or `5p-v3`. Sets the read signature *and* the whitelist together |
 | `whitelist` | downloaded | A local or run-specific barcode list |
 | `whitelist_url` | 10X's | Fetch the whitelist from your own mirror |
 | `whitelist_barcodes` | per chemistry | Override the barcode count a download is checked against |
