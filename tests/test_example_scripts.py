@@ -370,3 +370,45 @@ def test_the_core_count_is_guarded_for_the_cluster_path():
     assert "except WorkflowError:" in src, (
         "unguarded workflow.cores breaks `--executor slurm` at parse time")
     assert "return default" in src
+
+
+def test_the_whitelist_count_check_cannot_skip_itself_silently():
+    """A chemistry with no published count must not disable the check by accident.
+
+    `expected` is interpolated straight into shell. Rendered as the literal
+    "None", `[ "$n" -ne None ]` exits 2, an `if` reads that as false, and the
+    rule accepts whatever was downloaded -- silently skipping the one check
+    that stops a wrong whitelist. Which is the failure the 5' work was about.
+    """
+    rule = SNAKEFILE.split("rule get_whitelist:")[1].split("\nrule ")[0]
+
+    assert 'CHEM["barcodes"]) or ""' in rule, (
+        "expected must fall back to an empty string, never None")
+    assert '[ -z "{params.expected}" ]' in rule, (
+        "the unknown-count branch has to be explicit, not an accident of "
+        "shell comparing an integer against the word None")
+
+    # And the unknown branch still has to reject an implausible download.
+    unknown = rule.split('[ -z "{params.expected}" ]')[1].split("elif")[0]
+    assert "-lt 1000" in unknown and "exit 1" in unknown, (
+        "with no count to check, a truncated list or an error page served by "
+        "a mirror would otherwise sail through")
+
+
+def test_every_chemistry_either_publishes_a_count_or_has_no_url():
+    """The pairing that makes the rule above safe.
+
+    A chemistry that can be downloaded must be checkable; one that cannot be
+    checked must not be downloadable by default.
+    """
+    import ast
+    import re
+
+    src = re.search(r"^CHEMISTRIES = (\{.*?^\})", SNAKEFILE, re.M | re.S).group(1)
+    table = ast.literal_eval(src)
+    assert "5p-v3" in table and "v3" in table, "chemistry table parsing broke"
+
+    for name, chem in table.items():
+        assert chem["barcodes"] or not chem["url"], (
+            f"chemistry {name} downloads a whitelist but publishes no barcode "
+            f"count to verify it against")
