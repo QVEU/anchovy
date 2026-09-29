@@ -337,3 +337,36 @@ def test_extract_is_sized_from_the_whitelist_not_the_chemistry():
     assert 'CHEM["barcodes"]' in SNAKEFILE, (
         "a whitelist still to be downloaded has no file to count, so it has to "
         "fall back to the chemistry's published count")
+
+
+# --------------------------------------------------------------------------- #
+# Threads follow the cores the run was given
+# --------------------------------------------------------------------------- #
+def test_no_rule_hardcodes_a_thread_count():
+    """snakemake caps `threads` at --cores but never raises it.
+
+    Fixed defaults meant `--cores 64` still ran minimap2 with -t 8 and extract
+    with 16 workers on an otherwise idle node.
+    """
+    import re
+
+    for decl in re.findall(r"^    threads: (.+)$", SNAKEFILE, flags=re.M):
+        assert not decl.strip().isdigit(), (
+            f"`threads: {decl}` is a fixed count; it cannot follow --cores")
+        assert "_cores_or(" in decl or "EXTRACT_THREADS" in decl, (
+            f"`threads: {decl}` does not derive from the run's core count")
+
+    assert "EXTRACT_THREADS = int(config.get(\"extract_threads\", _cores_or(" \
+        in SNAKEFILE
+
+
+def test_the_core_count_is_guarded_for_the_cluster_path():
+    """workflow.cores RAISES when --cores is unset, and this runs at parse time.
+
+    `--executor slurm --jobs N` passes no --cores, so an unguarded
+    workflow.cores would fail every cluster run before the DAG was built.
+    """
+    src = SNAKEFILE.split("def _cores_or")[1].split("\n\n")[0]
+    assert "except WorkflowError:" in src, (
+        "unguarded workflow.cores breaks `--executor slurm` at parse time")
+    assert "return default" in src

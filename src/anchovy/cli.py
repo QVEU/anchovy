@@ -43,6 +43,9 @@ def _cmd_extract(args: argparse.Namespace) -> int:
         max_barcode_errors=args.max_barcode_errors,
         chunk_size=(args.chunk_size if args.chunk_size is not None
                     else defaults.chunk_size),
+        downstream_window=(args.downstream_window
+                           if args.downstream_window is not None
+                           else defaults.downstream_window),
     )
 
     out = args.out or args.sam.replace(".sam", "_anchovy.csv").replace(".bam", "_anchovy.csv")
@@ -202,6 +205,16 @@ def build_parser() -> argparse.ArgumentParser:
                                 "assigned to its nearest whitelist barcode with "
                                 "no floor, however poorly it matched. 0 admits "
                                 "only exact barcodes, 1 allows one substitution.")
+    p_extract.add_argument("--downstream-window", type=int,
+                           dest="downstream_window",
+                           help="How far past the mapped offset to search "
+                                "(default: 12). The window would otherwise "
+                                "stop dead at the offset, and an aligner that "
+                                "starts a base or two inside the construct's "
+                                "3' handle then truncates it, shifting the "
+                                "barcode. Raise it if the stage warns that "
+                                "matched blocks do not start with the 5' "
+                                "handle.")
     p_extract.add_argument("--chunk-size", type=int, dest="chunk_size",
                            help="Reads held in memory at once (default: 100000). "
                                 "Costs threads x 4.6 KB x chunk-size, on top of "

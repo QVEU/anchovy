@@ -96,6 +96,26 @@ class ExtractConfig:
     # substitution (the usual 10X correction), and so on.
     max_barcode_errors: int | None = None
 
+    # How far PAST the mapped offset to search, in nt.
+    #
+    # The window's right edge used to sit hard on the offset, which assumes
+    # minimap2 begins the alignment exactly where the 10X construct ends. It
+    # does not always: the 3' handle is T-rich (TTTCTTATAT) and the cDNA after
+    # it often starts with polyT, so the aligner can extend a base or two back
+    # into the handle. The window then cut the construct short, every candidate
+    # block was shifted, and the barcode came out of the wrong 16 bases.
+    #
+    # That failure is invisible in the output. A one-base overrun scores a
+    # clean +2 on every affected read -- identical to two sequencing errors in
+    # the barcode -- so it reads as poor data rather than a misplaced window.
+    #
+    # Padding past the offset leaves the construct INTERIOR to the window, so
+    # the distance search finds it wherever the alignment happens to start.
+    # Measured on synthetic v3 reads, a pad of 4 already restores every overrun
+    # from 0 to 3 to an exact match; 12 is margin. It costs 12 extra candidate
+    # blocks on a 200-base window, against a pass that is ~10% of the stage.
+    downstream_window: int = 12
+
     # Minimum read length filter, applied as length > this value. The original
     # used the query/signature length itself (minL = quL) as the threshold.
     # None means "use len(signature)", preserving the original behavior exactly;
