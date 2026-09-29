@@ -174,13 +174,17 @@ CHEMISTRIES = {
         # modal 12 -> ns 28; modal 10 -> ns 26.
         "ns": 28,
         "whitelist": "3M-5pgex-jan-2023.txt",
-        # Counted from the file when one is supplied, which it must be (below).
-        "barcodes": None,
-        # NO URL ON PURPOSE. Every mirror for this list is one this repo has
-        # not fetched and verified, and shipping an unverified whitelist URL
-        # is the same class of mistake as the wrong whitelist itself. Supply a
-        # local copy; the WorkflowError below names where Cell Ranger keeps it.
-        "url": None,
+        # 5 x 737,280, the v2 list size -- 10x lists come in structured sizes,
+        # which is the corroboration that this figure is the real one. Counted
+        # with `gunzip -c 3M-5pgex-jan-2023.txt.gz | wc -l`; counting the .gz
+        # instead gives a plausible-looking number that means nothing.
+        "barcodes": 3686400,
+        # Same scg_lib_structs mirror as the v3 3' entry above, and served
+        # gzipped, which get_whitelist handles. The count is what guards it:
+        # if this mirror ever serves something else the rule fails naming what
+        # it got, rather than letting a wrong whitelist through.
+        "url": ("https://teichlab.github.io/scg_lib_structs/data/"
+                "10X-Genomics/3M-5pgex-jan-2023.txt.gz"),
     },
 }
 
