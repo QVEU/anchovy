@@ -176,7 +176,7 @@ of these and says why. The complete list:
 | `gff` | unset | Region model (see below). Implies `whole_reference` |
 | `whole_reference` | `false` | Keep genome coordinates without a region model |
 | `minimap_preset` | `map-hifi` | `map-ont` for Nanopore |
-| `map_threads` | `8` | Threads for the initial mapping |
+| `map_threads` | `--cores` | Threads for the initial mapping. Follows the run's core count unless set |
 | **Barcodes** | | |
 | `chemistry` | `v3` | `v2` or `v3`. Sets the read signature *and* the whitelist together |
 | `whitelist` | downloaded | A local or run-specific barcode list |
@@ -185,7 +185,8 @@ of these and says why. The complete list:
 | `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
 | `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor. **The stage's biggest runtime lever** — see below |
 | `max_distance` | `42` | How far the *signature* match may be before a read is dropped |
-| `extract_threads` | `16` | Worker pool inside `extract`. Not `--cores`. **Sets the stage's memory** — see below |
+| `extract_threads` | `--cores` | Worker pool inside `extract`. Follows the run's core count unless set. **Sets the stage's memory** — see below |
+| `downstream_window` | `12` | How far past the alignment offset to search for the signature — see below |
 | `extract_chunk_size` | `100000` | Reads held at once. The other half of the memory setting |
 | `min_reads` | `5` | Reads a barcode needs to become a cell. This decides the size of the run |
 | **Calling and filtering** | | |
@@ -573,6 +574,13 @@ read's mapped sequence — at a measured 6.3 KB per read. At 10 million reads th
 is ~84 GB, the second largest reservation in the pipeline. Nothing else scales
 with it: `extract` is chunked, and the per-cell rules see one cell each.
 
+**Threads follow `--cores`, and so does `extract`'s memory.** `map_threads`
+and `extract_threads` default to the run's core count rather than a fixed 8 and
+16, so `--cores 64` uses 64. Because the reservation is computed from
+`extract_threads`, it follows too: against a v3 whitelist, 16 workers reserves
+~26 GB and 64 reserves ~102 GB. Under `--executor slurm` there is no `--cores`
+to follow, so set both in the config — `config_cluster.yaml` does.
+
 **Only the per-cell stages scale out.** `map_reads`, `extract` and everything
 after `merge_consensus` are single jobs on one node, so `extract` is capped at
 that node's core count however many nodes you have.
@@ -593,6 +601,22 @@ With the budget declared, Snakemake serialises the jobs that will not fit
 together; without it, whether the allocation holds is down to how many samples
 happen to be ready at once. Under `--executor slurm` this does not arise — each
 job carries its own reservation to the scheduler.
+
+#### If most barcodes come back 2 errors off
+
+Check the line `extract` prints after the match-quality histogram. If it warns
+that matched blocks do not begin with the signature's 5' handle, the search
+window is misplaced and the barcodes are fine — the block is shifted, so the
+barcode was sliced from the wrong 16 bases and every affected read scores the
+same fixed penalty. It looks exactly like two sequencing errors, which is the
+point of the warning.
+
+The usual cause is the aligner starting a base or two inside the construct's
+3' handle: `TTTCTTATAT` is T-rich and the cDNA after it often begins with
+polyT, so minimap2 extends back into it. The window reaches `downstream_window`
+bases past the alignment offset to absorb that; raise it if the warning
+persists. If the warning covers most of the run, check `chemistry` and
+`signature` instead — a v2 signature against v3 data shifts every read.
 
 #### If `extract` is slow
 

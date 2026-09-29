@@ -417,7 +417,24 @@ READS_ESTIMATE = config.get("reads_estimate", 10_000_000)
 # package: 16 workers (see the extract rule's threads) and ExtractConfig's
 # 100,000-read chunk. Named here so the reservation below and the rule itself
 # cannot drift apart.
-EXTRACT_THREADS = int(config.get("extract_threads", 16))
+# THREADS FOLLOW THE CORES YOU GAVE THE RUN. These used to be fixed defaults
+# (8 and 16), and snakemake only ever caps `threads` at --cores -- it never
+# raises it -- so `--cores 64` still ran minimap2 with -t 8 and extract with
+# 16 workers, on a node with 64 idle.
+#
+# workflow.cores RAISES when --cores is unset, which is the normal case under
+# `--executor slurm --jobs N`, and this is evaluated at parse time. So it is
+# guarded: on a cluster there is no --cores to follow and the config's
+# map_threads/extract_threads is the answer (config_cluster.yaml sets both).
+def _cores_or(default):
+    """--cores when the run has one; `default` under an executor with none."""
+    try:
+        return workflow.cores
+    except WorkflowError:
+        return default
+
+
+EXTRACT_THREADS = int(config.get("extract_threads", _cores_or(16)))
 CHUNK_SIZE = int(config.get("extract_chunk_size", 100_000))
 
 # SIZED FROM THE LIST ITSELF WHEN THERE IS ONE. A run-specific Cell Ranger list
@@ -560,7 +577,7 @@ rule map_reads:
         template=TEMPLATE,
     output:
         sam=RESULTS + "/" + SAMPLE + ".sam",
-    threads: config.get("map_threads", 8)
+    threads: config.get("map_threads", _cores_or(8))
     params:
         # map-hifi for PacBio CCS, map-ont for Nanopore. Getting this wrong
         # costs alignment sensitivity rather than failing, so it is explicit.

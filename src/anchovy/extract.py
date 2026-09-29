@@ -194,6 +194,12 @@ def find_signature_positions(sam: pd.DataFrame, query: str,
     """
     query_upper = query.upper()
     window = config.upstream_window
+    # THE RIGHT EDGE IS NOT THE OFFSET. See config.downstream_window: the
+    # alignment can start a base or two inside the construct's 3' handle, and
+    # a window that stops dead at the offset then truncates the construct and
+    # shifts every block -- reported as a clean +2, which looks exactly like a
+    # misread barcode.
+    pad = config.downstream_window
 
     # A GENERATOR, NOT A LIST, and imap rather than map. Pool.map materializes
     # the whole input, then pickles all of it into the task queue before any
@@ -201,7 +207,8 @@ def find_signature_positions(sam: pd.DataFrame, query: str,
     # objects and once as bytes. imap over a generator cuts the windows as the
     # queue drains, and the parent never holds more than a few chunks.
     search_inputs = (
-        (row.seq[max(0, row.offset - window):row.offset].upper(), query_upper)
+        (row.seq[max(0, row.offset - window):
+                 min(len(row.seq), row.offset + pad)].upper(), query_upper)
         for row in sam.itertuples()
     )
 
@@ -289,6 +296,7 @@ class _Tally:
         self.mapped_hits = 0
         self.payloads = 0
         self.exact = 0
+        self.shifted = 0
         self.dropped = 0
         self.assigned = 0
         self.distances = Counter()
@@ -310,6 +318,29 @@ class _Tally:
                   .format(self.dropped, self.dropped / max(total, 1),
                           config.max_barcode_errors, self.assigned))
         _report_barcode_distances(self.distances, baseline)
+        self._report_window_placement()
+
+    def _report_window_placement(self):
+        """Say when the distances above are a misplaced window, not bad barcodes.
+
+        Every matched block should begin with the signature's constant 5'
+        handle. When it does not, the search window did not contain the whole
+        construct -- typically because the aligner started a base or two inside
+        the 3' handle -- and the barcode was sliced from the wrong 16 bases.
+        """
+        if not self.payloads or not self.shifted:
+            return
+        fraction = self.shifted / self.payloads
+        print("   WARNING: {:.1%} of matched blocks do not begin with the "
+              "signature's 5' handle.".format(fraction))
+        print("   That is a misplaced search window, not misread barcodes: "
+              "the block is")
+        print("   shifted, so the barcode came from the wrong 16 bases and "
+              "scores a fixed")
+        print("   penalty above. Raise `downstream_window` if the aligner is "
+              "overrunning the")
+        print("   3' handle; check `chemistry` and `signature` if it is most "
+              "of the run.")
 
 
 def _assign_chunk(sam, state, pool, tally):
@@ -328,6 +359,15 @@ def _assign_chunk(sam, state, pool, tally):
     lo, hi = SIGNATURE_PREFIX_LEN, SIGNATURE_UMI_START
     tally.exact += sum(1 for p in payloads if p[3][lo:hi] in state.index)
     tally.payloads += len(payloads)
+
+    # DOES THE MATCHED BLOCK EVEN START WHERE THE SIGNATURE DOES? A block that
+    # is shifted reports as a clean +2 per read, which is indistinguishable in
+    # the histogram below from two sequencing errors in the barcode -- so a
+    # misplaced search window reads as bad data and survives a whole run. The
+    # 5' handle is constant, so comparing it separates the two. Counted here
+    # because the slice is already in hand.
+    handle = state.query[:SIGNATURE_PREFIX_LEN]
+    tally.shifted += sum(1 for p in payloads if p[3][:lo] != handle)
 
     # imap over map for the same reason as pass 1, and it matters more here: a
     # payload carries the read's full sequence, so map's up-front pickle of
