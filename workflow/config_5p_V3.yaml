@@ -5,22 +5,21 @@
 #
 # Get a node, then run inside it -- one queue wait, then full speed.
 #
-#   salloc --cpus-per-task=64 --mem=150G --time=4:00:00
-#   snakemake -s workflow/Snakefile --configfile <this file> \
-#       --cores 64 --resources mem_mb=150000
+#   salloc --cpus-per-task=64 --mem=200G --time=24:00:00
+#   snakemake -s workflow/Snakefile --configfile <this file> --cores 64
 #
-# Or as a batch job, taking both numbers from SLURM so they stay in step with
-# the allocation (thread counts follow --cores; the budget must match --mem):
+# Or as a batch job, taking the core count from SLURM so it cannot drift:
 #
 #   #SBATCH --cpus-per-task=64
-#   #SBATCH --mem=150G
+#   #SBATCH --mem=200G
 #   snakemake -s workflow/Snakefile --configfile <this file> \
-#       --cores "$SLURM_CPUS_PER_TASK" --resources mem_mb="$SLURM_MEM_PER_NODE"
+#       --cores "$SLURM_CPUS_PER_TASK"
 #
-# --resources is not optional: without it the per-rule reservations are inert
-# and two samples' worth of extract can overrun the node. Do not use
-# --executor slurm -- it queues every job separately, which on a busy cluster
-# costs hours against ~25 min for the whole pipeline inside one allocation.
+# --cores is required (snakemake refuses a local run without it) and is what
+# the thread counts follow, so match it to --cpus-per-task.
+#
+# Do not use --executor slurm: it queues every job separately, which on a busy
+# cluster costs hours against ~25 min for the whole pipeline in one allocation.
 
 # --- paths -------------------------------------------------------------------
 input_dir: "/FILL/IN/path/to/folder/of/fastqs"    # every FASTQ here is run

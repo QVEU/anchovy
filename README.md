@@ -541,33 +541,35 @@ on one 64-core node.
 Interactively:
 
 ```bash
-salloc --cpus-per-task=64 --mem=150G --time=4:00:00
-snakemake -s workflow/Snakefile --configfile <config> \
-    --cores 64 --resources mem_mb=150000
+salloc --cpus-per-task=64 --mem=200G --time=24:00:00
+snakemake -s workflow/Snakefile --configfile <config> --cores 64
 ```
 
-Or as a batch job:
+`--cores` is required — snakemake refuses a local run without it (*cores have
+to be specified for local execution*) — and it is what the thread counts
+follow, so match it to `--cpus-per-task` or the node sits half idle.
+
+Or as a batch job, taking the core count from SLURM so it cannot drift from
+the allocation:
 
 ```bash
 #!/bin/bash
 #SBATCH --cpus-per-task=64
-#SBATCH --mem=150G
-#SBATCH --time=4:00:00
+#SBATCH --mem=200G
+#SBATCH --time=24:00:00
 #SBATCH --job-name=anchovy
 
 snakemake -s workflow/Snakefile --configfile <config> \
-    --cores "$SLURM_CPUS_PER_TASK" --resources mem_mb="$SLURM_MEM_PER_NODE"
+    --cores "$SLURM_CPUS_PER_TASK"
 ```
 
-Taking both numbers from SLURM's own variables keeps them in step with the
-allocation — which matters, because the thread counts follow `--cores` and the
-memory budget has to match `--mem`.
-
-**`--resources mem_mb=` is not optional.** Snakemake enforces a resource only
-when given a global budget for it, so without this the per-rule reservations
-are inert: two samples' worth of `extract` start at the same instant and
-neither reserves anything. With the budget declared, Snakemake serialises what
-will not fit together.
+**When you also need `--resources mem_mb=`.** Not above: `extract` takes every
+core, so only one runs at a time whatever its memory reservation says, and the
+cores alone keep the allocation safe. It matters once `extract_threads` is set
+*below* `--cores`, because then several extract jobs start at once — four
+16-thread extracts against a v3 whitelist is ~104 GB. Add
+`--resources mem_mb=<your --mem in MB>` there and snakemake serialises what
+will not fit; without a global budget the per-rule reservations are inert.
 
 **Why not `--executor slurm`.** It submits each job or job group separately, so
 every one takes its own turn in the shared queue — on a busy cluster, hours of
