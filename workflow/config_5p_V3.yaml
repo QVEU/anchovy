@@ -1,14 +1,26 @@
 # config_5p_V3.yaml -- 10x Chromium 5' v3, cluster run.
 #
-# Copy this next to your FASTQs and fill in the five paths marked FILL IN.
+# Copy this next to your FASTQs and fill in the four paths marked FILL IN.
 # Everything below them has a working default; change only what you need.
 #
-# Run:
-#   snakemake -s workflow/Snakefile --configfile <this file> \
-#       --executor slurm --jobs 200 --group-components cell=200
+# Get a node, then run inside it -- one queue wait, then full speed.
 #
-# Locally inside an salloc, add --resources mem_mb=<your --mem in MB>, or the
-# per-rule reservations are ignored and two samples can overrun the node.
+#   salloc --cpus-per-task=64 --mem=150G --time=4:00:00
+#   snakemake -s workflow/Snakefile --configfile <this file> \
+#       --cores 64 --resources mem_mb=150000
+#
+# Or as a batch job, taking both numbers from SLURM so they stay in step with
+# the allocation (thread counts follow --cores; the budget must match --mem):
+#
+#   #SBATCH --cpus-per-task=64
+#   #SBATCH --mem=150G
+#   snakemake -s workflow/Snakefile --configfile <this file> \
+#       --cores "$SLURM_CPUS_PER_TASK" --resources mem_mb="$SLURM_MEM_PER_NODE"
+#
+# --resources is not optional: without it the per-rule reservations are inert
+# and two samples' worth of extract can overrun the node. Do not use
+# --executor slurm -- it queues every job separately, which on a busy cluster
+# costs hours against ~25 min for the whole pipeline inside one allocation.
 
 # --- paths -------------------------------------------------------------------
 input_dir: "/FILL/IN/path/to/folder/of/fastqs"    # every FASTQ here is run

@@ -534,34 +534,58 @@ is at least diagnosable.
 
 #### Running on a cluster
 
-Submit with Snakemake's SLURM executor, which distributes the per-cell jobs —
-thousands of independent `map_cell`/`cell_consensus` pairs — across nodes:
+**Get a node, then run the whole pipeline inside it.** One queue wait, then
+full speed. Measured: 2 samples, 11,601 cells, 23,220 steps in **25 min 32 s**
+on one 64-core node.
+
+Interactively:
 
 ```bash
+salloc --cpus-per-task=64 --mem=150G --time=4:00:00
 snakemake -s workflow/Snakefile --configfile <config> \
-    --executor slurm --jobs 200 --group-components cell=200
+    --cores 64 --resources mem_mb=150000
 ```
 
-**The executor is a separate package.** Snakemake ships only `local`, `dryrun`
-and `touch`; everything else is a plugin, and neither `snakemake-minimal` nor
-the full `snakemake` metapackage pulls one in. `environment.yml` now declares
-it, but an environment created before that needs it adding by hand:
+Or as a batch job:
 
 ```bash
-conda install -n anchovy -c bioconda -c conda-forge snakemake-executor-plugin-slurm
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=150G
+#SBATCH --time=4:00:00
+#SBATCH --job-name=anchovy
+
+snakemake -s workflow/Snakefile --configfile <config> \
+    --cores "$SLURM_CPUS_PER_TASK" --resources mem_mb="$SLURM_MEM_PER_NODE"
 ```
 
-Without it the run stops at argument parsing — `invalid choice: 'slurm'
-(choose from local, dryrun, touch)` — which reads like a typo rather than a
-missing dependency.
+Taking both numbers from SLURM's own variables keeps them in step with the
+allocation — which matters, because the thread counts follow `--cores` and the
+memory budget has to match `--mem`.
 
-**Every rule declares `mem_mb` and `runtime`.** Without them each job is
-submitted at the partition default, and `extract` is killed on a node with
-plenty free — the same SIGKILL as too small a hand-made allocation, only now
-blamed on the cluster. The defaults are computed in the Snakefile from measured
-figures, and `extract`'s follows `chemistry`, `extract_threads`,
-`extract_chunk_size` and the whitelist's own line count automatically. Override
-any of them from the config:
+**`--resources mem_mb=` is not optional.** Snakemake enforces a resource only
+when given a global budget for it, so without this the per-rule reservations
+are inert: two samples' worth of `extract` start at the same instant and
+neither reserves anything. With the budget declared, Snakemake serialises what
+will not fit together.
+
+**Why not `--executor slurm`.** It submits each job or job group separately, so
+every one takes its own turn in the shared queue — on a busy cluster, hours of
+waiting against the 25 minutes above. An allocation costs one queue wait; the
+executor costs many. It stays an option for when a single node genuinely is not
+enough, and needs `snakemake-executor-plugin-slurm`, which `environment.yml`
+declares (an older environment needs `conda install -n anchovy -c bioconda
+-c conda-forge snakemake-executor-plugin-slurm`, or the run stops at argument
+parsing with `invalid choice: 'slurm'`).
+
+**Every rule declares `mem_mb` and `runtime`.** Inside an allocation those are
+what `--resources mem_mb=` schedules against, so a job too big to fit beside
+another waits rather than overrunning the node; under `--executor slurm` they
+are what each job reserves, and without them a job goes in at the partition
+default and `extract` is killed on a node with plenty free. The defaults are
+computed in the Snakefile from measured figures — `extract`'s follows
+`chemistry`, `extract_threads`, `extract_chunk_size` and the whitelist's own
+line count automatically. Override any of them from the config:
 
 ```yaml
 reads_estimate: 10000000   # reads expected after mapping; sizes the fasta stage
@@ -586,23 +610,6 @@ to follow, so set both in the config — `config_cluster.yaml` does.
 **Only the per-cell stages scale out.** `map_reads`, `extract` and everything
 after `merge_consensus` are single jobs on one node, so `extract` is capped at
 that node's core count however many nodes you have.
-
-**Inside an interactive allocation, pass `--resources mem_mb=` as well.**
-`salloc`ing a node and running Snakemake on it locally is the natural way to do
-a first run, but there the `mem_mb` declarations are inert: Snakemake only
-enforces a resource it has been given a global budget for, so two samples' worth
-of `extract` start at the same instant and each reserves nothing.
-
-```bash
-salloc --cpus-per-task=64 --mem=150G --time=4:00:00
-snakemake -s workflow/Snakefile --configfile <config> \
-    --cores 64 --resources mem_mb=150000     # match --mem
-```
-
-With the budget declared, Snakemake serialises the jobs that will not fit
-together; without it, whether the allocation holds is down to how many samples
-happen to be ready at once. Under `--executor slurm` this does not arise — each
-job carries its own reservation to the scheduler.
 
 #### If most barcodes come back 2 errors off
 
