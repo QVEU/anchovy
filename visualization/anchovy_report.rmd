@@ -325,15 +325,19 @@ if (is.null(allele)) {
   cat("_No allele-frequency table; skipping the genome map._")
 } else {
   d <- allele |>
-    mutate(position = num(position), freq_cells = num(freq_cells)) |>
+    mutate(position = num(position), freq_cells = num(freq_cells),
+           allele = as.character(allele)) |>
     filter(is.finite(position), is.finite(freq_cells))
 
   # Classify syn/non-syn from the region annotation if present; the allele table
   # itself does not carry sub_class, so join it in by genome position + allele.
+  # Both keys are coerced on both sides: a header-only region table (no cell
+  # carried a mutation) reads every column as character, and a double/character
+  # key pair makes left_join() abort rather than match nothing.
   if (!is.null(regions)) {
     cls <- regions |>
       filter(region_type == "coding") |>
-      transmute(position = genome_pos, allele = mut_base,
+      transmute(position = num(genome_pos), allele = as.character(mut_base),
                 sub_class = sub_class) |>
       distinct(position, allele, .keep_all = TRUE)
     d <- d |> left_join(cls, by = c("position", "allele")) |>
