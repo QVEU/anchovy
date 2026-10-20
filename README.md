@@ -259,7 +259,7 @@ Plan the run first, then do it:
 
 ```bash
 snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 8 -n
-snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 8
+snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 8 --keep-going
 ```
 
 `-n` is a dry run: it lists the jobs and the samples it found without doing any
@@ -268,8 +268,15 @@ with more cores, raise `--cores` to match:
 
 ```bash
 snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64 -n
-snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64
+snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64 --keep-going
 ```
+
+**Use `--keep-going` on multi-sample runs.** Without it, snakemake stops the
+whole run at the first failed job, so one sample that yields no usable cells
+(a near-empty library, or every cell dropped by `min_breadth`) also halts every
+other sample partway. With it, the healthy samples run to their reports and
+the failed one is listed at the end; fix or drop it from the config and rerun,
+and only its jobs are redone.
 
 ### If you already have per-cell sequence files
 
@@ -542,7 +549,7 @@ Interactively:
 
 ```bash
 salloc --cpus-per-task=64 --mem=200G --time=24:00:00
-snakemake -s workflow/Snakefile --configfile <config> --cores 64
+snakemake -s workflow/Snakefile --configfile <config> --cores 64 --keep-going
 ```
 
 `--cores` is required — snakemake refuses a local run without it (*cores have
@@ -560,7 +567,7 @@ the allocation:
 #SBATCH --job-name=anchovy
 
 snakemake -s workflow/Snakefile --configfile <config> \
-    --cores "$SLURM_CPUS_PER_TASK"
+    --cores "$SLURM_CPUS_PER_TASK" --keep-going
 ```
 
 **When you also need `--resources mem_mb=`.** Not above: `extract` takes every
