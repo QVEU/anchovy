@@ -130,6 +130,13 @@ def parse_gff3(path: str) -> list[Region]:
             is_noncoding = ftype_norm in NONCODING_TYPES
             if not (is_coding or is_noncoding):
                 continue  # ignore feature types we don't annotate against
+            # NCBI's GFF export opens with a `region` row for the GenBank source
+            # feature (gbkey=Src) spanning the whole sequence. It describes the
+            # record, not a part of the genome, and because it is listed first
+            # it would become every mutation's primary region -- labelling every
+            # CDS mutation non-coding in the legacy annot columns.
+            if ftype_norm == "region" and attrs.get("gbkey") == "Src":
+                continue
 
             try:
                 start = int(start_s)

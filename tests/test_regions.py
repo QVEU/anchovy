@@ -44,6 +44,28 @@ def test_parse_gff3_reads_expected_regions(tmp_path):
     assert not utr.coding
 
 
+def test_parse_gff3_skips_ncbi_source_region(tmp_path):
+    # NCBI annotwriter output: the whole-record source feature comes first. Kept,
+    # it would be the primary region of every mutation and mark CDS calls
+    # non-coding.
+    p = tmp_path / "ncbi.gff3"
+    p.write_text(
+        "##gff-version 3\n"
+        "U87411.1\tGenbank\tregion\t1\t10723\t.\t+\t.\t"
+        "ID=U87411.1:1..10723;gbkey=Src;mol_type=mRNA\n"
+        "U87411.1\tGenbank\tCDS\t97\t10272\t.\t+\t0\t"
+        "ID=cds-AAB58782.1;Name=AAB58782.1;gbkey=CDS\n")
+    regions = parse_gff3(str(p))
+    assert [r.name for r in regions] == ["AAB58782.1"]
+    assert classify(regions, 500)[0].coding
+
+
+def test_parse_gff3_keeps_annotated_region_features(tmp_path):
+    p = tmp_path / "x.gff3"
+    p.write_text("ref\tanchovy\tregion\t1\t50\t.\t+\t.\tID=loop;Name=loop\n")
+    assert [r.name for r in parse_gff3(str(p))] == ["loop"]
+
+
 def test_parse_gff3_rejects_bad_strand(tmp_path):
     p = tmp_path / "bad.gff3"
     p.write_text("ref\ta\tCDS\t1\t9\t.\tX\t0\tID=x\n")
