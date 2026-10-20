@@ -599,7 +599,13 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
             f"      for sam2consensus to call it at all\n"
             f"    - depth_min too high: it drops whole cells below that "
             f"coverage\n"
-            f"  Lower those thresholds, or use more reads.")
+            f"    - min_breadth too high: at 1.0 a single uncalled position in "
+            f"the window\n"
+            f"      (the CDS, with `window: cds`) drops the cell\n"
+            f"    - min_depth_called too high, if set\n"
+            f"  The consensus step prints how many cells each of these dropped. "
+            f"Lower\n"
+            f"  those thresholds, or use more reads.")
 
     cons["genotype"] = cons["genotype"].fillna("")
 
