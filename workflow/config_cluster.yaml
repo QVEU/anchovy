@@ -34,6 +34,11 @@ input_dir: "/data/lvd_qve/Sequencing_Data/QVEU_Seq_0065_PacBio_NDAS_SearchSeq-EV
 
 # Genome the reads are mapped to. The reference NAME is read from this file's
 # own FASTA header, so there is no second key to keep in sync with it.
+#
+# This has to be VERY similar to the virus you actually sequenced. Anything the
+# stock differs from this file by is called as a mutation, so a divergent
+# reference buries the real variation under spurious variants that are fixed in
+# every cell. A consensus of the population or of the stock works reliably.
 template: "/data/lvd_qve/Projects/PacBio_virus-inclusive_EVA71Passage/anchovy_run/AF304458.fasta"
 
 # Call genotypes against the genome, not the consensus across cells. Unset,

@@ -23,7 +23,8 @@
 
 # --- paths -------------------------------------------------------------------
 input_dir: "/FILL/IN/path/to/folder/of/fastqs"    # every FASTQ here is run
-template:  "/FILL/IN/path/to/genome.fasta"        # minimap2 target
+template:  "/FILL/IN/path/to/genome.fasta"        # minimap2 target; must closely
+                                                  # match the sequenced virus
 reference: "/FILL/IN/path/to/genome.fasta"        # usually the same file
 gff:       "/FILL/IN/path/to/genome.gff3"         # region names; omit to skip
 
