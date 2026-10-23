@@ -156,6 +156,15 @@ the reference name is read from the FASTA header, and the barcode whitelist is
 downloaded for you — matched to `chemistry` and checked against its expected
 barcode count before anything uses it.
 
+> **The reference has to be very close to the virus you sequenced.** anchovy
+> calls per-cell consensus sequences against `template`, so a reference that is
+> too divergent obscures the real signal: the divergence between the stock and
+> the reference is read as mutations, and they come out fixed across every cell,
+> swamping the variation you are actually looking for. A consensus sequence of
+> the population or of the stock you infected with works reliably — that is the
+> safest choice whenever the published genome for the serotype is not a close
+> match for what is in your tube.
+
 ### Every other setting
 
 `workflow/config_cluster.yaml` is the fully commented reference — it sets most
@@ -172,7 +181,7 @@ working defaults for the rest. The complete list:
 | `results_dir` | `<input_dir>/results` | Move the outputs |
 | `resources_dir` | `<input_dir>/resources` | Move the whitelist cache |
 | **Reference** | | |
-| `template` | — | Reference FASTA. Required |
+| `template` | — | Reference FASTA. Required. Must be very similar to the sequenced virus — see the note above |
 | `reference` | unset | Call genotypes against the genome rather than the consensus across cells. Set it to the same file as `template` |
 | `reference_name` | from the FASTA header | Override the contig name |
 | `gff` | unset | Region model (see below). Implies `whole_reference` |
@@ -744,6 +753,12 @@ checked against it. Nothing in the pipeline runs it.
   them instead.
 - anchovy currently assumes you're mapping against a single reference sequence.
   A segmented genome (several reference pieces) would need a small extension.
+- The reference needs to be very similar to the virus you sequenced. Divergence
+  between the two is called as mutations, so a distant reference fills the
+  results with spurious variants that are fixed in every cell and hides the
+  within-population variation you came for. A consensus sequence of the
+  population or of the stock works reliably; a GenBank genome for the serotype
+  only works if it happens to be a close match.
 
 ## Citation
 
