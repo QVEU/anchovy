@@ -238,6 +238,11 @@ def hap_network_gen(haplocounts: pd.DataFrame,
 
     QUIRK still reproduced faithfully from the R (not a bug to fix here):
       - reference genotypes get a duplicated self/edge row with mutNumTarget=0.
+
+    REFERENCE EDGES are added only when at least one cell is wild-type. The R
+    added them unconditionally, so a population with no wild-type cell still
+    got a "reference" node, at 0 cells. Runs that have wild-type cells (every
+    golden fixture) are unaffected.
     """
     # binary presence matrix: genotype x mutants, 1 if freq>0 for that pair.
     hc = haplocounts.copy()
@@ -304,6 +309,18 @@ def hap_network_gen(haplocounts: pd.DataFrame,
     ].copy()
     ref_edges["target"] = "reference"
     ref_edges["mutNumTarget"] = 0
+
+    # ...but only when some cell IS wild-type. Otherwise these edges invent a
+    # "reference" node that no cell carries, and it lands in the network files
+    # and the node table at 0 cells / 0%. That is the usual case on a passaged
+    # stock with a mutation fixed relative to the supplied genome: on one EV-A71
+    # sample every one of 2,469 cells carried G1908A, and a single cell carrying
+    # only 1908A was enough to put a 0-cell "reference" hub in the network,
+    # which read as a counting bug. A one-mutation genotype left with no other
+    # edge keeps its self-edge (see the self_edges filter below), so dropping
+    # these never removes a genotype from the file.
+    if not (haplocounts["genotype"] == "reference").any():
+        ref_edges = ref_edges.iloc[0:0]
 
     single_steps = pd.concat([ss, self_steps, ref_edges], ignore_index=True)
     if not self_edges:
@@ -486,15 +503,11 @@ def genotype_nodes(annotated: pd.DataFrame,
     `edge_genotypes` NAMES EVERY NODE THE EDGE TABLES REFER TO, and any that no
     cell carries still gets a row here, with nCells 0.
 
-    That is not hypothetical bookkeeping. hap_network_gen re-points every
-    single-mutation self-step at "reference", so "reference" is an edge endpoint
-    whenever any cell carries exactly one mutation -- whether or not any cell IS
-    wild-type. Those are different conditions: on a passaged population with a
-    mutation fixed relative to the supplied genome, no cell is wild-type, yet
-    the hub every one-step edge points at is still "reference". Without this the
-    node table simply had no row for it, so Cytoscape drew the hub unlabelled
-    and unsized, and a node-table import silently skipped the one node the
-    layout is organised around.
+    It is a safety net: every node the edges name should have a row, so a
+    Cytoscape node-table import never silently skips one. "reference" used to
+    be the case that needed it -- hap_network_gen pointed every one-mutation
+    genotype at "reference" even when no cell was wild-type -- but it now adds
+    those edges only when some cell is, so a 0-cell reference no longer occurs.
     """
     rows = []
     seen: set = set()

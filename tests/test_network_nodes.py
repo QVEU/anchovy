@@ -245,12 +245,11 @@ def test_empty_input_gives_an_empty_table():
 # --------------------------------------------------------------------------- #
 # Nodes the edges name but no cell carries
 # --------------------------------------------------------------------------- #
-# hap_network_gen re-points every single-mutation self-step at "reference", so
-# "reference" is an edge endpoint whenever any cell carries exactly one
-# mutation -- whether or not any cell IS wild-type. Those come apart on a
-# passaged population with a mutation fixed relative to the supplied genome:
-# nothing is wild-type, yet the hub every one-step edge points at is still
-# "reference". Cytoscape then drew that hub unlabelled and unsized.
+# hap_network_gen re-points every single-mutation self-step at "reference" --
+# but only when some cell IS wild-type. On a passaged population with a
+# mutation fixed relative to the supplied genome nothing is wild-type, and the
+# old unconditional edges put a 0-cell "reference" node in the network and the
+# node table, which read as a broken reference count.
 def _cons(tmp_path, rows):
     import pandas as pd
     p = tmp_path / "filtConsensus.csv"
@@ -258,7 +257,7 @@ def _cons(tmp_path, rows):
     return p
 
 
-def test_reference_node_exists_when_no_cell_is_wild_type(tmp_path):
+def test_no_reference_node_when_no_cell_is_wild_type(tmp_path):
     import pandas as pd
     from anchovy import annotate
 
@@ -268,16 +267,34 @@ def test_reference_node_exists_when_no_cell_is_wild_type(tmp_path):
         {"CBC_ID": "c2", "genotype": "5T", "sequence": "", "description": "coverage:50"},
         {"CBC_ID": "c3", "genotype": "9A", "sequence": "", "description": "coverage:50"},
     ])
-    result = annotate.run(str(cons), str(ref), str(tmp_path / "out"), network=True)
+    out = tmp_path / "out"
+    result = annotate.run(str(cons), str(ref), str(out), network=True)
 
-    nodes = result["nodes"].set_index("genotype")
-    assert "reference" in nodes.index
-    # No cell carries it, and the frequencies say so rather than going blank --
-    # Cytoscape sizes on them and a missing value is not a small node.
-    assert nodes.loc["reference", "nCells"] == 0
-    assert nodes.loc["reference", "genoFreq"] == 0.0
-    assert nodes.loc["reference", "nMutations"] == 0
-    assert nodes.loc["reference", "genotypeID"] == "reference"
+    assert "reference" not in set(result["nodes"]["genotype"])
+    for name in ("epistaticNetwork", "genotypeNetwork"):
+        edges = pd.read_csv(f"{out}_{name}.csv")
+        endpoints = set(edges["source"].astype(str)) | set(edges["target"].astype(str))
+        assert "reference" not in endpoints, f"{name} names a 0-cell reference"
+    # The one-mutation genotypes lose their reference edge, not their place in
+    # the network: each keeps its self-edge so it is still in the file.
+    ep = pd.read_csv(f"{out}_epistaticNetwork.csv")
+    assert {"5T", "9A"} <= set(ep["source"]) | set(ep["target"])
+
+
+def test_wild_type_cells_keep_their_reference_edges(tmp_path):
+    import pandas as pd
+    from anchovy import annotate
+
+    ref = tmp_path / "reference.txt"
+    ref.write_text("ACGTACGTACGT")
+    cons = _cons(tmp_path, [
+        {"CBC_ID": "c1", "genotype": "", "sequence": "", "description": "coverage:50"},
+        {"CBC_ID": "c2", "genotype": "5T", "sequence": "", "description": "coverage:50"},
+    ])
+    out = tmp_path / "out"
+    annotate.run(str(cons), str(ref), str(out), network=True)
+    ep = pd.read_csv(f"{out}_epistaticNetwork.csv")
+    assert ((ep["source"] == "5T") & (ep["target"] == "reference")).any()
 
 
 def test_every_edge_endpoint_has_a_node_row(tmp_path):
