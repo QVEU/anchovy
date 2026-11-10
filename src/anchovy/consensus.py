@@ -424,6 +424,15 @@ def run(fasta: str, start: int | None = None, end: int | None = None,
     exactly that information.
     """
     config = config or ConsensusConfig()
+    # Uppercase a supplied reference, as annotate and frequencies already do
+    # (read_reference_sequence preserves case and leaves normalizing to its
+    # callers). Left lowercase -- which is how many tools export a FASTA --
+    # every position differs from the uppercase sam2consensus calls, and every
+    # one of those differences is then skipped as "ambiguous" because the
+    # reference base is not in A/C/G/T. The run finishes with every cell called
+    # "reference" and only a skipped-call count in the log to say why.
+    if reference is not None:
+        reference = reference.upper()
     records = parse_consensus_fasta(fasta)
     stats: dict = {}
     kept = select_sequences(records, start, end, config, trim=trim, stats=stats)

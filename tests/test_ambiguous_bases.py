@@ -154,3 +154,24 @@ def test_workflow_forwards_the_flag():
                  / "workflow" / "Snakefile").read_text()
     assert "--keep-ambiguous" in snakefile
     assert "KEEP_AMBIGUOUS" in snakefile
+
+
+def test_a_lowercase_reference_still_calls_variants(tmp_path):
+    """A lowercase reference FASTA must not turn every cell into 'reference'.
+
+    Without normalizing case, every position differs from the uppercase cell
+    consensus, and every difference is skipped as ambiguous because the
+    reference base is not A/C/G/T -- so a real variant vanishes along with the
+    rest. This is what an EV-A71 run with a lowercase reference produced: 166
+    cells, a C/T site split 129/37 in the consensuses, and every cell called
+    'reference'.
+    """
+    merged = tmp_path / "x_allConsensus.fasta"
+    merged.write_text(">c1 ref coverage:9 length:4\nACGT\n"
+                      ">c2 ref coverage:9 length:4\nATGT\n")
+
+    lower = run(fasta=str(merged), trim=False, reference="acgt",
+                config=ConsensusConfig(depth_min=1),
+                out_prefix=str(tmp_path / "lo"))
+    assert [r["genotype"] for r in lower["records"]] == ["", "2T"]
+    assert lower["stats"].get("ambiguous_calls_skipped", 0) == 0
