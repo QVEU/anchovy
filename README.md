@@ -147,7 +147,7 @@ networks and a rendered report — with its outputs named after it, in
 input_dir: "path/to/fastqs"         # a FOLDER of reads; one run covers all of them
 template: "path/to/reference.fasta" # the reference genome
 gff: "path/to/reference.gff3"       # region model, for frame-correct annotation
-chemistry: "v3"                     # v2, v3 or 5p-v3 -- sets the barcode signature
+chemistry: "5p-v3"                     # v2, v3 or 5p-v3 -- sets the barcode signature
                                     # AND the whitelist, which have to agree
 ```
 
