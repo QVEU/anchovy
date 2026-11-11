@@ -1,24 +1,24 @@
 # environment.yml
 #
-# Reproducible environment for the anchovy pipeline. Creates a single conda
+# Development dependency ranges for the anchovy pipeline. Exact tested Linux
+# x86_64 builds are recorded in locks/linux-64/explicit.txt. Creates a conda
 # environment containing everything the workflow needs: the compiled
 # bioinformatics tools (minimap2, samtools), the workflow manager (snakemake),
-# R + the annotation packages (only needed if you regenerate golden fixtures --
-# the pipeline itself no longer depends on R), and the Python libraries the
-# anchovy package builds on.
+# R for HTML reports, optional legacy annotation packages for regenerating
+# golden fixtures, and the Python libraries the anchovy package builds on.
 #
-# WHY THIS SHAPE (see README for the full rationale):
+# WHY THIS SHAPE (see docs/development.md for reproducibility details):
 #   - Conda provides all COMPILED / binary deps (minimap2, samtools, pysam,
 #     numpy, pandas, biopython). Letting conda manage these keeps the binary
 #     dependency set mutually compatible.
 #   - The anchovy package itself is installed SEPARATELY and editable, as a
-#     documented second step (`pip install -e .`), because editable installs are
-#     on-disk links, not packages, and don't belong in a reproducible env file.
+#     documented second step (`python -m pip install -e . --no-deps`), because
+#     editable installs are on-disk links and are installed separately.
 #
 # SETUP (two steps -- see README):
 #   conda env create -f environment.yml
 #   conda activate anchovy
-#   pip install -e .          # editable install of the anchovy package itself
+#   python -m pip install -e . --no-deps
 
 name: anchovy
 
@@ -69,11 +69,11 @@ dependencies:
   # snakemake pulls it in anyway; declared so the suite does not depend on that.
   - pyyaml
 
-  # --- R + annotation packages: ONLY needed to regenerate the R golden
-  #     fixtures (tests/annotate_analysis.R). The pipeline itself uses the
-  #     Python port and does not require R. Comment these out if you don't need
-  #     to re-freeze goldens -- they make the env noticeably heavier. ---
+  # R is required for the default HTML report. Core analysis uses Python and
+  # can run without R when report: false.
   - r-base>=4.3
+  # Legacy annotation packages: only needed to regenerate R golden fixtures
+  # (tests/annotate_analysis.R), not for current annotation or reporting.
   - r-data.table
   - bioconductor-biostrings
   - bioconductor-decipher

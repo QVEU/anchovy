@@ -232,6 +232,7 @@ def test_one_surviving_cell_is_enough(tmp_path):
 # --------------------------------------------------------------------------- #
 # A run that finds no variants at all
 # --------------------------------------------------------------------------- #
+@pytest.mark.filterwarnings("error")
 def test_annotate_survives_a_run_with_no_variants(tmp_path):
     """Zero variants is a RESULT, not an error, and must not crash.
 
@@ -259,6 +260,9 @@ def test_annotate_survives_a_run_with_no_variants(tmp_path):
 
     assert len(result["annot"]) == 1
     assert result["annot"].iloc[0]["genotype"] == "reference"
+    assert result["annot"].iloc[0]["genotypeID"] == ""
+    assert result["annot"].iloc[0]["genoFreq"] == 1.0
+    assert result["annot"].iloc[0]["idFreq"] == 1.0
     # The node table still describes the one cell, honestly.
     nodes = result["nodes"]
     assert len(nodes) == 1
@@ -267,6 +271,7 @@ def test_annotate_survives_a_run_with_no_variants(tmp_path):
     assert nodes.iloc[0]["nMutations"] == 0
 
 
+@pytest.mark.filterwarnings("error")
 def test_no_variants_works_in_region_aware_mode_too(tmp_path):
     """The region-aware branch has its own empty path; check it as well."""
     import pandas as pd
@@ -285,6 +290,9 @@ def test_no_variants_works_in_region_aware_mode_too(tmp_path):
                           network=True, gff=str(gff))
     assert result["regions"].empty
     assert len(result["annot"]) == 1
+    assert result["annot"].iloc[0]["genotypeID"] == ""
+    assert result["annot"].iloc[0]["genoFreq"] == 1.0
+    assert result["annot"].iloc[0]["idFreq"] == 1.0
 
 
 def test_one_cell_with_a_computed_reference_warns(tmp_path):

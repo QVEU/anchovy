@@ -11,17 +11,16 @@ SKIPPED when minimap2 or snakemake are absent, which is a dev container without
 the conda environment. CI builds from environment.yml and has both, so the
 example is verified there on every push.
 
-The report is switched off: it needs R, it is the one stage with no assertable
-output beyond "the file exists", and tests/test_report_rmd.py covers the
-document itself. `--config report=false` is passed on the command line rather
-than being a second config file, which also keeps the Snakefile honest about
-coercing a string "false" back to a boolean.
+The main fixture checks `report=false` on the command line. A separate run
+renders the report when R is available and checks its content and embedded
+plots. CI requires all workflow/report tools before running this suite.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pandas as pd
@@ -43,14 +42,59 @@ def results(tmp_path_factory) -> Path:
     leaves output beside the committed fixture and two runs cannot collide.
     """
     out = tmp_path_factory.mktemp("example_run")
+    return _run_example(out, report=False)
+
+
+def _run_example(out: Path, *, report: bool) -> Path:
     proc = subprocess.run(
         ["snakemake", "-s", str(REPO / "workflow" / "Snakefile"),
          "--configfile", str(CONFIG), "--cores", "2",
-         "--config", "report=false", f"results_dir={out}"],
-        cwd=REPO, capture_output=True, text=True)
+         "--config", f"report={str(report).lower()}", f"results_dir={out}"],
+        cwd=REPO, capture_output=True, text=True, timeout=180)
     assert proc.returncode == 0, (
         f"the example in the README failed.\n--- stderr ---\n{proc.stderr[-4000:]}")
     return out / "example"
+
+
+@pytest.mark.skipif(not shutil.which("Rscript"), reason="needs R and report dependencies")
+def test_report_renders_sections_genotypes_and_plots(tmp_path):
+    results = _run_example(tmp_path, report=True)
+    document = (results / "example_report.html").read_text()
+
+    class ReportParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.text = []
+            self.plots = 0
+            self.hidden = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style"):
+                self.hidden = True
+            if tag == "img" and dict(attrs).get("src", "").startswith("data:image/png;base64,"):
+                self.plots += 1
+
+        def handle_endtag(self, tag):
+            if tag in ("script", "style"):
+                self.hidden = False
+
+        def handle_data(self, data):
+            if not self.hidden:
+                self.text.append(data)
+
+    parser = ReportParser()
+    parser.feed(document)
+    text = " ".join(" ".join(parser.text).split())
+    for expected in (
+        "sample example", "Quality control", "Coverage and depth",
+        "Where the mutations are", "Genotype network",
+        "Top 15 genotypes by cell count", "Within-cell allele frequencies",
+        "reference", "5UTR:A121C", "C18S", "5UTR:A121C_C18S",
+    ):
+        assert expected in text, f"rendered report is missing {expected!r}"
+    assert parser.plots >= 5, "the report did not embed its QC and results plots"
+    assert "Network or node table missing" not in text
+    assert "Meanwhile the network CSVs open directly in Cytoscape" not in text
 
 
 def test_report_false_on_the_command_line_is_honoured(results):

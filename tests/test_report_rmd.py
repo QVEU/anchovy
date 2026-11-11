@@ -1,10 +1,9 @@
 """
 Guards on visualization/anchovy_report.rmd.
 
-The Rmd cannot be executed here -- there is no R in the dev container and CI
-runs pytest only -- so these are structural checks on the document's source.
-They are cheap and they pin the two things that went wrong by being invisible:
-an unbalanced chunk, and a colour pair nobody measured.
+These structural checks complement the rendered-report integration test in
+test_example_run.py. They pin formatting, colour and network conventions that
+a successful render alone cannot verify.
 """
 
 from __future__ import annotations
