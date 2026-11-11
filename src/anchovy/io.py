@@ -17,18 +17,16 @@ languages can't drift apart.
 
 BEHAVIOR NOTE
 -------------
-These functions reproduce the original parsing behavior exactly, including its
-quirks (e.g. the manual text parse skips only lines beginning with '@'). Where
-the original had a latent bug, this module preserves the behavior and flags it in
-a comment rather than silently "fixing" it -- behavior changes belong in their own
-clearly-labeled commits, validated against the golden tests.
+Valid-input parsing retains the original conventions, including its length and
+offset calculations. Invalid CIGARs fail with read context, and extended CIGAR
+match/mismatch operations (= and X) are supported alongside M. Golden tests
+guard the pipeline's output contract.
 """
 
 from __future__ import annotations
 
 import glob
 import os
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -49,35 +47,31 @@ from anchovy.schema import (
 def parse_cigar_lengths(read) -> list[int]:
     """Compute [readLen, clipReadLen, offset] from one pysam read's CIGAR.
 
-    Extracted from the original loadSAM inline loop, unchanged in semantics:
-      - op 0 (match), 1 (insertion), 3 (skip): add to both readLen and CreadLen
+    Length conventions inherited from the original loadSAM inline loop:
+      - op 0 (match), 1 (insertion), 3 (skip), 7 (=), 8 (X): add to both lengths
       - op 2 (deletion): advances the 'switch' flag only
       - op 4 (soft clip): add to readLen only if leading (switch == 0)
       - op 5 (hard clip), 6 (padding): ignored
     'offset' is returned as readLen - clipReadLen.
 
-    The bare try/except that swallowed errors as "Problem" is preserved to match
-    original behavior; a stricter version belongs in a separate error-handling
-    commit (Phase 6), not here.
+    Invalid operations or lengths raise ValueError with the read name and
+    CIGAR, rather than returning partially computed lengths.
     """
     read_len = 0
     clip_read_len = 0
     switch = 0
-    for cigar_type, cigar_length in read.cigar:
-        try:
-            if cigar_type == 0:            # match
-                read_len += cigar_length
-                clip_read_len += cigar_length
-                switch = 1
-            elif cigar_type == 1:          # insertion
+    cigar = read.cigar
+    try:
+        if cigar is None:
+            raise ValueError("missing CIGAR")
+        for cigar_type, cigar_length in cigar:
+            if not isinstance(cigar_length, int) or cigar_length <= 0:
+                raise ValueError(f"invalid operation length {cigar_length!r}")
+            if cigar_type in (0, 1, 3, 7, 8):  # M, I, N, =, X
                 read_len += cigar_length
                 clip_read_len += cigar_length
                 switch = 1
             elif cigar_type == 2:          # deletion
-                switch = 1
-            elif cigar_type == 3:          # skip
-                read_len += cigar_length
-                clip_read_len += cigar_length
                 switch = 1
             elif cigar_type == 4:          # soft clipping
                 if switch == 0:            # only count leading soft clipping
@@ -88,10 +82,13 @@ def parse_cigar_lengths(read) -> list[int]:
             elif cigar_type == 6:          # padding
                 pass
             else:
-                print("Wrong CIGAR number")
-                sys.exit(1)
-        except Exception:
-            print("Problem")
+                raise ValueError(f"unsupported operation {cigar_type!r}")
+    except (TypeError, ValueError) as exc:
+        name = getattr(read, "query_name", None) or "<unnamed>"
+        description = getattr(read, "cigarstring", None) or repr(cigar)
+        raise ValueError(
+            f"Invalid CIGAR for read {name!r}: {description!r}: {exc}"
+        ) from exc
     return [read_len, clip_read_len, read_len - clip_read_len]
 
 

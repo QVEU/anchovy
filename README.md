@@ -23,742 +23,138 @@ reference genome. anchovy:
 The entire thing can be run as one automated pipeline (recommended), or run each
 step by hand.
 
-## What the pipeline does, step by step
+## Quickstart
 
-1. **map** — lines up the reads against the reference genome
-2. **extract** — sorts the reads by the cell barcode they carry
-3. **fasta** — writes out the reads for each cell into its own file
-4. **map cell** — lines up each cell's reads against the reference
-5. **cell consensus** — builds one consensus genome per cell from its reads
-6. **merge** — collects all the per-cell genomes into one file
-7. **consensus** — narrows to the region you care about and lists each cell's mutations
-8. **annotate** — works out which mutations change the protein, and builds tables
-   showing how genotypes relate. Given a GFF3 file describing your genome's
-   regions, it can also annotate non-coding parts and number amino acids
-   correctly per region (see below)
-9. **frequencies** — allele frequencies over *every* mapped cell, with a
-   per-position denominator, rather than only the cells that passed filtering
-10. **report** — renders it all as one HTML page you can read
+Install [Miniforge](https://conda-forge.org/download/) if you do not already have
+Conda. Run these commands in a shell where `conda` is available:
 
-The tables are spreadsheet-style files (CSV) you can open in Excel or load into
-other analysis tools. Two of them describe the **genotype network** — how the
-different viral genotypes relate to one another — and can be opened directly in
-Cytoscape to view and explore the network visually (see below).
-
-## Setting it up
-
-anchovy relies on a few external programs (for mapping and handling sequence
-files) plus its own code. The easiest way to get everything at once is with
-**conda**, an environment manager widely used in bioinformatics. If you don't
-have conda, install
-[Miniconda](https://docs.conda.io/en/latest/miniconda.html) first.
-
-
-Install from `anchovy` GitHub repo: 
 ```bash
 git clone https://github.com/QVEU/anchovy.git
-```
-
-Setup is two commands. The first creates a self-contained environment with all
-the required programs; the second installs anchovy itself into it. 
-
-Navigate to your `anchovy/` directory, where `environment.yml` lives and run:
-
-```bash
+cd anchovy
 conda env create -f environment.yml
 conda activate anchovy
-```
-
-That first command may take a few minutes. Then install anchovy itself into it:
-
-```bash
-pip install -e .
-```
-
-Check that it worked:
-
-```bash
+python -m pip install -e . --no-deps
 anchovy --version
 snakemake --version
+snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 2
 ```
 
-**Already have an anchovy environment from an earlier version?** New releases
-sometimes add programs to `environment.yml`, and an environment created before
-that won't have them — you'd see a "command not found" for something the
-pipeline expects. Bring yours up to date with:
+This installs Python 3.12, minimap2, samtools, Snakemake, R, the report packages,
+and the developer test tools. Conda supplies dependencies; the editable pip
+install connects the `anchovy` command to this checkout. Allow a few minutes
+for environment creation.
+
+The bundled example needs no downloads or credentials. It should produce:
+
+- **Six cells and four genotypes:** `reference`, `121C`, `201A`, `121C_201A`.
+- **Two variant sites:** one in the 5′UTR and one in the polyprotein.
+- **An HTML report:** `tests/data/fastqs/results/example/example_report.html`.
+- Consensus sequences, annotations, genotype networks and allele-frequency tables
+  beside the report.
+
+Open the HTML report to inspect the results. `--cores 2` fits a small machine;
+raise it for larger runs after checking [memory requirements](docs/performance.md).
+Running the command again resumes the workflow and leaves up-to-date outputs
+alone. To rerun from scratch without deleting results, choose a new output path:
 
 ```bash
-conda env update -f environment.yml --prune
+snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 2 \
+  --config results_dir=/absolute/path/to/new-results
 ```
 
-If you have pytest installed you can also run: 
-```bash
-pytest -v
-```
-to test the install. 
+For exact Linux x86_64 dependencies, use
+`conda create -n anchovy --file locks/linux-64/explicit.txt` **instead of** the
+`conda env create` command above. Use `--no-build-isolation` on the pip install
+to use the locked build tools. See [reproducibility](docs/development.md#dependency-environments)
+for platform limits and lock-refresh instructions.
 
-(Two steps rather than one: the first command installs the ready-made external programs, and the second installs anchovy's own code in a
-way that lets you edit it.)
+To check the installation, run `pytest -v`. The suite includes the bundled
+workflow and report rendering; CI requires their external tools.
 
-## Running the whole pipeline
+## Use your own data
 
-You control a run through a **settings file** — a plain text file that lists
-where your data is and a few options. You never need to edit anchovy's code; you
-just point it at a settings file.
+Inputs are long-read FASTQs (plain or gzipped), a closely matched single-sequence
+reference FASTA, and preferably a GFF3 region model. Each FASTQ filename identifies
+one sample. anchovy currently assumes a single reference sequence; segmented
+genomes need additional support.
 
-`workflow/config.yaml` is included and is **ready to run as-is**. It points at a
-small bundled dataset, so this is the quickest way to check your installation
-works — it finishes in seconds and exercises every stage:
-
-```bash
-snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 8
-```
-
-You should get six cells, two mutations (one in the polyprotein, one in the
-5'UTR), a genotype network and a rendered report, in
-`tests/data/fastqs/results/example/`. Open `example_report.html` and you have
-seen everything the pipeline produces. Delete that directory to start over;
-`tests/make_fastq_fixtures.py` documents what the bundled data contains.
-
-`--cores 8` lets it use 8 processor cores to work on multiple cells at once — set
-this to however many your machine has.
-
-**Tip:** before a real run, add `-n` to do a *preview*. This shows you exactly
-what it would do without actually doing it, so you can check everything looks
-right first:
-
-```bash
-snakemake -s workflow/Snakefile --configfile workflow/config.yaml --cores 8 -n
-```
-
-Another handy feature: if a run stops partway (or you change one setting), you
-can just run it again and it will pick up where it left off, redoing only the
-steps that actually need it — not starting over from scratch.
-
-## Pointing it at your own data
-
-Put your FASTQs in a folder, copy the example settings file **into that same
-folder**, and point it at them. Every FASTQ in the folder is run through the
-whole pipeline — mapping, barcode extraction, per-cell consensus, genotypes,
-networks and a rendered report — with its outputs named after it, in
-`results/<name>/` *inside that folder*.
+Create a settings file such as `my_settings.yaml`. Use absolute paths so its
+meaning is independent of where you store the file:
 
 ```yaml
-input_dir: "path/to/fastqs"         # a FOLDER of reads; one run covers all of them
-template: "path/to/reference.fasta" # the reference genome
-gff: "path/to/reference.gff3"       # region model, for frame-correct annotation
-chemistry: "5p-v3"                     # v2, v3 or 5p-v3 -- sets the barcode signature
-                                    # AND the whitelist, which have to agree
+input_dir: "/data/experiment/fastqs"
+template: "/data/experiment/reference.fasta"
+reference: "/data/experiment/reference.fasta"
+gff: "/data/experiment/regions.gff3"
+chemistry: "5p-v3"  # v2, v3 or 5p-v3; must match the library
 ```
 
-That is the whole required set. The sample names come from the FASTQ filenames,
-the reference name is read from the FASTA header, and the barcode whitelist is
-downloaded for you — matched to `chemistry` and checked against its expected
-barcode count before anything uses it.
+`reference` calls genotypes against that genome. If omitted, genotypes are called
+against the consensus across cells, which can absorb population-wide variants.
+The reference must closely match the sequenced virus: divergence is otherwise
+reported as mutations in every cell and can obscure variation within the sample.
+A consensus from the infected stock is a useful starting point.
 
-> **The reference has to be very close to the virus you sequenced.** anchovy
-> calls per-cell consensus sequences against `template`, so a reference that is
-> too divergent obscures the real signal: the divergence between the stock and
-> the reference is read as mutations, and they come out fixed across every cell,
-> swamping the variation you are actually looking for. A consensus sequence of
-> the population or of the stock you infected with works reliably — that is the
-> safest choice whenever the published genome for the serotype is not a close
-> match for what is in your tube.
+The GFF3 supplies coding frames and non-coding regions; see the
+[GFF3 guide and tab-separated example](docs/usage.md#annotating-by-genome-region).
+Without a GFF3, the default assumes one coding region beginning at base one.
 
-### Every other setting
+A chemistry-matched 10X barcode whitelist downloads automatically unless you
+supply `whitelist`. A run-specific list of called cells is also supported. When
+adapting `workflow/config.yaml`, replace its bundled `whitelist`, `template`,
+`reference`, GFF and analysis-window settings; those values belong to the example.
 
-`workflow/config_cluster.yaml` is the fully commented reference — it sets most
-of these and says why. `workflow/config_5p_V3.yaml` is the opposite: a
-minimally commented 5' v3 cluster config with five paths to fill in and
-working defaults for the rest. The complete list:
-
-| Setting | Default | What it does |
-|---|---|---|
-| **Input and output** | | |
-| `input_dir` | — | The folder of FASTQs. Required, unless resuming with `samples` + `cells_dir` |
-| `samples` | from the FASTQ names | Name the samples explicitly. Only for the `cells_dir` resume path, where there are no FASTQs to take a name from |
-| `cells_dir` | `<results>/cells` | Resume from per-cell FASTAs you already have |
-| `results_dir` | `<input_dir>/results` | Move the outputs |
-| `resources_dir` | `<input_dir>/resources` | Move the whitelist cache |
-| **Reference** | | |
-| `template` | — | Reference FASTA. Required. Must be very similar to the sequenced virus — see the note above |
-| `reference` | unset | Call genotypes against the genome rather than the consensus across cells. Set it to the same file as `template` |
-| `reference_name` | from the FASTA header | Override the contig name |
-| `gff` | unset | Region model (see below). Implies `whole_reference` |
-| `whole_reference` | `false` | Keep genome coordinates without a region model |
-| `minimap_preset` | `map-hifi` | `map-ont` for Nanopore |
-| `map_threads` | `--cores` | Threads for the initial mapping. Follows the run's core count unless set |
-| **Barcodes** | | |
-| `chemistry` | `v3` | `v2`, `v3` or `5p-v3`. Sets the read signature *and* the whitelist together |
-| `whitelist` | downloaded | A local or run-specific barcode list |
-| `whitelist_url` | 10X's | Fetch the whitelist from your own mirror |
-| `whitelist_barcodes` | per chemistry | Override the barcode count a download is checked against |
-| `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
-| `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor. **The stage's biggest runtime lever** — see below |
-| `max_distance` | `42` | How far the *signature* match may be before a read is dropped |
-| `extract_threads` | `--cores` | Worker pool inside `extract`. Follows the run's core count unless set. **Sets the stage's memory** — see below |
-| `downstream_window` | `12` | How far past the alignment offset to search for the signature — see below |
-| `extract_chunk_size` | `100000` | Reads held at once. The other half of the memory setting |
-| `min_reads` | `5` | Reads a barcode needs to become a cell. This decides the size of the run |
-| **Calling and filtering** | | |
-| `window` | unset | `cds` takes the analysis window from the GFF |
-| `orf_start`, `orf_end` | — | The window explicitly, as 0-based slice bounds |
-| `cons_min_depth` | `5` | Reads a position needs before a base is called |
-| `cons_threshold` | `0.5` | Consensus threshold. Raising it emits *more* ambiguity codes, not fewer |
-| `min_breadth` | unset | Fraction of the window a cell must have called. `1.0` means a complete coding sequence |
-| `min_depth_called` | unset | Mean depth at the positions actually called |
-| `depth_min` | `10` | Legacy overall filter. Superseded by `min_breadth` — see the note in `config_cluster.yaml` |
-| `keep_ambiguous` | `false` | Keep IUPAC codes as genotype tokens |
-| `max_mutations_per_cell` | unset | Drop cells carrying more mutations than this |
-| **Output** | | |
-| `allele_frequencies` | `false` | Also write the two allele-frequency tables |
-| `min_alt_reads`, `min_alt_freq` | — | Thresholds for the per-cell frequency table |
-| `min_cells_per_allele` | — | Threshold for the population frequency table |
-| `self_edges` | `false` | Keep self-loops in the epistatic network |
-| `report` | `true` | Render the HTML report |
-| `report_rmd` | the bundled one | Use your own report template |
-
-### Where everything goes
-
-A run is a **self-contained folder**. You start with reads and a settings file;
-everything the pipeline makes is written underneath, so the same command gives
-the same result from any shell, and the whole run can be archived or handed to a
-colleague as one directory:
-
-```
-my_experiment/                     <- input_dir
-    config.yaml                    <- the settings file, kept with the data
-    sample_A.fastq.gz              <- your reads; never modified
-    sample_B.fastq.gz              <- add a second sample by dropping it in
-    resources/                     <- the 10X whitelist, downloaded once
-    results/
-        sample_A/
-            sample_A.sam
-            cells/  work/          <- per-cell intermediates, safe to delete
-            sample_A_anchovy.csv
-            sample_A_allConsensus.fasta
-            sample_A_filtConsensus.csv
-            sample_A_annot_v3.csv
-            sample_A_genotypeNetwork.csv
-            sample_A_genotypeNodes.csv
-            sample_A_epistaticNetwork.csv
-            sample_A_alleleFrequencies.csv
-            sample_A_cellAlleleFreq.csv
-            sample_A_report.html   <- start here
-        sample_B/
-```
-
-Nothing is ever written back over your reads. The reference, GFF and any
-whitelist you supply can live anywhere — give their full paths in the settings
-file — and the checkout itself stays clean, so you can delete and re-clone
-anchovy without touching a run.
-
-Two settings move things if you need them to:
-
-| Setting | Default | When to change it |
-|---|---|---|
-| `results_dir` | `<input_dir>/results` | Reads are on a read-only mount, or you want outputs on a faster disk |
-| `resources_dir` | `<input_dir>/resources` | Share one whitelist cache across runs — the v3 list is ~100 MB and identical every time |
-
-Both take a full path. Snakemake also writes its own bookkeeping to
-`.snakemake/` in whatever directory you launch from; that one is Snakemake's,
-not anchovy's, and is safe to delete between runs.
-
-Plan the run first, then do it:
+Run from the Anchovy checkout, using your settings file:
 
 ```bash
-snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 8 -n
-snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 8 --keep-going
+snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 2 -n
+snakemake -s workflow/Snakefile --configfile my_settings.yaml --cores 2 --keep-going
 ```
 
-`-n` is a dry run: it lists the jobs and the samples it found without doing any
-work, which is the quickest way to catch a wrong `input_dir`. On a cluster node
-with more cores, raise `--cores` to match:
-
-```bash
-snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64 -n
-snakemake -s workflow/Snakefile --configfile workflow/config_cluster.yaml --cores 64 --keep-going
-```
-
-**Use `--keep-going` on multi-sample runs.** Without it, snakemake stops the
-whole run at the first failed job, so one sample that yields no usable cells
-(a near-empty library, or every cell dropped by `min_breadth`) also halts every
-other sample partway. With it, the healthy samples run to their reports and
-the failed one is listed at the end; fix or drop it from the config and rerun,
-and only its jobs are redone.
-
-### If you already have per-cell sequence files
-
-If you've already split your reads into one file per cell (from an earlier run or
-another tool), you can skip the first steps. Add this line to your settings file
-pointing at that folder:
-
-```yaml
-cells_dir: "path/to/your/per-cell-files"
-```
-
-The included `workflow/config_test.yaml` is a working example of this, set up to
-run against the small test dataset that ships with anchovy.
-
-### Annotating by genome region
-
-By default, anchovy assumes your genome is one long protein-coding stretch that
-starts at the very first base. That works for a single trimmed ORF, but it gets
-two things wrong on a real viral genome: mutations in non-coding parts (like the
-UTRs at either end) are treated as though they coded for protein, and amino acid
-numbering starts from the wrong place whenever the coding region doesn't begin at
-position 1.
-
-You can fix both by describing your genome's regions in a **GFF3 file** — a
-standard, widely used format for listing the features of a genome. Point at it
-from your settings file:
-
-```yaml
-gff: "path/to/regions.gff3"
-```
-
-#### Writing your own
-
-Here is an example GFF3 for dengue virus 1. Copy it and edit it for your own
-run — or start from `tests/data/mapping/regions.gff3`, a smaller complete file
-the test suite uses.
-
-```
-##gff-version 3
-NC_001477.1	anchovy	five_prime_UTR	1	94	.	+	.	Name=5UTR
-NC_001477.1	anchovy	CDS	95	10270	.	+	0	Name=polyprotein
-NC_001477.1	anchovy	mature_protein_region	95	436	.	+	0	Name=capsid
-NC_001477.1	anchovy	mature_protein_region	2422	3477	.	+	0	Name=NS1
-NC_001477.1	anchovy	mature_protein_region	7568	10267	.	+	0	Name=NS5
-NC_001477.1	anchovy	three_prime_UTR	10271	10735	.	+	.	Name=3UTR
-```
-
-**Every column must be separated by a single TAB, not spaces.** This is a common
-mistake. It will get flagged in your anchovy run, but many text editors silently convert tabs to spaces when
-you type, so it's worth turning that off, or editing the file in a plain-text
-editor. Copying the block above preserves the tabs.
-
-The nine columns, left to right:
-
-| # | Column | What to put there |
-|---|--------|-------------------|
-| 1 | sequence name | The name of your reference, exactly as it appears after `>` in your reference FASTA |
-| 2 | source | Free text saying where the annotation came from. Put anything; `.` is fine |
-| 3 | **type** | What kind of region this is — see the list below |
-| 4 | **start** | First base of the region, counting the genome's first base as 1 |
-| 5 | **end** | Last base of the region, included |
-| 6 | score | Not used by anchovy. Put `.` |
-| 7 | **strand** | `+` or `-` |
-| 8 | **phase** | For coding regions, how many bases to skip before the first whole codon: `0`, `1` or `2`. Use `0` unless you know otherwise. Put `.` for non-coding regions |
-| 9 | attributes | `Name=...` is what anchovy labels the region with in the results |
-
-The types anchovy understands:
-
-- **Coding** (mutations get amino acid annotation): `CDS`, `mature_protein_region`
-- **Non-coding** (mutations reported, no amino acids): `five_prime_UTR`,
-  `three_prime_UTR`, `UTR`, `stem_loop`, `ncRNA`, `misc_feature`, `region`
-
-Any other type — `gene`, `mRNA`, `exon` and so on — is ignored, so you can leave
-an annotation file from elsewhere largely as it is and anchovy will pick out the
-parts it can use.
-
-**Regions are allowed to overlap.** In the example above
-the capsid, NS1 and NS5 all sit inside the polyprotein, so a mutation in NS5 gets
-one row numbered within NS5 and another numbered within the polyprotein. Annotate
-at whichever levels are useful to you.
-
-**A check worth knowing about.** A coding region's length should divide exactly
-by three, into codons. If it doesn't, anchovy warns you and names
-the region, that almost always means the coordinates are off. The
-warning doesn't stop the run, but you should double check the coordinates are correct, genomic nucleotide positions. 
-
-With that in place you get an extra results file,
-`{sample}_regionAnnotations.csv`, with one row per mutation **per region it falls
-in**. So a mutation inside NS5, which also sits inside the polyprotein, gets two
-rows — numbered correctly in each one (residue 2 of NS5 is also residue 2493 of
-the polyprotein). Mutations in the UTRs get rows too, simply with the amino acid
-columns left empty, and anything outside every listed region is labelled
-`intergenic`.
-
-Positions in this file are always counted from the start of the whole genome, so
-they mean the same thing no matter which region a row is about.
-
-A few things worth knowing:
-
-- Adding `gff` also keeps the **whole** reference genome through the pipeline
-  instead of trimming it, because region lookup needs real genome positions. When
-  you do that, `orf_start` and `orf_end` stop trimming anything and instead just
-  mark the stretch that's well covered by your reads, so ragged ends don't get
-  called as mutations.
-- Your existing results files are still produced exactly as before, so anything
-  you already do with them keeps working.
-- Both strands are handled. Which strand a region is on, and its reading frame,
-  are taken from columns 7 and 8 of the GFF3 itself, so anchovy never has to
-  guess. For a region on the `-` strand, amino acids are numbered from the
-  region's END and read in the reverse-complement direction, while the
-  nucleotide change is still reported in ordinary forward-strand genome terms.
-- If you want genome positions but don't have a GFF3, use `whole_reference: true`
-  on its own.
-
-### A complete worked example
-
-`examples/eva71_sra/` runs the whole pipeline on real public data, starting from
-nothing but an SRA accession: it downloads an enterovirus A71 single-cell run and
-its reference genome, builds the region file from the reference's own GenBank
-annotation, and hands everything to the workflow. It's written to be copied and
-pointed at your own virus. See the README in that folder.
-
-## Running one step at a time
-
-If you'd rather run steps individually instead of the full pipeline, each is its
-own command:
-
-```bash
-anchovy extract     reads.sam whitelist.txt -o out_anchovy.csv
-anchovy fasta       out_anchovy.csv cells/
-anchovy consensus   allConsensus.fasta 96 10272 --out-prefix results/sample
-anchovy annotate    filtConsensus.csv reference.txt results/sample
-anchovy frequencies allConsensus.fasta --reference ref.fasta --out-prefix results/sample
-```
-
-`96` and `10272` are the analysis window — the first and last positions to call
-variants over, as 0-based slice bounds. The mapping steps are plain `minimap2`
-and are not anchovy subcommands.
-
-To annotate by genome region (see above), the last two steps become:
-
-```bash
-anchovy consensus allConsensus.fasta 96 10272 --whole-reference --out-prefix results/sample
-anchovy annotate  filtConsensus.csv reference.txt results/sample --gff regions.gff3
-```
-
-Add `--help` to any command (e.g. `anchovy extract --help`) to see its options.
-
-## Viewing the genotype networks
-
-Two of anchovy's output files describe how the viral genotypes relate to each
-other as a network:
-
-- `<sample>_epistaticNetwork.csv` — **"single-step" links**: pairs of genotypes
-  differing by exactly one mutation, plus links back to the reference
-- `<sample>_genotypeNetwork.csv` — **shared-mutation links**: every pair of
-  genotypes with at least one mutation in common, however far apart they are
-- `<sample>_genotypeNodes.csv` — one row per genotype, describing the genotypes
-  themselves rather than the links between them
-
-**Which one you want is probably `_epistaticNetwork.csv`, despite the names.**
-The networks in Dábilla & Dolan (2024) — where "edges represent single-nucleotide
-substitutions linking individual genotypes" — are the *single-step* network.
-`_genotypeNetwork.csv` joins any two genotypes sharing a mutation, so it is much
-denser and its edges do not mean one mutational step. The file names are kept
-for compatibility with the original R output.
-
-You can explore these visually in **Cytoscape**, a free tool for viewing and
-analyzing networks that's widely used in biology. Download it from
-[cytoscape.org](https://cytoscape.org/), or use the no-install browser version at
-[web.cytoscape.org](https://web.cytoscape.org/).
-
-To load an anchovy network:
-
-1. In Cytoscape, choose **File → Import → Network from File** and pick one of the
-   network CSVs.
-2. Cytoscape will recognize the `source` and `target` columns automatically and
-   draw the network — no manual setup needed. The other columns (`overlap`,
-   `mutNumSource`, `count`, and so on) come in as **edge attributes**, properties
-   of each link you can use for styling: for example, make links thicker when
-   more mutations are shared.
-3. Then choose **File → Import → Table from File** and pick
-   `<sample>_genotypeNodes.csv`. Cytoscape matches its `genotype` column to the
-   genotypes already in your network and attaches the rest as **node
-   attributes**.
-
-Each point (node) in the resulting picture is a genotype; each line (edge) is a
-relationship between two genotypes. This is a quick way to see, for instance,
-which mutations tend to build on one another.
-
-### Making the picture readable
-
-That third file is what turns the network from a set of unlabeled dots into
-something you can interpret. Each row describes one genotype:
-
-| Column | What it is |
-|--------|------------|
-| `genotype` | The genotype's identifier — this is what Cytoscape matches on |
-| `genotypeID` | The amino acid change(s), like `R5S` or `D3V_R5S`. If you annotated with a GFF3, non-coding changes appear here too, like `5UTR:A121C` |
-| `nMutations` | How many mutations the genotype carries |
-| `nCells` | How many cells carry it |
-| `genoFreq` | What fraction of cells that is |
-| `idFreq` | What fraction of cells carry *any* genotype with this `genotypeID` |
-
-#### If `extract` is killed
-
-A run that stops with `died with <Signals.SIGKILL: 9>` and nothing else was
-killed by the kernel for using too much memory. SIGKILL cannot be caught, so the
-stage gets no chance to say so itself.
-
-`extract` processes the SAM a chunk at a time, so **its footprint does not
-depend on how big the run is** — only on the chunk and the worker count:
-
-```
-GB  =  W  +  extract_threads × ( W  +  4.6 KB × extract_chunk_size )
-
-       W = 0.4 GB   v2 whitelist    (737,280 barcodes)
-       W = 2.8 GB   v3 whitelist  (6,794,880 barcodes)
-       W ≈ 0        a small run-specific list
-```
-
-**`W` is the whitelist's lookup tables, and every worker holds its own copy.**
-They are read-only and identical, but fork's copy-on-write does not save them —
-CPython's refcounts touch every object. Measured: 0.42 GB per worker at v2,
-2.75 GB at v3, linear in the worker count.
-
-On a full 10x whitelist `W` dwarfs the chunk term (2.75 GB against 0.46 GB at a
-100,000-read chunk), so **`extract_threads` is effectively the only memory knob
-that matters** and chunking buys much less than it does against a small list:
-
-`W` also depends on `max_barcode_errors`: the per-barcode template array is
-only built when something will scan it, which is only when that setting is
-unset. A bounded search resolves to one index and rebuilds one template, so
-setting it cuts memory as well as runtime.
-
-| | `W` bounded | `W` unset |
-|---|---:|---:|
-| v2 | 0.2 GB | 0.4 GB |
-| v3 | **1.1 GB** | 2.8 GB |
-
-| v3, 100,000-read chunks | `max_barcode_errors: 2` | unset |
-|---|---:|---:|
-| 4 threads | 7 GB | 16 GB |
-| 8 threads | 14 GB | 28 GB |
-| 16 threads | 26 GB | 54 GB |
-| 64 threads | 102 GB | 208 GB |
-
-The v3 tables also build in 10 s rather than 31 s, once, before the first read.
-
-
-It does not depend on how big the run is — that is what chunking bought. It does
-depend heavily on the whitelist: at the defaults (16 workers, 100,000-read
-chunks) a small custom list costs about 7 GB, a v2 whitelist about 14 GB and a
-v3 whitelist about 54 GB.
-
-Lower `extract_threads` first on a tight node — against a full whitelist it is
-the term that counts, and it costs wall time in proportion.
-`extract_chunk_size` is worth trimming only when the whitelist is small.
-
-The stage prints what it is about to need before it starts, so a subsequent kill
-is at least diagnosable.
-
-#### Running on a cluster
-
-**Get a node, then run the whole pipeline inside it.** One queue wait, then
-full speed. Measured: 2 samples, 11,601 cells, 23,220 steps in **25 min 32 s**
-on one 64-core node.
-
-Interactively:
-
-```bash
-salloc --cpus-per-task=64 --mem=200G --time=24:00:00
-snakemake -s workflow/Snakefile --configfile <config> --cores 64 --keep-going
-```
-
-`--cores` is required — snakemake refuses a local run without it (*cores have
-to be specified for local execution*) — and it is what the thread counts
-follow, so match it to `--cpus-per-task` or the node sits half idle.
-
-Or as a batch job, taking the core count from SLURM so it cannot drift from
-the allocation:
-
-```bash
-#!/bin/bash
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=200G
-#SBATCH --time=24:00:00
-#SBATCH --job-name=anchovy
-
-snakemake -s workflow/Snakefile --configfile <config> \
-    --cores "$SLURM_CPUS_PER_TASK" --keep-going
-```
-
-**When you also need `--resources mem_mb=`.** Not above: `extract` takes every
-core, so only one runs at a time whatever its memory reservation says, and the
-cores alone keep the allocation safe. It matters once `extract_threads` is set
-*below* `--cores`, because then several extract jobs start at once — four
-16-thread extracts against a v3 whitelist is ~104 GB. Add
-`--resources mem_mb=<your --mem in MB>` there and snakemake serialises what
-will not fit; without a global budget the per-rule reservations are inert.
-
-**Why not `--executor slurm`.** It submits each job or job group separately, so
-every one takes its own turn in the shared queue — on a busy cluster, hours of
-waiting against the 25 minutes above. An allocation costs one queue wait; the
-executor costs many. It stays an option for when a single node genuinely is not
-enough, and needs `snakemake-executor-plugin-slurm`, which `environment.yml`
-declares (an older environment needs `conda install -n anchovy -c bioconda
--c conda-forge snakemake-executor-plugin-slurm`, or the run stops at argument
-parsing with `invalid choice: 'slurm'`).
-
-**Every rule declares `mem_mb` and `runtime`.** Inside an allocation those are
-what `--resources mem_mb=` schedules against, so a job too big to fit beside
-another waits rather than overrunning the node; under `--executor slurm` they
-are what each job reserves, and without them a job goes in at the partition
-default and `extract` is killed on a node with plenty free. The defaults are
-computed in the Snakefile from measured figures — `extract`'s follows
-`chemistry`, `extract_threads`, `extract_chunk_size` and the whitelist's own
-line count automatically. Override any of them from the config:
-
-```yaml
-reads_estimate: 10000000   # reads expected after mapping; sizes the fasta stage
-mem_mb:
-  extract: 200000
-runtime:                   # minutes
-  extract: 480
-```
-
-`reads_estimate` matters because `fasta` loads the whole anchovy table — every
-read's mapped sequence — at a measured 6.3 KB per read. At 10 million reads that
-is ~84 GB, the second largest reservation in the pipeline. Nothing else scales
-with it: `extract` is chunked, and the per-cell rules see one cell each.
-
-**Threads follow `--cores`, and so does `extract`'s memory.** `map_threads`
-and `extract_threads` default to the run's core count rather than a fixed 8 and
-16, so `--cores 64` uses 64. Because the reservation is computed from
-`extract_threads`, it follows too: against a v3 whitelist, 16 workers reserves
-~26 GB and 64 reserves ~102 GB. Under `--executor slurm` there is no `--cores`
-to follow, so set both in the config — `config_cluster.yaml` does.
-
-**Only the per-cell stages scale out.** `map_reads`, `extract` and everything
-after `merge_consensus` are single jobs on one node, so `extract` is capped at
-that node's core count however many nodes you have.
-
-#### If most barcodes come back 2 errors off
-
-Check the line `extract` prints after the match-quality histogram. If it warns
-that matched blocks do not begin with the signature's 5' handle, the search
-window is misplaced and the barcodes are fine — the block is shifted, so the
-barcode was sliced from the wrong 16 bases and every affected read scores the
-same fixed penalty. It looks exactly like two sequencing errors, which is the
-point of the warning.
-
-The usual cause is the aligner starting a base or two inside the construct's
-3' handle: `TTTCTTATAT` is T-rich and the cDNA after it often begins with
-polyT, so minimap2 extends back into it. The window reaches `downstream_window`
-bases past the alignment offset to absorb that; raise it if the warning
-persists. If the warning covers most of the run, check `chemistry` and
-`signature` instead — a v2 signature against v3 data shifts every read.
-
-#### If `extract` is slow
-
-Barcode assignment is about **90% of the stage's time** on real data — the
-signature search is noise beside it — and nearly all of that is spent on reads
-whose barcode is *not* an exact whitelist hit. So `max_barcode_errors` is the
-lever, not the hardware. Measured end to end on 40,000 reads with 44% of them
-inexact, against a 100,000-barcode whitelist, 4 workers:
-
-| `max_barcode_errors` | whole stage | reads assigned |
-|---|---:|---:|
-| `0` | 1.8 s | 56% |
-| `1` | 2.1 s | 85% |
-| **`2`** | **5.4 s** | **100%** |
-
-**`2` now costs 2.5× what `1` does, not the 5.2× it used to.** The search stops
-at the first shell that hits, so a read whose barcode is one error out is
-settled in 48 candidates instead of 1,128 — the 2-error neighbourhood is only
-enumerated for reads that actually need it. That halved the `2` row (11.6 s →
-5.4 s) and left `1` alone.
-
-That changes the recommendation. `1` used to be the pragmatic default because
-`2` was punitive; now `2` keeps every read for a cost much closer to `1`'s.
-Prefer `2` unless the stage is genuinely your bottleneck. The 15% that only `2`
-recovers are the reads whose barcode needed *two* corrections — the least
-trustworthy assignments in the run — so dropping them is a judgement about your
-experiment, and it is no longer mostly a performance question.
-
-Note also that the bounded search is **not** unconditionally faster than the
-scan it replaces. Its cost is fixed whatever the whitelist holds, while the scan
-is linear in the list — so against 10x's 737,280 entries the bound wins
-enormously, but against a run-specific Cell Ranger list of a couple of thousand
-barcodes, leaving it unset was *faster* than setting it to `2` (8.4 s against
-10.8 s for that step), and loses no reads. Check `wc -l` on your whitelist first.
-
-**More cores help; more nodes do not.** `extract` is a single Snakemake job
-using one machine's process pool — `--executor slurm` distributes the per-cell
-jobs, not this one — so `extract_threads` is the hardware lever, and it is
-capped at one node.
-
-Memory is bounded by the chunk rather than the run, but it is *not* free of the
-thread count: each worker holds its own copy of the whitelist's lookup tables
-(2.75 GB against a v3 list), so raising `extract_threads` raises the
-reservation roughly in proportion. Lowering `extract_chunk_size` does not pay
-for it on a full whitelist — that term is 0.46 GB per worker against the
-tables' 2.75. Budget for `threads × W` and check what the stage prints on the
-way in.
-
-**`genotype` and `genotypeID` are not the same thing, and neither are their
-frequencies.** `genotype` is the nucleotide haplotype and is what a node *is* —
-one node per distinct nucleotide sequence. `genotypeID` is its translation, and
-the mapping is many-to-one: a synonymous change is written `X_n_X`, so several
-distinct genotypes can share one ID. Where that happens, `genoFreq` counts the
-cells carrying that one nucleotide genotype and `idFreq` counts every cell whose
-genotype translates the same way — for three synonymous genotypes in one cell
-each out of four, `genoFreq` is 0.25 and `idFreq` is 0.75.
-
-**Size nodes on `genoFreq` or `nCells`, not `idFreq`**, since a node is one
-nucleotide genotype; `idFreq` would size each member of a synonymous group by
-the whole group.
-
-Once it's imported, the useful moves in Cytoscape's **Style** panel are:
-
-- Set node **Label** to `genotypeID`, so each point is named by the amino acid
-  change rather than by its nucleotide haplotype.
-- Map node **Size** to `nCells` or `genoFreq` (continuous mapping), so common
-  genotypes are visibly bigger. The two are the same quantity, counted and as a
-  fraction.
-- Map node **Fill Color** to `nMutations` (continuous mapping), so how far a
-  genotype has drifted from the reference reads at a glance.
-
-**A note on the two network files.** In the epistatic network, links from a
-genotype to itself are left out — they'd draw as a small loop on every point and
-tell you nothing. The genotype network keeps them, because there they do carry
-information: a genotype that shares no mutation with any other appears *only* as
-its own self-link, so removing them would make it vanish from the picture
-entirely. If you want the original R behavior in both, add `self_edges: true` to
-your settings file.
-
-## For developers
-
-anchovy comes with an automated test suite that checks each step still produces
-the expected results. To run it:
-
-```bash
-pytest                              # run all tests
-pytest tests/test_annotate.py -v   # run the tests for one step
-```
-
-Test data lives in `tests/data/`. The `tests/make_*_fixtures.py` scripts
-regenerate it if ever needed.
-
-`anchovy_v3/` is the archived original this version was migrated from. It is
-kept because `tests/data/golden/` is frozen from its output, so the port can be
-checked against it. Nothing in the pipeline runs it.
-
-## Good to know
-
-- The mapping/consensus step uses **sam2consensus**, a small existing tool by
-  Edgardo Ortiz
-  ([original here](https://github.com/edgardomortiz/sam2consensus)). A copy,
-  updated to run on modern Python, is included in `workflow/scripts/`.
-- Every run ends with a rendered HTML report (`{sample}_report.html`) built from
-  `visualization/anchovy_report.rmd`. Set `report: false` in your settings file
-  to skip it — that is also what removes R from the requirements for a complete
-  run. The CSVs are written either way, so you can make your own figures from
-  them instead.
-- anchovy currently assumes you're mapping against a single reference sequence.
-  A segmented genome (several reference pieces) would need a small extension.
-- The reference needs to be very similar to the virus you sequenced. Divergence
-  between the two is called as mutations, so a distant reference fills the
-  results with spurious variants that are fixed in every cell and hides the
-  within-population variation you came for. A consensus sequence of the
-  population or of the stock works reliably; a GenBank genome for the serotype
-  only works if it happens to be a close match.
+The first command previews the jobs. The second runs them; `--keep-going` allows
+healthy samples to finish if another sample fails. Set filter thresholds and the
+analysis window for your assay using the [configuration reference](docs/usage.md).
+
+By default, results go to `<input_dir>/results/<sample>/` and downloaded
+whitelists to `<input_dir>/resources/`. `results_dir` and `resources_dir` override
+those locations. Input reads are never overwritten. Snakemake keeps bookkeeping
+in `.snakemake/` in the directory where you launch it.
+
+## Read the results
+
+Start with `<sample>_report.html`, which summarizes coverage, filtering, mutations,
+and genotype networks. Reports use R Markdown and Pandoc; set `report: false` to
+skip reporting and run the remaining pipeline without R.
+
+| Output | Meaning |
+|---|---|
+| `_allConsensus.fasta` | Per-cell consensus sequences before genotype filtering |
+| `_filtConsensus.csv` | Cells retained for genotype analysis |
+| `_annot_v3.csv` | Annotated mutations; a cell with several mutations has several rows |
+| `_regionAnnotations.csv` | One row per variant per overlapping GFF3 region, when a GFF is supplied |
+| `_genotypeNodes.csv` | One row per nucleotide genotype, with cell counts and frequencies |
+| `_epistaticNetwork.csv` | Single-step links between genotypes, including links to the reference |
+| `_genotypeNetwork.csv` | Links between genotypes sharing mutations; these need not be single steps |
+| `_alleleFrequencies.csv`, `_cellAlleleFreq.csv` | Population and per-cell frequencies when `allele_frequencies: true` |
+
+`genotype` identifies the nucleotide haplotype. `genotypeID` is its annotation
+label, which several synonymous genotypes can share. Use `nCells` or `genoFreq`
+to size network nodes; `idFreq` pools cells sharing an annotation label.
+See [network interpretation and Cytoscape import](docs/networks.md) for details.
+
+## Guides
+
+- [Configuration, output layout, GFF3 and individual commands](docs/usage.md)
+- [Memory, barcode matching and performance troubleshooting](docs/performance.md)
+- [Cluster allocations and SLURM execution](docs/cluster.md)
+- [Genotype networks and Cytoscape](docs/networks.md)
+- [Development, legacy fixtures and dependency locks](docs/development.md)
+- [Worked example using public enterovirus A71 data](examples/eva71_sra/README.md)
+
+The per-cell consensus step uses a modernized copy of
+[sam2consensus](https://github.com/edgardomortiz/sam2consensus), included under
+`workflow/scripts/`. Host transcriptome processing with Cell Ranger/Seurat is
+outside this repository.
 
 ## Citation
 

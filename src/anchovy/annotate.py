@@ -594,7 +594,7 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
     # coordinate, silently, which is exactly the kind of wrong this stage must
     # not be (see io.read_reference_sequence).
     reference = read_reference_sequence(reference_file).upper()
-    cons = pd.read_csv(filt_consensus_csv)
+    cons = pd.read_csv(filt_consensus_csv, dtype={"genotype": "string"})
 
     # No cells at all is a failed run, not an empty one, and writing a set of
     # empty CSVs would hide that. It happens when every barcode was too sparse
@@ -673,7 +673,7 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
                     .sort_values("pos", kind="stable")
                     .groupby("genotype")["subName"]
                     .apply(lambda s: "_".join(pd.unique(s))))
-    merged["genotypeID"] = merged["genotype"].map(_names).fillna("")
+    merged["genotypeID"] = merged["genotype"].map(_names).astype("string").fillna("")
 
     # TWO FREQUENCIES, OVER TWO DIFFERENT THINGS, EACH NAMED FOR WHAT IT COUNTS.
     #

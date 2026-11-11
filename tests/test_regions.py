@@ -267,10 +267,10 @@ def test_noncoding_has_no_amino_acid():
 
 
 # --------------------------------------------------------------------------- #
-# The example in the README must actually work
+# The documented GFF3 example must actually work
 # --------------------------------------------------------------------------- #
-def test_readme_gff3_examples_parse():
-    """Every GFF3 example in the README parses, with tabs intact.
+def test_documented_gff3_examples_parse():
+    """Every GFF3 example in the usage guide parses, with tabs intact.
 
     Users are told to copy these and edit the numbers, so an example that has
     rotted -- or, far more likely, has had its tabs silently converted to spaces
@@ -280,21 +280,18 @@ def test_readme_gff3_examples_parse():
     import re
     from pathlib import Path
 
-    readme = Path(__file__).resolve().parent.parent / "README.md"
-    if not readme.exists():                       # pragma: no cover
-        pytest.skip("README.md not found")
-
-    blocks = re.findall(r"```\n(##gff-version 3\n.*?)```", readme.read_text(),
+    guide = Path(__file__).resolve().parent.parent / "docs" / "usage.md"
+    blocks = re.findall(r"```\n(##gff-version 3\n.*?)```", guide.read_text(),
                         re.DOTALL)
-    assert blocks, "no GFF3 example found in README.md -- did the section move?"
+    assert blocks, "no GFF3 example found in docs/usage.md"
 
     for i, block in enumerate(blocks):
         feature_lines = [ln for ln in block.splitlines()
                          if ln and not ln.startswith("#")]
-        assert feature_lines, f"README GFF3 example {i} has no feature rows"
+        assert feature_lines, f"GFF3 example {i} has no feature rows"
         for line in feature_lines:
             assert "\t" in line, (
-                f"README GFF3 example {i} lost its tabs -- this row is "
+                f"GFF3 example {i} lost its tabs -- this row is "
                 f"space-separated and will not parse: {line!r}")
 
         import tempfile
@@ -303,11 +300,11 @@ def test_readme_gff3_examples_parse():
             path.write_text(block)
             regions = parse_gff3(str(path))
 
-        assert regions, f"README GFF3 example {i} parsed to zero regions"
+        assert regions, f"GFF3 example {i} parsed to zero regions"
         # A documented example should not itself trip the coordinate sanity
         # check -- it is what people copy as a starting point.
         assert validate_regions(regions) == [], (
-            f"README GFF3 example {i} triggers a validation warning")
+            f"GFF3 example {i} triggers a validation warning")
 
 
 # --------------------------------------------------------------------------- #

@@ -11,10 +11,9 @@ because it can't be exercised as a pure function.
 
 WHY A FAKE READ CLASS
 ---------------------
-parse_cigar_lengths takes a pysam read object, but it only ever touches read.cigar
-(a list of (op, length) tuples). So we don't need real pysam or a real file -- a
-tiny stand-in with a .cigar attribute is enough. This is a general testing move:
-depend on the smallest surface you can fake, not the whole heavy object.
+Most length tests need only read.cigar (a list of (op, length) tuples).
+A small stand-in also provides the read name for error messages; one test uses
+a real pysam record to check that the diagnostic includes the SAM CIGAR string.
 """
 
 from __future__ import annotations
@@ -26,8 +25,9 @@ from anchovy.io import parse_cigar_lengths, parse_description
 
 class FakeRead:
     """Minimal stand-in for a pysam read: only exposes .cigar."""
-    def __init__(self, cigar):
+    def __init__(self, cigar, query_name="test_read"):
         self.cigar = cigar
+        self.query_name = query_name
 
 
 # --------------------------------------------------------------------------- #
@@ -78,6 +78,35 @@ def test_cigar_hard_clip_and_padding_ignored():
 def test_cigar_empty():
     # No ops -> all zeros. Documents the edge case explicitly.
     assert parse_cigar_lengths(FakeRead([])) == [0, 0, 0]
+
+
+def test_cigar_explicit_matches_and_mismatches():
+    assert parse_cigar_lengths(FakeRead([(4, 10), (7, 80), (8, 10)])) == [100, 90, 10]
+
+
+@pytest.mark.parametrize("cigar, reason", [
+    (None, "missing CIGAR"),
+    ([(0, 50), (9, 10)], "unsupported operation"),
+    ([(0, 50), (0, -5)], "invalid operation length"),
+    ([(0, 50), (0, 0)], "invalid operation length"),
+    ([(0, 50), (0, "10")], "invalid operation length"),
+    ([(0, 50), (0,)], "unpack"),
+])
+def test_cigar_errors_identify_the_read_and_cigar(cigar, reason):
+    with pytest.raises(ValueError, match=reason) as exc:
+        parse_cigar_lengths(FakeRead(cigar, query_name="broken_read"))
+    assert "broken_read" in str(exc.value)
+    assert repr(cigar) in str(exc.value)
+
+
+def test_cigar_error_includes_the_sam_cigar_string():
+    import pysam
+
+    read = pysam.AlignedSegment()
+    read.query_name = "bad_length"
+    read.cigarstring = "50M0I"
+    with pytest.raises(ValueError, match="bad_length.*50M0I"):
+        parse_cigar_lengths(read)
 
 
 # --------------------------------------------------------------------------- #

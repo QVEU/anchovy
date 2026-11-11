@@ -48,9 +48,16 @@ jobs:
           conda list
 
       - name: Install the anchovy package (editable)
-        run: pip install -e . --no-deps
+        run: python -m pip install -e . --no-deps
         # --no-deps: all runtime deps already came from conda via environment.yml;
         # this installs only the package itself, avoiding pip re-resolving them.
 
-      - name: Run the test suite
+      - name: Require pipeline and report dependencies
+        run: |
+          for tool in minimap2 samtools snakemake Rscript pandoc; do
+            command -v "$tool" || exit 1
+          done
+          Rscript -e 'stopifnot(rmarkdown::pandoc_available()); for (pkg in c("ggplot2", "dplyr", "tidyr", "readr", "scales", "tibble", "knitr", "igraph", "ggraph")) loadNamespace(pkg)'
+
+      - name: Run the test suite including report rendering
         run: pytest -v
