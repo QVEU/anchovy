@@ -81,6 +81,7 @@ my_experiment/                     <- input_dir
             sample_A_genotypeNetwork.csv
             sample_A_genotypeNodes.csv
             sample_A_epistaticNetwork.csv
+            sample_A_epistaticNetwork.cyjs
             sample_A_alleleFrequencies.csv
             sample_A_cellAlleleFreq.csv
             sample_A_report.html   <- start here

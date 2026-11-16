@@ -26,7 +26,16 @@ analyzing networks that's widely used in biology. Download it from
 [cytoscape.org](https://cytoscape.org/), or use the no-install browser version at
 [web.cytoscape.org](https://web.cytoscape.org/).
 
-To load an anchovy network:
+**The quickest way in is `<sample>_epistaticNetwork.cyjs`.** It is the
+single-step network in Cytoscape's own JSON format with the node attributes
+already attached (the same columns as `_genotypeNodes.csv`: `genotypeID`,
+`nMutations`, `nCells`, `genoFreq`, `idFreq`). In Cytoscape choose
+**File → Import → Network from File**, pick the `.cyjs`, and every genotype,
+including the reference, arrives labelled and ready to size by `nCells`, with
+no table import or join. Cytoscape will apply a default layout; pick one from
+the **Layout** menu if it opens as a grid.
+
+To load the CSVs instead (for the shared-mutation network, or another tool):
 
 1. In Cytoscape, choose **File → Import → Network from File** and pick one of the
    network CSVs.

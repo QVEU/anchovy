@@ -134,6 +134,7 @@ skip reporting and run the remaining pipeline without R.
 | `_regionAnnotations.csv` | One row per variant per overlapping GFF3 region, when a GFF is supplied |
 | `_genotypeNodes.csv` | One row per nucleotide genotype, with cell counts and frequencies |
 | `_epistaticNetwork.csv` | Single-step links between genotypes, including links to the reference |
+| `_epistaticNetwork.cyjs` | The same single-step network with node attributes attached, for a one-step Cytoscape import |
 | `_genotypeNetwork.csv` | Links between genotypes sharing mutations; these need not be single steps |
 | `_alleleFrequencies.csv`, `_cellAlleleFreq.csv` | Population and per-cell frequencies when `allele_frequencies: true` |
 

@@ -448,7 +448,7 @@ def test_reference_count_is_in_the_epistatic_network(tmp_path):
                      "8T_13A", "8T_13A", "8T_13A", "20G"],
     }).to_csv(cons, index=False)
     ref = tmp_path / "ref.txt"
-    ref.write_text(">ref\n" + "ACGT" * 10 + "\n")
+    ref.write_text(">ref\n" + "ACGTAC" * 7 + "\n")
     out = str(tmp_path / "py")
     run(str(cons), str(ref), out, network=True)
 
@@ -465,3 +465,62 @@ def test_reference_count_is_in_the_epistatic_network(tmp_path):
     assert "reference" not in set(ep["source"])
     assert set(ep.loc[ep["target"] == "reference", "countTarget"]) == {3}
     assert set(ep.loc[ep["target"] == "8T_13A", "countTarget"]) == {3}
+
+
+# --------------------------------------------------------------------------- #
+# _epistaticNetwork.cyjs: the network with node attributes attached, so one
+# Cytoscape import gives sized, labelled nodes with no join.
+# --------------------------------------------------------------------------- #
+def _toy_run(tmp_path, **kw):
+    cons = tmp_path / "filtConsensus.csv"
+    pd.DataFrame({
+        "CBC_ID": [f"c{i}" for i in range(10)],
+        "genotype": ["", "", "", "13A", "13A", "8T",
+                     "8T_13A", "8T_13A", "8T_13A", "20G"],
+    }).to_csv(cons, index=False)
+    ref = tmp_path / "ref.txt"
+    ref.write_text(">ref\n" + "ACGTAC" * 7 + "\n")
+    out = str(tmp_path / "py")
+    run(str(cons), str(ref), out, network=True, **kw)
+    return out
+
+
+@pytest.mark.parametrize("self_edges", [False, True])
+def test_cyjs_carries_the_csvs_nodes_and_edges(tmp_path, self_edges):
+    import json
+    out = _toy_run(tmp_path, self_edges=self_edges)
+    doc = json.loads(open(f"{out}_epistaticNetwork.cyjs").read())
+
+    nodes = pd.read_csv(f"{out}_genotypeNodes.csv")
+    edges = pd.read_csv(f"{out}_epistaticNetwork.csv")
+    cy_nodes = {n["data"]["id"]: n["data"] for n in doc["elements"]["nodes"]}
+    cy_edges = [e["data"] for e in doc["elements"]["edges"]]
+
+    # Every node-table row is a node, with the same attributes.
+    assert set(cy_nodes) == set(nodes["genotype"])
+    for rec in nodes.to_dict("records"):
+        d = cy_nodes[rec["genotype"]]
+        assert d["name"] == rec["genotype"]
+        for col in ("genotypeID", "nMutations", "nCells", "genoFreq", "idFreq"):
+            assert d[col] == pytest.approx(rec[col]), (rec["genotype"], col)
+
+    # Same edges as the CSV, every endpoint a node, and unique edge ids.
+    assert len(cy_edges) == len(edges)
+    assert len({e["id"] for e in cy_edges}) == len(cy_edges)
+    for e, rec in zip(cy_edges, edges.to_dict("records")):
+        assert (e["source"], e["target"]) == (rec["source"], rec["target"])
+        assert e["count"] == rec["count"] and e["countTarget"] == rec["countTarget"]
+        assert e["source"] in cy_nodes and e["target"] in cy_nodes
+
+    # The original symptom: the reference node has its count.
+    assert cy_nodes["reference"]["nCells"] == 3
+    assert isinstance(cy_nodes["reference"]["nCells"], int)
+
+
+def test_cyjs_is_written_and_has_no_nan(tmp_path):
+    out = _toy_run(tmp_path)
+    text = open(f"{out}_epistaticNetwork.cyjs").read()
+    # NaN is not valid JSON; Cytoscape rejects the file if it slips through.
+    assert "NaN" not in text
+    import json
+    assert json.loads(text)["data"]["name"] == "py_epistaticNetwork"
