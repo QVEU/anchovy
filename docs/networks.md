@@ -26,7 +26,16 @@ analyzing networks that's widely used in biology. Download it from
 [cytoscape.org](https://cytoscape.org/), or use the no-install browser version at
 [web.cytoscape.org](https://web.cytoscape.org/).
 
-To load an anchovy network:
+**The quickest way in is `<sample>_epistaticNetwork.cyjs`.** It is the
+single-step network in Cytoscape's own JSON format with the node attributes
+already attached (the same columns as `_genotypeNodes.csv`: `genotypeID`,
+`nMutations`, `nCells`, `genoFreq`, `idFreq`). In Cytoscape choose
+**File → Import → Network from File**, pick the `.cyjs`, and every genotype,
+including the reference, arrives labelled and ready to size by `nCells`, with
+no table import or join. Cytoscape will apply a default layout; pick one from
+the **Layout** menu if it opens as a grid.
+
+To load the CSVs instead (for the shared-mutation network, or another tool):
 
 1. In Cytoscape, choose **File → Import → Network from File** and pick one of the
    network CSVs.
@@ -39,6 +48,15 @@ To load an anchovy network:
    `<sample>_genotypeNodes.csv`. Cytoscape matches its `genotype` column to the
    genotypes already in your network and attaches the rest as **node
    attributes**.
+
+**About the `count` columns in the network files.** `count` is the number of
+cells carrying the link's *source* genotype, and `countTarget` the number
+carrying its *target*. You need both because some genotypes are never a source:
+in the epistatic network the reference only ever appears as a target (each
+single-mutation genotype links back to it), and so does a genotype at the end
+of a path, like a double mutant whose single-mutant parents link to it. For
+sizing nodes, use `nCells` from `_genotypeNodes.csv`, which covers every
+genotype.
 
 Each point (node) in the resulting picture is a genotype; each line (edge) is a
 relationship between two genotypes. This is a quick way to see, for instance,

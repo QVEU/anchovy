@@ -27,6 +27,9 @@ exactly as before, which is why the R-frozen goldens still pass.
 
 from __future__ import annotations
 
+import json
+import os
+import math
 import warnings
 from collections.abc import Iterable
 
@@ -226,7 +229,10 @@ def hap_network_gen(haplocounts: pd.DataFrame,
     against either network. Pass self_edges=True to keep every one, which is
     what reproduces the R byte for byte.
 
-    THE `count` COLUMN is the number of cells carrying that genotype, despite
+    THE `count` COLUMN is the number of cells carrying the SOURCE genotype, and
+    `countTarget` the number carrying the TARGET. Only the first came from the
+    R; see the note where countTarget is added for why it is needed. `count`
+    is the number of cells carrying that genotype, despite
     being computed the R's roundabout way as
     rowSums(countMatrix)/rowSums(binaryMatrix) -- the count matrix aggregation
     defaults to occurrence counts (the R dcast 'fun.aggregate defaulting to
@@ -342,6 +348,20 @@ def hap_network_gen(haplocounts: pd.DataFrame,
         single_steps = single_steps[
             ~loops | ~single_steps["genotype"].isin(reachable)
         ].reset_index(drop=True)
+
+    # `count` belongs to the SOURCE genotype (it is merged on source above), so
+    # a genotype that only ever appears as a target never gets one. In the
+    # default epistatic network that is always "reference" -- its only edges
+    # are the single-mutation genotypes pointing at it, once its own self-loop
+    # is dropped -- and it is every top-of-path genotype too, e.g. a double
+    # mutant whose single-mutant parents point at it. The edge file then
+    # carries no count for those nodes at all, which read as a missing
+    # reference count. countTarget is the same per-genotype cell count looked
+    # up for the other end, appended last so the R-shaped columns are as they
+    # were. Same counts table, so the two always agree.
+    target_count = counts.set_index("genotype")["count"]
+    for frame in (single_steps, all_entries):
+        frame["countTarget"] = frame["target"].map(target_count)
 
     # Rename the source-node column from "genotype" to "source" so Cytoscape
     # auto-detects the source/target roles on import (no manual column mapping).
@@ -559,6 +579,80 @@ def genotype_nodes(annotated: pd.DataFrame,
             .sort_values(["nMutations", "genotype"]).reset_index(drop=True))
 
 
+def _json_value(v):
+    """A pandas/numpy cell as a JSON value: NaN/NA -> null, numpy scalars ->
+    plain int/float, whole floats -> int (so Cytoscape types nCells as an
+    integer column rather than a decimal one)."""
+    if v is None or v is pd.NA:
+        return None
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (float, np.floating)):
+        if math.isnan(v):
+            return None
+        return float(v)
+    if isinstance(v, (np.bool_,)):
+        return bool(v)
+    return v if isinstance(v, (int, str, bool)) else str(v)
+
+
+def network_cyjs(edges: pd.DataFrame, nodes: pd.DataFrame,
+                 name: str = "epistaticNetwork") -> dict:
+    """The network and its node attributes as one Cytoscape JSON document (pure).
+
+    The CSV route needs two imports: the edge table as a network, then
+    _genotypeNodes.csv as a node table joined on `genotype`. Until that join
+    is done, a node has no attributes of its own, and the only count in the
+    edge table is `count` -- the SOURCE genotype's -- so a node that is only
+    ever a target (always "reference" in the default epistatic network) has
+    none. A .cyjs carries both halves, so File -> Import -> Network from File
+    gives labelled, sized nodes in one step.
+
+    Every genotype named by an edge gets a node, and so does every genotype in
+    `nodes` (an isolated one keeps its place even if it has no edge). Node
+    `id` and `name` are the genotype string, matching source/target and the
+    CSVs; the remaining node fields are the _genotypeNodes.csv columns. Edges
+    keep every column of the edge table, plus an `id` (Cytoscape requires one,
+    and parallel edges -- the reference's duplicated row under self_edges --
+    need distinct ones) and `interaction`, set to "single_step" so Cytoscape
+    names edges "A (single_step) B" rather than "A (null) B".
+    """
+    node_rows = {}
+    for rec in nodes.to_dict("records"):
+        g = rec["genotype"]
+        if g is None or (isinstance(g, float) and math.isnan(g)):
+            continue
+        g = str(g)
+        data = {"id": g, "name": g}
+        data.update({k: _json_value(v) for k, v in rec.items()
+                     if k != "genotype"})
+        node_rows[g] = data
+
+    edge_rows = []
+    if not edges.empty and {"source", "target"} <= set(edges.columns):
+        for i, rec in enumerate(edges.to_dict("records")):
+            src, tgt = str(rec["source"]), str(rec["target"])
+            for g in (src, tgt):
+                # Safety net, as in genotype_nodes: a node the edges name
+                # always exists, so no edge dangles.
+                node_rows.setdefault(g, {"id": g, "name": g})
+            data = {"id": f"e{i}", "interaction": "single_step"}
+            data.update({k: _json_value(v) for k, v in rec.items()})
+            data["source"], data["target"] = src, tgt
+            edge_rows.append({"data": data})
+
+    return {
+        "format_version": "1.0",
+        "generated_by": "anchovy",
+        "target_cytoscapejs_version": "~2.1",
+        "data": {"name": name, "shared_name": name},
+        "elements": {
+            "nodes": [{"data": d} for d in node_rows.values()],
+            "edges": edge_rows,
+        },
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
@@ -729,6 +823,15 @@ def run(filt_consensus_csv: str, reference_file: str, out_prefix: str,
         nodes = genotype_nodes(merged, edge_genotypes=edge_genotypes)
         nodes.to_csv(f"{out_prefix}_genotypeNodes.csv", index=False)
         written["nodes"] = f"{out_prefix}_genotypeNodes.csv"
+
+        # The epistatic network with node attributes attached, so Cytoscape
+        # loads it in one import with no join against _genotypeNodes.csv.
+        sample = os.path.basename(out_prefix)
+        cyjs = network_cyjs(single_steps, nodes,
+                            name=f"{sample}_epistaticNetwork")
+        with open(f"{out_prefix}_epistaticNetwork.cyjs", "w") as fh:
+            json.dump(cyjs, fh, indent=1)
+        written["cyjs"] = f"{out_prefix}_epistaticNetwork.cyjs"
 
     return {"annot": merged, "regions": region_table, "nodes": nodes,
             "written": written}

@@ -180,6 +180,10 @@ def test_network_matches_r_golden(tmp_path):
     # is "source" (renamed from the R's "genotype" for Cytoscape auto-detection).
     got = pd.read_csv(f"{out_prefix}_epistaticNetwork.csv")
     exp = pd.read_csv(epi_golden)
+    # countTarget is a Python-only addition (the target end's cell count), so
+    # the R-fidelity check covers exactly the R's columns.
+    assert "countTarget" in got.columns
+    got = got[list(exp.columns)]
 
     sort_cols = ["source", "target", "overlap", "mutNumSource", "mutNumTarget"]
     got_s = got.sort_values(sort_cols).reset_index(drop=True)

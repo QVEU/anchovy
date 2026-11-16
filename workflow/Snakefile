@@ -890,6 +890,9 @@ rule annotate:
         # Node attributes for the two edge tables above, so Cytoscape can label
         # and size genotypes without a manual join.
         nodes=GENOTYPE_NODES,
+        # The epistatic network and its node attributes in one Cytoscape JSON
+        # file: File -> Import -> Network from File, no table join needed.
+        cyjs=RESULTS + "/" + SAMPLE + "_epistaticNetwork.cyjs",
         # The long-format per-region table exists only in region-aware mode, so
         # it is declared as an output only when a GFF3 is configured.
         **({"regions": REGION_ANNOTATIONS} if GFF else {}),
