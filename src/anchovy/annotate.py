@@ -226,7 +226,10 @@ def hap_network_gen(haplocounts: pd.DataFrame,
     against either network. Pass self_edges=True to keep every one, which is
     what reproduces the R byte for byte.
 
-    THE `count` COLUMN is the number of cells carrying that genotype, despite
+    THE `count` COLUMN is the number of cells carrying the SOURCE genotype, and
+    `countTarget` the number carrying the TARGET. Only the first came from the
+    R; see the note where countTarget is added for why it is needed. `count`
+    is the number of cells carrying that genotype, despite
     being computed the R's roundabout way as
     rowSums(countMatrix)/rowSums(binaryMatrix) -- the count matrix aggregation
     defaults to occurrence counts (the R dcast 'fun.aggregate defaulting to
@@ -342,6 +345,20 @@ def hap_network_gen(haplocounts: pd.DataFrame,
         single_steps = single_steps[
             ~loops | ~single_steps["genotype"].isin(reachable)
         ].reset_index(drop=True)
+
+    # `count` belongs to the SOURCE genotype (it is merged on source above), so
+    # a genotype that only ever appears as a target never gets one. In the
+    # default epistatic network that is always "reference" -- its only edges
+    # are the single-mutation genotypes pointing at it, once its own self-loop
+    # is dropped -- and it is every top-of-path genotype too, e.g. a double
+    # mutant whose single-mutant parents point at it. The edge file then
+    # carries no count for those nodes at all, which read as a missing
+    # reference count. countTarget is the same per-genotype cell count looked
+    # up for the other end, appended last so the R-shaped columns are as they
+    # were. Same counts table, so the two always agree.
+    target_count = counts.set_index("genotype")["count"]
+    for frame in (single_steps, all_entries):
+        frame["countTarget"] = frame["target"].map(target_count)
 
     # Rename the source-node column from "genotype" to "source" so Cytoscape
     # auto-detects the source/target roles on import (no manual column mapping).

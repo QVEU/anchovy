@@ -40,6 +40,15 @@ To load an anchovy network:
    genotypes already in your network and attaches the rest as **node
    attributes**.
 
+**About the `count` columns in the network files.** `count` is the number of
+cells carrying the link's *source* genotype, and `countTarget` the number
+carrying its *target*. You need both because some genotypes are never a source:
+in the epistatic network the reference only ever appears as a target (each
+single-mutation genotype links back to it), and so does a genotype at the end
+of a path, like a double mutant whose single-mutant parents link to it. For
+sizing nodes, use `nCells` from `_genotypeNodes.csv`, which covers every
+genotype.
+
 Each point (node) in the resulting picture is a genotype; each line (edge) is a
 relationship between two genotypes. This is a quick way to see, for instance,
 which mutations tend to build on one another.

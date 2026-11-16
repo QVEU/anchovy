@@ -432,3 +432,36 @@ def test_the_single_step_network_is_a_subset_of_the_overlap_network():
     assert pairs(single) < pairs(overlap), (
         "the single-step network is no longer a strict subset of the overlap "
         "network; one of the two edge criteria has changed")
+
+
+# --------------------------------------------------------------------------- #
+# `count` is the SOURCE genotype's cell count, so a genotype that is only ever
+# a target -- always "reference" in the default epistatic network, and any
+# top-of-path genotype -- had no count anywhere in the edge file. countTarget
+# carries the other end.
+# --------------------------------------------------------------------------- #
+def test_reference_count_is_in_the_epistatic_network(tmp_path):
+    cons = tmp_path / "filtConsensus.csv"
+    pd.DataFrame({
+        "CBC_ID": [f"c{i}" for i in range(10)],
+        "genotype": ["", "", "", "13A", "13A", "8T",
+                     "8T_13A", "8T_13A", "8T_13A", "20G"],
+    }).to_csv(cons, index=False)
+    ref = tmp_path / "ref.txt"
+    ref.write_text(">ref\n" + "ACGT" * 10 + "\n")
+    out = str(tmp_path / "py")
+    run(str(cons), str(ref), out, network=True)
+
+    nodes = pd.read_csv(f"{out}_genotypeNodes.csv").set_index("genotype")["nCells"]
+    for name in ("epistaticNetwork", "genotypeNetwork"):
+        edges = pd.read_csv(f"{out}_{name}.csv")
+        assert "countTarget" in edges.columns
+        for _, e in edges.iterrows():
+            assert e["count"] == nodes[e["source"]], (name, e.to_dict())
+            assert e["countTarget"] == nodes[e["target"]], (name, e.to_dict())
+
+    ep = pd.read_csv(f"{out}_epistaticNetwork.csv")
+    # The reference is never a source here, which is the original symptom.
+    assert "reference" not in set(ep["source"])
+    assert set(ep.loc[ep["target"] == "reference", "countTarget"]) == {3}
+    assert set(ep.loc[ep["target"] == "8T_13A", "countTarget"]) == {3}
