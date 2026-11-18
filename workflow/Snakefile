@@ -217,6 +217,32 @@ else:
         f"{CHEM['whitelist']}.gz  (gunzip it)\n"
         f"  or set `whitelist_url` to a mirror you can reach.")
 
+# A WHITELIST PER SAMPLE. `whitelist` may also be a mapping of sample name to
+# list, for samples that each come with their own Cell Ranger cell calls:
+#
+#   whitelist:
+#     P10_5: /path/to/p10_5_barcodes.txt
+#     P10_8: /path/to/p10_8_barcodes.txt
+#
+# Every sample has to be named. A missing one would otherwise surface as a
+# KeyError deep inside a job, so the gap is reported here, before anything runs.
+if isinstance(WHITELIST, dict):
+    _missing = sorted(set(SAMPLES) - set(WHITELIST))
+    if _missing:
+        raise WorkflowError(
+            f"`whitelist` is a per-sample mapping but has no entry for "
+            f"{', '.join(_missing)}.\n"
+            f"  Samples found: {', '.join(SAMPLES)}.\n"
+            f"  A sample's name is its FASTQ's basename without "
+            f".fastq/.fq/.gz.")
+
+
+def whitelist_for(wildcards):
+    if isinstance(WHITELIST, dict):
+        return WHITELIST[wildcards.sample]
+    return WHITELIST
+
+
 # --------------------------------------------------------------------------- #
 # Reference name, read from the reference rather than asked for
 # --------------------------------------------------------------------------- #
@@ -474,11 +500,21 @@ CHUNK_SIZE = int(config.get("extract_chunk_size", 100_000))
 # for it -- 36 GB for a run that needs 13. The line count is knowable here
 # because the file already exists; only a list still to be downloaded falls
 # back to the chemistry's published count.
+#
+# A per-sample mapping is sized by its LARGEST list: extract's reservation is
+# one figure for every sample, so it has to fit the biggest of them.
 def _whitelist_barcodes():
-    path = config.get("whitelist")
-    if path and os.path.exists(path):
-        with open(path) as handle:
-            return sum(1 for line in handle if line.strip())
+    paths = config.get("whitelist")
+    if isinstance(paths, dict):
+        paths = list(paths.values())
+    elif paths:
+        paths = [paths]
+    if paths and all(os.path.exists(p) for p in paths):
+        counts = []
+        for p in paths:
+            with open(p) as handle:
+                counts.append(sum(1 for line in handle if line.strip()))
+        return max(counts)
     # A chemistry whose list has no published count and no URL (5p-v3) can
     # only reach here before its local file exists -- a dry run, say. Size it
     # as a full 10x list rather than as nothing, so the reservation errs high.
@@ -645,7 +681,7 @@ rule map_reads:
 rule extract:
     input:
         sam=RESULTS + "/" + SAMPLE + ".sam",
-        whitelist=WHITELIST,
+        whitelist=whitelist_for,
     output:
         RESULTS + "/" + SAMPLE + "_anchovy.csv",
     # extract runs its own multiprocessing Pool, which is NOT snakemake's
@@ -675,13 +711,20 @@ rule extract:
         # the stage's footprint -- it no longer scales with the size of the run.
         chunk_size=(f"--chunk-size {config['extract_chunk_size']}"
                     if "extract_chunk_size" in config else ""),
+        # The floor on exact whitelist matches (default 0.05). A list holding
+        # only SOME of the library's cells -- one sample's calls from a
+        # multiplexed well -- can sit below it legitimately; see
+        # anchovy.config.min_exact_rate before lowering it.
+        min_exact_rate=(f"--min-exact-rate {config['min_exact_rate']}"
+                        if "min_exact_rate" in config else ""),
     resources:
         mem_mb=mem_mb("extract"),
         runtime=runtime("extract"),
     shell:
         "anchovy extract {input.sam} {input.whitelist} "
         "--signature {params.sig} -o {output} --threads {threads} "
-        "{params.max_distance} {params.max_barcode_errors} {params.chunk_size}"
+        "{params.max_distance} {params.max_barcode_errors} {params.chunk_size} "
+        "{params.min_exact_rate}"
 
 
 # --------------------------------------------------------------------------- #

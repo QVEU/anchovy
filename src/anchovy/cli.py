@@ -46,6 +46,9 @@ def _cmd_extract(args: argparse.Namespace) -> int:
         downstream_window=(args.downstream_window
                            if args.downstream_window is not None
                            else defaults.downstream_window),
+        min_exact_rate=(args.min_exact_rate
+                        if args.min_exact_rate is not None
+                        else defaults.min_exact_rate),
     )
 
     out = args.out or args.sam.replace(".sam", "_anchovy.csv").replace(".bam", "_anchovy.csv")
@@ -222,6 +225,13 @@ def build_parser() -> argparse.ArgumentParser:
                                 "larger term on a full 10X list, so lower "
                                 "--threads first on a tight node. The stage "
                                 "prints what it will hold before it starts.")
+    p_extract.add_argument("--min-exact-rate", type=float,
+                           dest="min_exact_rate",
+                           help="Fail when fewer than this fraction of the "
+                                "first chunk's reads carry an exact whitelist "
+                                "barcode (default: 0.05), which is what a "
+                                "whitelist from the wrong kit looks like. 0 "
+                                "turns the check off.")
     p_extract.set_defaults(func=_cmd_extract)
 
     # --- fasta ---

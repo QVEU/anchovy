@@ -58,6 +58,19 @@ chemistry: "v3"
 # things that silently produce nonsense -- the "-1" GEM-well suffix Cell Ranger
 # writes, mixed widths, non-ACGTN characters -- and the error names the fix.
 #
+# Samples with their own cell calls take a mapping instead, one entry per
+# sample (a sample's name is its FASTQ's basename without .fastq/.fq/.gz):
+#
+#   whitelist:
+#     P10_5: "path/to/p10_5_barcodes.txt"
+#     P10_8: "path/to/p10_8_barcodes.txt"
+#
+# A list that holds only some of a library's cells -- one sample's calls from a
+# multiplexed (cellranger multi) well -- leaves most reads without an exact
+# match, and extract stops when under `min_exact_rate` (default 0.05) of them
+# match. Give such a library the combined list for its whole well, or lower
+# `min_exact_rate`.
+#
 # `whitelist_url` points the download at your own mirror instead.
 #
 # The fixture's six barcodes, sitting beside the reads -- which is also where a
