@@ -44,8 +44,22 @@ from anchovy.schema import (
 # --------------------------------------------------------------------------- #
 # SAM reading
 # --------------------------------------------------------------------------- #
-def parse_cigar_lengths(read) -> list[int]:
+_SEQ_FIELD = SamColumns.KEPT.index(SamColumns.SEQ)
+
+_COMPLEMENT = str.maketrans("ACGTNacgtn", "TGCANtgcan")
+
+
+def reverse_complement(seq: str) -> str:
+    """Reverse-complement a nucleotide string, keeping case and N."""
+    return seq.translate(_COMPLEMENT)[::-1]
+
+
+def parse_cigar_lengths(read, reverse: bool = False) -> list[int]:
     """Compute [readLen, clipReadLen, offset] from one pysam read's CIGAR.
+
+    `reverse=True` walks the CIGAR from its last operation to its first, which
+    is the CIGAR of the read as it was sequenced when the aligner stored it
+    reverse-complemented. See iter_sam_chunks for why that is needed.
 
     Length conventions inherited from the original loadSAM inline loop:
       - op 0 (match), 1 (insertion), 3 (skip), 7 (=), 8 (X): add to both lengths
@@ -64,7 +78,8 @@ def parse_cigar_lengths(read) -> list[int]:
     try:
         if cigar is None:
             raise ValueError("missing CIGAR")
-        for cigar_type, cigar_length in cigar:
+        for cigar_type, cigar_length in (reversed(cigar) if reverse
+                                         else cigar):
             if not isinstance(cigar_length, int) or cigar_length <= 0:
                 raise ValueError(f"invalid operation length {cigar_length!r}")
             if cigar_type in (0, 1, 3, 7, 8):  # M, I, N, =, X
@@ -130,6 +145,7 @@ def iter_sam_chunks(path: str, min_read_length: int,
     offsets: list[int] = []
     lengths: list[int] = []
     n_records = 0
+    n_reversed = 0
 
     print("Parsing Cigars...")
     # check_sq=False so a SAM with no @SQ header still opens; the old text pass
@@ -165,9 +181,36 @@ def iter_sam_chunks(path: str, min_read_length: int,
             # SamColumns.ORDER still describes the 11-field SAM line; KEPT is
             # the subset actually retained. Add a column back to KEPT if
             # something starts needing it.
-            rows.append(read.to_string().split("\t")[:len(SamColumns.KEPT)])
+            row = read.to_string().split("\t")[:len(SamColumns.KEPT)]
 
-            read_len, clip_len, offset = parse_cigar_lengths(read)
+            # REVERSE-STRAND READS ARE TURNED BACK THE WAY THEY WERE SEQUENCED.
+            #
+            # A SAM stores a read that maps to the reverse strand (FLAG 0x10)
+            # reverse-complemented, so its SEQ and CIGAR run in reference order.
+            # The 10X construct (handle, barcode, UMI, TSO) is at the 5' end of
+            # the molecule, which in that stored form is the RIGHT end of SEQ,
+            # reverse-complemented, beside the TRAILING soft clip. The signature
+            # search only looks LEFT of the alignment start, so before this
+            # every such read was searched in the wrong place: it still got a
+            # junk "best match" below max_distance, still counted toward the
+            # exact-match rate's denominator, and was then assigned to a
+            # nearest-neighbour barcode or dropped. Unoriented long reads are
+            # about half reverse-strand.
+            #
+            # Re-orienting here, rather than teaching the search a second
+            # window, keeps every later step identical for both strands: the
+            # leading soft clip is the construct, offset is its length, and the
+            # mapped segment is the read's own sequence in sequencing order.
+            # FLAG is left as the aligner wrote it, so the row still says which
+            # reads were turned.
+            reverse = read.is_reverse and seq != "*"
+            if reverse:
+                seq = reverse_complement(seq)
+                row[_SEQ_FIELD] = seq
+                n_reversed += 1
+            rows.append(row)
+
+            read_len, clip_len, offset = parse_cigar_lengths(read, reverse)
             read_lens.append(read_len)
             clip_lens.append(clip_len)
             offsets.append(offset)
@@ -180,6 +223,7 @@ def iter_sam_chunks(path: str, min_read_length: int,
 
     print("Done.")
     print("Total Candidate Reads: {}".format(n_records))
+    print("Reverse-strand reads re-oriented: {}".format(n_reversed))
 
     # The trailing partial chunk, and the only chunk when chunk_size is None.
     # Yielded even when empty so a caller always sees the column layout.
