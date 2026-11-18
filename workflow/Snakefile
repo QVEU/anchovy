@@ -500,11 +500,21 @@ CHUNK_SIZE = int(config.get("extract_chunk_size", 100_000))
 # for it -- 36 GB for a run that needs 13. The line count is knowable here
 # because the file already exists; only a list still to be downloaded falls
 # back to the chemistry's published count.
+#
+# A per-sample mapping is sized by its LARGEST list: extract's reservation is
+# one figure for every sample, so it has to fit the biggest of them.
 def _whitelist_barcodes():
-    path = config.get("whitelist")
-    if path and os.path.exists(path):
-        with open(path) as handle:
-            return sum(1 for line in handle if line.strip())
+    paths = config.get("whitelist")
+    if isinstance(paths, dict):
+        paths = list(paths.values())
+    elif paths:
+        paths = [paths]
+    if paths and all(os.path.exists(p) for p in paths):
+        counts = []
+        for p in paths:
+            with open(p) as handle:
+                counts.append(sum(1 for line in handle if line.strip()))
+        return max(counts)
     # A chemistry whose list has no published count and no URL (5p-v3) can
     # only reach here before its local file exists -- a dry run, say. Size it
     # as a full 10x list rather than as nothing, so the reservation errs high.
