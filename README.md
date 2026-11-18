@@ -197,7 +197,7 @@ ocm:
 The channel is mapped and extracted once, and every sample then gets its own
 results under `results/<sample>/`. The
 [On-Chip Multiplexing guide](docs/ocm.md) covers how to tell whether a run is
-OCM, getting the table with `anchovy ocm-table`, naming, what runs, and
+OCM, the built-in OB table and checking it with `anchovy ocm-table`, naming, what runs, and
 troubleshooting.
 
 Only if a library genuinely contains just some of the channel's cells, or you

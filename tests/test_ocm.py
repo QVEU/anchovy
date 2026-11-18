@@ -283,3 +283,45 @@ def test_an_ocm_channel_given_by_ob_ids(tmp_path):
     assert proc.returncode == 0, out[-3000:]
     assert "--overhangs AC,AG --sample s_one" in out
     assert "--overhangs GT --sample s_two" in out
+
+
+# --------------------------------------------------------------------------- #
+# The built-in table, read from a real 5' v3 4-plex run
+# --------------------------------------------------------------------------- #
+def test_the_built_in_ob_table_is_pinned():
+    assert ocm.OB_OVERHANGS == {"OB1": ("GT",), "OB2": ("CA",),
+                                "OB3": ("TC",), "OB4": ("AG",)}
+
+
+def test_ob_ids_resolve_with_no_table_given():
+    got = ocm.resolve_mapping({"P1_5": "OB1", "P1_6": "OB2",
+                               "P1_7": "OB3", "P1_8": "OB4"})
+    assert got == {"P1_5": {"GT"}, "P1_6": {"CA"},
+                   "P1_7": {"TC"}, "P1_8": {"AG"}}
+
+
+def test_a_multi_config_with_trailing_commas_reads(tmp_path):
+    # As Cell Ranger configs written in a spreadsheet often are.
+    cfg = tmp_path / "multi.csv"
+    cfg.write_text("[samples]\nsample_id,ocm_barcode_ids,\n"
+                   "P1_5,OB1,\nP1_6,OB2,\nP1_7,OB3,\nP1_8,OB4,\n")
+    assert ocm.read_multi_config_samples(str(cfg)) == {
+        "P1_5": ["OB1"], "P1_6": ["OB2"], "P1_7": ["OB3"], "P1_8": ["OB4"]}
+
+
+def test_ocm_table_confirms_the_built_in_table(tmp_path, capsys):
+    root = _per_sample_outs(tmp_path / "per_sample_outs", {
+        "P1_5": {"GT": 300}, "P1_6": {"CA": 280}})
+    cfg = tmp_path / "multi.csv"
+    cfg.write_text("[samples]\nsample_id,ocm_barcode_ids\nP1_5,OB1\nP1_6,OB2\n")
+    assert main(["ocm-table", str(root), "--multi-config", str(cfg)]) == 0
+    assert "Built-in OB table: MATCHES" in capsys.readouterr().out
+
+
+@needs_snakemake
+def test_ob_ids_need_no_ocm_overhangs(tmp_path):
+    proc = _dry_run(tmp_path, "ocm:\n  example: {s_one: OB1, s_two: OB4}\n")
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out[-3000:]
+    assert "--overhangs GT --sample s_one" in out
+    assert "--overhangs AG --sample s_two" in out

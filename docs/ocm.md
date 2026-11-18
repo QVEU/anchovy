@@ -34,11 +34,24 @@ OB4.
 ## How the samples are told apart
 
 Every read's 16 nt cell barcode carries its inlet. **Bases 8–9 of the barcode
-are the OCM "overhang"**, and each OB set uses its own overhangs. Cell Ranger's
-chemistry definitions say so for every OCM chemistry (3′ v3/v4, 5′ v3,
-V(D)J): an `overhang` barcode at offset 7, length 2, inside the gel-bead
-barcode, checked against one shared `overhang` list
+are the OCM "overhang"**. Cell Ranger's chemistry definitions put it there
+for every OCM chemistry (3′ v3/v4, 5′ v3, V(D)J): an `overhang` barcode at
+offset 7, length 2, inside the gel-bead barcode, checked against one shared
+`overhang` list
 ([chemistry_defs.json](https://github.com/10XGenomics/cellranger/blob/main/lib/rust/cr_types/src/chemistry/chemistry_defs.json)).
+Each OB set uses its own pair of bases:
+
+| Inlet | Barcode bases 8–9 |
+|---|---|
+| OB1 | GT |
+| OB2 | CA |
+| OB3 | TC |
+| OB4 | AG |
+
+This table was read from a real GEM-X 5′ v3 4-plex run, where every called
+cell of each sample carried its inlet's pair and no other. It is built into
+anchovy (`anchovy.ocm.OB_OVERHANGS`). 10x does not publish the table, so if
+a run ever disagrees, `anchovy ocm-table` (Step 1) will say so.
 
 Two consequences:
 
@@ -51,9 +64,14 @@ Two consequences:
 The full 10x 5′ v3 whitelist (`3M-5pgex-jan-2023.txt`) holds every OB set, so
 leave `whitelist` unset and let `chemistry: "5p-v3"` pick it.
 
-## Step 1: get the sample → OB table
+## Step 1: get the sample → OB lines
 
-`anchovy ocm-table` reads the channel's `cellranger multi` output. The
+All a run adds is which sample went into which inlet. Copy that from the
+multi config's `[samples]` section into `ocm:` (Step 2). That is all most runs
+need.
+
+To check a run against the built-in table, or to write the `ocm:` block for
+you, `anchovy ocm-table` reads the channel's `cellranger multi` output. The
 folders under `per_sample_outs` are named by `sample_id`, and each holds only
 that sample's called cells. Give it the multi config too:
 
@@ -66,19 +84,21 @@ It prints:
 
 - the share of each sample's cells that carry each pair of bases, as
   evidence;
-- an `ocm_overhangs:` block, which is the OB → bases table;
+- whether this run matches the built-in OB table;
+- an `ocm_overhangs:` block (OB → bases, as seen in this run);
 - an `ocm:` block, which is sample → OB, ready to paste.
 
-<!-- Example values: the real OB table is filled in once read from a run. -->
 ```yaml
 # Overhang (barcode bases 8-9) share of each sample's called cells:
-#   P10_5 (2,512 cells): AC 50.3%, AG 49.6%, ...
+#   P10_5 (1,776 cells): GT 100.0%
 #   ...
+#
+# Built-in OB table: MATCHES this run.
 ocm_overhangs:
-  OB1: [AC, AG]
-  OB2: [CA, CC]
-  OB3: [GA, GC]
-  OB4: [TA, TC]
+  OB1: [GT]
+  OB2: [CA]
+  OB3: [TC]
+  OB4: [AG]
 ocm:
   <channel FASTQ name>:
     P10_5: OB1
@@ -87,15 +107,14 @@ ocm:
     P10_8: OB4
 ```
 
-**Those bases are placeholders.** Use what `ocm-table` prints for your run.
+You don't need to paste `ocm_overhangs:`. The built-in table covers it. If
+`ocm-table` ever says the built-in table **differs**, please report it, and
+paste its `ocm_overhangs:` block into the settings file in the meantime.
 
 `ocm-table` refuses to print a table if a pair of bases carries at least 1%
 of two samples' cells. That would mean the barcode position is wrong for this
 chemistry, or the run was not OCM. Without `--multi-config` it prints each
 sample's bases directly instead of OB ids.
-
-You only need the OB table once. After that, any OCM run needs only its own
-sample → OB lines from its multi config.
 
 ## Step 2: the settings file
 
@@ -106,12 +125,6 @@ reference: "/data/p10/reference.fasta"
 gff: "/data/p10/regions.gff3"
 chemistry: "5p-v3"                   # leave `whitelist` unset: the full list holds every OB set
 max_barcode_errors: 2
-
-ocm_overhangs:                       # from ocm-table, until it is built into anchovy
-  OB1: [AC, AG]
-  OB2: [CA, CC]
-  OB3: [GA, GC]
-  OB4: [TA, TC]
 
 ocm:
   p10_5-8:                           # the channel: a FASTQ in input_dir
@@ -136,8 +149,9 @@ in for that reason.
 
 - **A sample loaded into two inlets:** `P10_5: OB1|OB2`, as in the multi
   config.
-- **Bases instead of an OB id:** `P10_5: [AC, AG]`. This needs no
-  `ocm_overhangs`.
+- **Bases instead of an OB id:** `P10_5: [GT]`.
+- **A different OB table:** `ocm_overhangs: {OB1: [..], ...}` replaces the
+  built-in one.
 - **An unused inlet:** leave its OB out. Its reads go to no sample.
 - **Several channels:** one entry each under `ocm:`. FASTQs in `input_dir`
   that are not named under `ocm:` run as ordinary samples.
@@ -165,7 +179,7 @@ p10_5-8.fastq.gz ─ map_reads ─ extract ─► results/p10_5-8/p10_5-8_anchov
 Each sample's split prints the share of the channel's reads it kept:
 
 ```
-P10_5: kept 412,330 of 1,604,221 reads (25.7%) whose barcode carries overhang AC, AG.
+P10_5: kept 412,330 of 1,604,221 reads (25.7%) whose barcode carries overhang GT.
 ```
 
 With four samples loaded evenly, expect roughly a quarter each, a little
@@ -177,7 +191,7 @@ wrong OB in the config.
 The workflow stops with a message, before any job, when:
 
 - an `ocm:` key does not match a FASTQ in `input_dir`;
-- an OB id is unknown, or OB ids are used with no `ocm_overhangs` table;
+- an OB id is unknown;
 - a pair of bases is not exactly two of A/C/G/T;
 - the same bases, or the same OB, are given to two samples;
 - a sample name is already used by another FASTQ or OCM sample;
@@ -189,7 +203,7 @@ The split is one command per sample, on the channel's anchovy CSV:
 
 ```bash
 anchovy ocm-split results/p10_5-8/p10_5-8_anchovy.csv P10_5_anchovy.csv \
-    --overhangs AC,AG --sample P10_5
+    --overhangs GT --sample P10_5
 anchovy fasta P10_5_anchovy.csv P10_5_cells/
 ```
 

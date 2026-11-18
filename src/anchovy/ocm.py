@@ -48,11 +48,18 @@ _BASES = set("ACGT")
 # Ranger's chemistry_defs.json (3' v3/v4, 5' v3, V(D)J) reads the overhang
 # from the same position against the same `overhang` list, so OB1 means the
 # same bases in every OCM run; only which sample went into which inlet changes,
-# and that is the multi config's `ocm_barcode_ids` column. The list itself
-# ships inside Cell Ranger rather than in its public source, so this is filled
-# from a real run's per_sample_outs (`anchovy ocm-table --multi-config`).
-# Until it is, `ocm_overhangs` in the workflow config supplies it.
-OB_OVERHANGS: dict[str, tuple[str, ...]] = {}
+# and that is the multi config's `ocm_barcode_ids` column. The list ships
+# inside Cell Ranger rather than in its public source, so it was read from a
+# real GEM-X 5' v3 4-plex run (2026-11-18): every called cell of each sample
+# carried exactly one pair, OB1 GT (1,776 cells), OB2 CA (1,672), OB3 TC
+# (3,196), OB4 AG (3,064). `anchovy ocm-table --multi-config` re-checks it on
+# any run, and `ocm_overhangs` in the workflow config overrides it.
+OB_OVERHANGS: dict[str, tuple[str, ...]] = {
+    "OB1": ("GT",),
+    "OB2": ("CA",),
+    "OB3": ("TC",),
+    "OB4": ("AG",),
+}
 
 
 def overhang(barcode: str) -> str:
