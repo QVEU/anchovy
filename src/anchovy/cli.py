@@ -65,6 +65,21 @@ def _cmd_extract(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# ocm-split / ocm-table
+# --------------------------------------------------------------------------- #
+def _cmd_ocm_split(args: argparse.Namespace) -> int:
+    from anchovy import ocm
+    ocm.run_split(args.csv, args.overhangs, args.out, sample=args.sample)
+    return 0
+
+
+def _cmd_ocm_table(args: argparse.Namespace) -> int:
+    from anchovy import ocm
+    print(ocm.format_table(args.per_sample_outs, args.min_share))
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # fasta
 # --------------------------------------------------------------------------- #
 def _cmd_fasta(args: argparse.Namespace) -> int:
@@ -233,6 +248,35 @@ def build_parser() -> argparse.ArgumentParser:
                                 "whitelist from the wrong kit looks like. 0 "
                                 "turns the check off.")
     p_extract.set_defaults(func=_cmd_extract)
+
+    # --- ocm-split / ocm-table ---
+    p_split = sub.add_parser(
+        "ocm-split",
+        help="Keep the rows of a channel's anchovy CSV that belong to one "
+             "On-Chip Multiplexing sample.")
+    p_split.add_argument("csv", help="The channel's anchovy CSV.")
+    p_split.add_argument("out", help="Output CSV for this sample.")
+    p_split.add_argument("--overhangs", required=True,
+                         help="Comma-separated overhang bases (cell barcode "
+                              "positions 8-9) that mark this sample, e.g. "
+                              "AC,AG. `anchovy ocm-table` reads them out of "
+                              "a cellranger multi run.")
+    p_split.add_argument("--sample", default="sample",
+                         help="Sample name, for the log line.")
+    p_split.set_defaults(func=_cmd_ocm_split)
+
+    p_table = sub.add_parser(
+        "ocm-table",
+        help="Print each OCM sample's overhang bases, read from cellranger "
+             "multi's per_sample_outs, as YAML for the workflow's `ocm` key.")
+    p_table.add_argument("per_sample_outs",
+                         help="cellranger multi's outs/per_sample_outs folder.")
+    p_table.add_argument("--min-share", type=float, default=0.01,
+                         dest="min_share",
+                         help="Smallest share of a sample's cells an overhang "
+                              "must carry to count as that sample's "
+                              "(default: 0.01).")
+    p_table.set_defaults(func=_cmd_ocm_table)
 
     # --- fasta ---
     p_fasta = sub.add_parser(

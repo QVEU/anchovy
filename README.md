@@ -182,6 +182,39 @@ and point `whitelist` at `p10_5-8_cells.txt`, or at the full 10x list. Joining
 `_filtConsensus.csv` or `_annot_v3.csv` on `CBC_ID` against the table assigns
 each cell to its sample.
 
+#### On-Chip Multiplexing (OCM): let anchovy split the samples
+
+With 10x On-Chip Multiplexing (GEM-X Universal 3′ v4 or 5′ v3 4-plex), each
+inlet of the channel gets its own set of gel beads (OB1–OB4), and that set is
+written into the cell barcode: two bases at positions 8–9 identify the sample.
+anchovy can split on them itself, so the channel is mapped and extracted once
+and each sample then gets its own cells, consensus, genotypes, networks and
+frequencies under `results/<sample>/`.
+
+Which bases belong to which sample comes from the `cellranger multi` run for
+the same channel. `anchovy ocm-table` reads them out of `per_sample_outs`
+(whose folders are named by the `sample_id`s in the multi config) and prints
+the config block, with each sample's shares as evidence:
+
+```bash
+anchovy ocm-table cellranger/p10_5-8/outs/per_sample_outs
+```
+
+```yaml
+ocm:
+  p10_5-8:                 # the channel FASTQ's name
+    P10_5: [AC, AG]        # example values: use what ocm-table prints
+    P10_6: [CA, CC]
+    P10_7: [GA, GC]
+    P10_8: [TA, TC]
+```
+
+Use the full 5′ v3 list as the whitelist (leave `whitelist` unset with
+`chemistry: "5p-v3"`): it holds every OB set. Reads whose two bases belong to no
+listed sample go to none. If `ocm-table` reports a pair of bases in two
+samples, the run was not OCM, and the barcode-to-sample join above is the way
+to split it.
+
 Only if a library genuinely contains just some of the channel's cells, or you
 deliberately want one sample's cells out of a pooled library, lower the floor
 with `min_exact_rate: 0.01` (or `0` to turn the check off). Reads from other
