@@ -100,8 +100,8 @@ The GFF3 supplies coding frames and non-coding regions; see the
 Without a GFF3, the default assumes one coding region beginning at base one.
 
 A chemistry-matched 10X barcode whitelist downloads automatically unless you
-supply `whitelist`. Run-specific lists of called cells are also supported, one
-for all samples or one per sample; see
+supply `whitelist`. Run-specific lists of called cells are also supported, either
+one shared by all samples or one per sample; see
 [whitelists and multiplexed samples](#whitelists-per-sample-lists-and-multiplexed-samples)
 below. When
 adapting `workflow/config.yaml`, replace its bundled `whitelist`, `template`,
@@ -118,7 +118,8 @@ library relates to the Cell Ranger run.
 including background barcodes outside called cells, so expect more cells than
 Cell Ranger called. Restrict to Cell Ranger's cells afterward by barcode.
 
-**One list for every sample.** `whitelist: "/path/cells.txt"` with one 16 nt
+**One shared list for all samples.** `whitelist: "/path/cells.txt"`, used for
+every FASTQ in `input_dir`, with one 16 nt
 barcode per line. Cell Ranger writes barcodes with a `-1` GEM-well suffix;
 strip it (`zcat barcodes.tsv.gz | cut -d- -f1 > cells.txt`).
 
