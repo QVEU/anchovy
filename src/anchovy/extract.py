@@ -336,7 +336,12 @@ class _Tally:
             "  Allowed to continue, the search assigns nearly every read to a "
             "coincidental neighbour two substitutions away, and the cells, "
             "consensuses and genotypes that come out of it look ordinary.\n"
-            "  Set `min_exact_rate: 0` to proceed anyway."
+            "\n"
+            "  A list that holds only SOME of this library's cells -- one "
+            "sample's calls from a multiplexed well -- also lands here. Use "
+            "the list for every sample in the well, or lower the floor.\n"
+            "  Set `min_exact_rate` in the workflow config (or "
+            "--min-exact-rate) to change it; 0 turns the check off."
             .format(rate, self.payloads, whitelist_size, chance))
 
     def report(self, config, baseline):
