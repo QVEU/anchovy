@@ -182,45 +182,23 @@ and point `whitelist` at `p10_5-8_cells.txt`, or at the full 10x list. Joining
 `_filtConsensus.csv` or `_annot_v3.csv` on `CBC_ID` against the table assigns
 each cell to its sample.
 
-#### On-Chip Multiplexing (OCM): let anchovy split the samples
+#### On-Chip Multiplexing (OCM)
 
 With 10x On-Chip Multiplexing (GEM-X Universal 3′ v4 or 5′ v3 4-plex), each
-inlet of the channel gets its own set of gel beads, OB1–OB4, and the set is
-written into the cell barcode: two bases at positions 8–9 identify the inlet.
-anchovy splits on them itself. The channel is mapped and extracted once, and
-each sample then gets its own cells, consensus, genotypes, networks and
-frequencies under `results/<sample>/`.
-
-Which bases each OB uses is the same for every OCM run, 3′ or 5′. What a run
-adds is which sample went into which inlet, and that is already in the
-`[samples]` section of its `cellranger multi` config (`ocm_barcode_ids`). Copy
-it per channel FASTQ:
+sample's inlet is written into the cell barcode itself, so anchovy can split
+the channel FASTQ into its samples without any join. Name the channel FASTQ
+and each sample's inlet, copied from the `cellranger multi` config:
 
 ```yaml
-chemistry: "5p-v3"     # leave `whitelist` unset: the full 5' v3 list holds every OB set
 ocm:
-  p10_5-8:             # the channel FASTQ's name
-    P10_5: OB1
-    P10_6: OB2
-    P10_7: OB3
-    P10_8: OB4
+  p10_5-8: {P10_5: OB1, P10_6: OB2, P10_7: OB3, P10_8: OB4}
 ```
 
-`anchovy ocm-table` prints that block, and the OB → bases table, from the
-multi run's own output (`per_sample_outs` folders are named by `sample_id`).
-It also shows each sample's share of each pair of bases as evidence:
-
-```bash
-anchovy ocm-table cellranger/p10_5-8/outs/per_sample_outs \
-    --multi-config p10_5-8_multi_config.csv
-```
-
-Until the OB table is built into anchovy, paste the `ocm_overhangs:` block it
-prints into your config as well. A sample may also be given its bases
-directly (`P10_5: [AC, AG]`) instead of an OB id. Reads whose two bases belong
-to no listed sample go to none. If `ocm-table` finds one pair of bases in two
-samples, the run was not OCM, and the barcode-to-sample join above is the way
-to split it.
+The channel is mapped and extracted once, and every sample then gets its own
+results under `results/<sample>/`. The
+[On-Chip Multiplexing guide](docs/ocm.md) covers how to tell whether a run is
+OCM, getting the table with `anchovy ocm-table`, naming, what runs, and
+troubleshooting.
 
 Only if a library genuinely contains just some of the channel's cells, or you
 deliberately want one sample's cells out of a pooled library, lower the floor
@@ -272,6 +250,7 @@ See [network interpretation and Cytoscape import](docs/networks.md) for details.
 - [Configuration, output layout, GFF3 and individual commands](docs/usage.md)
 - [Memory, barcode matching and performance troubleshooting](docs/performance.md)
 - [Cluster allocations and SLURM execution](docs/cluster.md)
+- [On-Chip Multiplexing (OCM) samples](docs/ocm.md)
 - [Genotype networks and Cytoscape](docs/networks.md)
 - [Development, legacy fixtures and dependency locks](docs/development.md)
 - [Worked example using public enterovirus A71 data](examples/eva71_sra/README.md)
