@@ -44,6 +44,16 @@ OVERHANG_LEN = 2
 
 _BASES = set("ACGT")
 
+# THE OB -> OVERHANG TABLE IS A 10x CONSTANT. Every OCM chemistry in Cell
+# Ranger's chemistry_defs.json (3' v3/v4, 5' v3, V(D)J) reads the overhang
+# from the same position against the same `overhang` list, so OB1 means the
+# same bases in every OCM run; only which sample went into which inlet changes,
+# and that is the multi config's `ocm_barcode_ids` column. The list itself
+# ships inside Cell Ranger rather than in its public source, so this is filled
+# from a real run's per_sample_outs (`anchovy ocm-table --multi-config`).
+# Until it is, `ocm_overhangs` in the workflow config supplies it.
+OB_OVERHANGS: dict[str, tuple[str, ...]] = {}
+
 
 def overhang(barcode: str) -> str:
     """The OCM overhang (sample) bases of a 16 nt cell barcode."""
@@ -82,6 +92,49 @@ def validate_mapping(mapping: dict[str, list[str] | str]) -> dict[str, set[str]]
             owner[seq] = sample
         out[sample] = seqs
     return out
+
+
+def _ob_ids(value) -> list[str] | None:
+    """OB ids in a mapping value ("OB1", "OB1|OB2", ["OB1"]), else None."""
+    items = value.split("|") if isinstance(value, str) else list(value)
+    items = [str(i).strip().upper() for i in items if str(i).strip()]
+    if items and all(i.startswith("OB") for i in items):
+        return items
+    return None
+
+
+def resolve_mapping(mapping: dict, ob_table: dict | None = None
+                    ) -> dict[str, set[str]]:
+    """{sample: OB id(s) or overhangs} -> {sample: overhangs} (raises).
+
+    A sample's value is normally its OB id, exactly as in the multi config's
+    `ocm_barcode_ids` (`OB1`, or `OB1|OB2` for a sample loaded in two inlets),
+    and is looked up in `ob_table` (default OB_OVERHANGS). Overhang bases
+    may be given directly instead, which needs no table.
+    """
+    table = {k.upper(): v for k, v in
+             (ob_table if ob_table else OB_OVERHANGS).items()}
+    resolved = {}
+    for sample, value in (mapping or {}).items():
+        obs = _ob_ids(value)
+        if obs is None:
+            resolved[sample] = value
+            continue
+        if not table:
+            raise ValueError(
+                f"OCM sample {sample!r} is given as {'|'.join(obs)}, but the "
+                f"OB -> overhang table is not known yet. Set `ocm_overhangs` "
+                f"(`anchovy ocm-table <per_sample_outs> --multi-config "
+                f"<multi_config.csv>` prints it).")
+        seqs = []
+        for ob in obs:
+            if ob not in table:
+                raise ValueError(
+                    f"OCM sample {sample!r}: unknown barcode id {ob}; known: "
+                    f"{', '.join(sorted(table))}.")
+            seqs.extend(table[ob])
+        resolved[sample] = seqs
+    return validate_mapping(resolved)
 
 
 def split_csv(csv: str, overhangs: set[str], out_path: str,
@@ -178,8 +231,61 @@ def table_from_cellranger(per_sample_outs: str,
     return table
 
 
-def format_table(per_sample_outs: str, min_share: float = 0.01) -> str:
-    """The table as YAML for the workflow's `ocm` key, with the evidence."""
+def read_multi_config_samples(path: str) -> dict[str, list[str]]:
+    """{sample_id: [OB ids]} from a cellranger multi config CSV's [samples]."""
+    import csv as _csv
+
+    rows, in_samples = [], False
+    with open(path, newline="") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if stripped.startswith("["):
+                in_samples = stripped.lower().startswith("[samples]")
+                continue
+            if in_samples and stripped and not stripped.startswith("#"):
+                rows.append(stripped)
+    if not rows:
+        raise ValueError(f"{path}: no [samples] section.")
+    reader = _csv.DictReader(rows)
+    fields = {f.strip().lower(): f for f in reader.fieldnames or []}
+    if "sample_id" not in fields or "ocm_barcode_ids" not in fields:
+        raise ValueError(
+            f"{path}: the [samples] section has no sample_id/ocm_barcode_ids "
+            f"columns, so this is not an OCM run.")
+    out = {}
+    for row in reader:
+        sample = row[fields["sample_id"]].strip()
+        out[sample] = [o.strip().upper()
+                       for o in row[fields["ocm_barcode_ids"]].split("|")
+                       if o.strip()]
+    return out
+
+
+def ob_table_from_cellranger(per_sample_outs: str, multi_config: str,
+                             min_share: float = 0.01) -> dict[str, list[str]]:
+    """{OB id: overhangs}, from the sample calls plus the multi config (raises).
+
+    Only a sample loaded into a single inlet pins down its OB's overhangs; a
+    sample spread over several OBs is skipped for the table.
+    """
+    by_sample = table_from_cellranger(per_sample_outs, min_share)
+    sample_obs = read_multi_config_samples(multi_config)
+    missing = sorted(set(by_sample) - set(sample_obs))
+    if missing:
+        raise ValueError(
+            f"{', '.join(missing)} in per_sample_outs but not in the multi "
+            f"config's [samples].")
+    table: dict[str, list[str]] = {}
+    for sample, seqs in by_sample.items():
+        obs = sample_obs[sample]
+        if len(obs) == 1:
+            table[obs[0]] = seqs
+    return dict(sorted(table.items()))
+
+
+def format_table(per_sample_outs: str, min_share: float = 0.01,
+                 multi_config: str | None = None) -> str:
+    """The workflow config blocks, with the evidence as comments."""
     counts = overhang_counts(per_sample_outs)
     table = table_from_cellranger(per_sample_outs, min_share)
     lines = ["# Overhang (barcode bases 8-9) share of each sample's called "
@@ -188,8 +294,28 @@ def format_table(per_sample_outs: str, min_share: float = 0.01) -> str:
         n = sum(c.values())
         top = ", ".join(f"{o} {k / n:.1%}" for o, k in c.most_common(6))
         lines.append(f"#   {sample} ({n:,} cells): {top}")
+    if multi_config is None:
+        lines.append("ocm:")
+        lines.append("  <channel FASTQ name>:")
+        for sample, seqs in table.items():
+            lines.append(f"    {sample}: [{', '.join(seqs)}]")
+        return "\n".join(lines)
+
+    obs = ob_table_from_cellranger(per_sample_outs, multi_config, min_share)
+    sample_obs = read_multi_config_samples(multi_config)
+    known = {k: sorted(v) for k, v in OB_OVERHANGS.items()}
+    lines.append("#")
+    if known:
+        clash = {ob: seqs for ob, seqs in obs.items()
+                 if ob in known and known[ob] != seqs}
+        lines.append("# Built-in OB table: " + (
+            "MATCHES this run." if not clash else
+            "DIFFERS for " + ", ".join(sorted(clash)) + " -- report this."))
+    lines.append("ocm_overhangs:")
+    for ob, seqs in obs.items():
+        lines.append(f"  {ob}: [{', '.join(seqs)}]")
     lines.append("ocm:")
     lines.append("  <channel FASTQ name>:")
-    for sample, seqs in table.items():
-        lines.append(f"    {sample}: [{', '.join(seqs)}]")
+    for sample in table:
+        lines.append(f"    {sample}: {'|'.join(sample_obs[sample])}")
     return "\n".join(lines)

@@ -124,13 +124,16 @@ else:
 # On-Chip Multiplexing: one channel FASTQ, several samples
 # --------------------------------------------------------------------------- #
 # With 10x OCM, up to four samples share one channel and so one library and one
-# FASTQ, and each sample's cells carry their own 2 nt overhang inside the cell
-# barcode (positions 8-9). `ocm` names the channel FASTQ and gives each of its
-# samples its overhangs; `anchovy ocm-table` reads them out of the cellranger
-# multi run's per_sample_outs:
+# FASTQ, and each sample's cells carry their inlet's 2 nt overhang inside the
+# cell barcode (positions 8-9). Which bases each inlet (OB1-OB4) uses is a 10x
+# constant (anchovy.ocm.OB_OVERHANGS, or `ocm_overhangs` to override it); what
+# a run adds is which sample went into which inlet -- the multi config's
+# `ocm_barcode_ids`, copied here per channel FASTQ:
 #
 #   ocm:
-#     p10_5-8: {P10_5: [AC, AG], P10_6: [...], P10_7: [...], P10_8: [...]}
+#     p10_5-8: {P10_5: OB1, P10_6: OB2, P10_7: OB3, P10_8: OB4}
+#
+# Overhang bases may be listed instead of an OB id ({P10_5: [AC, AG]}).
 #
 # The channel is mapped and extracted ONCE; its anchovy CSV is then split by
 # overhang (rule ocm_split) and each sample runs every later stage as an
@@ -140,7 +143,7 @@ OCM = config.get("ocm") or {}
 OCM_SAMPLE_CHANNEL = {}
 OCM_OVERHANGS = {}
 if OCM:
-    from anchovy.ocm import validate_mapping
+    from anchovy.ocm import resolve_mapping
 
     if "samples" in config:
         raise WorkflowError(
@@ -156,7 +159,7 @@ if OCM:
             f"without .fastq/.fq/.gz.")
     for _channel, _mapping in OCM.items():
         try:
-            _sets = validate_mapping(_mapping)
+            _sets = resolve_mapping(_mapping, config.get("ocm_overhangs"))
         except ValueError as exc:
             raise WorkflowError(f"`ocm` channel {_channel}: {exc}") from None
         for _sample, _seqs in _sets.items():

@@ -200,3 +200,86 @@ def test_an_ocm_key_that_is_not_a_fastq_fails_up_front(tmp_path):
     proc = _dry_run(tmp_path, "ocm:\n  nosuch:\n    a: [AC]\n")
     assert proc.returncode != 0
     assert "no such FASTQ" in proc.stdout + proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# OB ids: the per-run part is sample -> inlet; OB -> overhangs is shared
+# --------------------------------------------------------------------------- #
+OB_TABLE = {"OB1": ["AC", "AG"], "OB2": ["CA"], "OB3": ["GA"], "OB4": ["TA"]}
+
+
+def test_ob_ids_resolve_through_the_table():
+    got = ocm.resolve_mapping({"P10_5": "OB1", "P10_6": "ob2",
+                               "P10_7": "OB3|OB4", "raw": ["TT"]}, OB_TABLE)
+    assert got == {"P10_5": {"AC", "AG"}, "P10_6": {"CA"},
+                   "P10_7": {"GA", "TA"}, "raw": {"TT"}}
+
+
+def test_ob_ids_without_a_table_say_how_to_get_one(monkeypatch):
+    monkeypatch.setattr(ocm, "OB_OVERHANGS", {})
+    with pytest.raises(ValueError, match="ocm_overhangs"):
+        ocm.resolve_mapping({"P10_5": "OB1"})
+
+
+def test_an_unknown_ob_id_is_refused():
+    with pytest.raises(ValueError, match="unknown barcode id OB9"):
+        ocm.resolve_mapping({"a": "OB9"}, OB_TABLE)
+
+
+def test_two_samples_on_one_inlet_are_refused():
+    with pytest.raises(ValueError, match="both"):
+        ocm.resolve_mapping({"a": "OB1", "b": "OB1"}, OB_TABLE)
+
+
+MULTI_CONFIG = """[gene-expression]
+reference,/ref
+create-bam,false
+
+[libraries]
+fastq_id,fastqs,feature_types
+GEX,/fq,Gene Expression
+
+[samples]
+sample_id,ocm_barcode_ids,description
+P10_5,OB1,first
+P10_8,OB2,second
+"""
+
+
+def test_the_multi_config_gives_sample_to_ob(tmp_path):
+    cfg = tmp_path / "multi.csv"
+    cfg.write_text(MULTI_CONFIG)
+    assert ocm.read_multi_config_samples(str(cfg)) == {
+        "P10_5": ["OB1"], "P10_8": ["OB2"]}
+
+
+def test_a_non_ocm_multi_config_is_refused(tmp_path):
+    cfg = tmp_path / "multi.csv"
+    cfg.write_text("[samples]\nsample_id,cmo_ids\nA,CMO301\n")
+    with pytest.raises(ValueError, match="not an OCM run"):
+        ocm.read_multi_config_samples(str(cfg))
+
+
+def test_the_ob_table_comes_from_calls_plus_config(tmp_path, capsys):
+    root = _per_sample_outs(tmp_path / "per_sample_outs", {
+        "P10_5": {"AC": 300, "AG": 290}, "P10_8": {"GA": 400}})
+    cfg = tmp_path / "multi.csv"
+    cfg.write_text(MULTI_CONFIG)
+    assert ocm.ob_table_from_cellranger(str(root), str(cfg)) == {
+        "OB1": ["AC", "AG"], "OB2": ["GA"]}
+
+    assert main(["ocm-table", str(root), "--multi-config", str(cfg)]) == 0
+    out = capsys.readouterr().out
+    assert "ocm_overhangs:" in out and "OB1: [AC, AG]" in out
+    assert "P10_5: OB1" in out and "P10_8: OB2" in out
+
+
+@needs_snakemake
+def test_an_ocm_channel_given_by_ob_ids(tmp_path):
+    proc = _dry_run(tmp_path,
+                    "ocm_overhangs: {OB1: [AC, AG], OB2: [GT]}\n"
+                    "ocm:\n  example: {s_one: OB1, s_two: OB2}\n")
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out[-3000:]
+    assert "--overhangs AC,AG --sample s_one" in out
+    assert "--overhangs GT --sample s_two" in out

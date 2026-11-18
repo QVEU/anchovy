@@ -75,7 +75,8 @@ def _cmd_ocm_split(args: argparse.Namespace) -> int:
 
 def _cmd_ocm_table(args: argparse.Namespace) -> int:
     from anchovy import ocm
-    print(ocm.format_table(args.per_sample_outs, args.min_share))
+    print(ocm.format_table(args.per_sample_outs, args.min_share,
+                           multi_config=args.multi_config))
     return 0
 
 
@@ -276,6 +277,11 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Smallest share of a sample's cells an overhang "
                               "must carry to count as that sample's "
                               "(default: 0.01).")
+    p_table.add_argument("--multi-config", dest="multi_config",
+                         help="The cellranger multi config CSV for the same "
+                              "run. With it, the sample -> OB ids come from "
+                              "its [samples] section and the OB -> overhang "
+                              "table is printed as `ocm_overhangs`.")
     p_table.set_defaults(func=_cmd_ocm_table)
 
     # --- fasta ---
