@@ -173,6 +173,70 @@ else:
     SAMPLES = sorted(FASTQS)
 
 # --------------------------------------------------------------------------- #
+# On-Chip Multiplexing: one channel FASTQ, several samples
+# --------------------------------------------------------------------------- #
+# With 10x OCM, up to four samples share one channel and so one library and one
+# FASTQ, and each sample's cells carry their inlet's 2 nt overhang inside the
+# cell barcode (positions 8-9). Which bases each inlet (OB1-OB4) uses is a 10x
+# constant (anchovy.ocm.OB_OVERHANGS, or `ocm_overhangs` to override it); what
+# a run adds is which sample went into which inlet -- the multi config's
+# `ocm_barcode_ids`, copied here per channel FASTQ:
+#
+#   ocm:
+#     p10_5-8: {P10_5: OB1, P10_6: OB2, P10_7: OB3, P10_8: OB4}
+#
+# Overhang bases may be listed instead of an OB id ({P10_5: [AC, AG]}).
+#
+# The channel is mapped and extracted ONCE; its anchovy CSV is then split by
+# overhang (rule ocm_split) and each sample runs every later stage as an
+# ordinary sample, with results under results/<sample>/. The channel itself is
+# not a sample: genotypes and networks only mean something within one.
+OCM = config.get("ocm") or {}
+OCM_SAMPLE_CHANNEL = {}
+OCM_OVERHANGS = {}
+if OCM:
+    from anchovy.ocm import resolve_mapping
+
+    if "samples" in config:
+        raise WorkflowError(
+            "`ocm` splits a channel's reads after extract, so it needs the "
+            "channel FASTQ in `input_dir`; it cannot be combined with "
+            "`samples`/`cells_dir`.")
+    _unknown = sorted(set(OCM) - set(FASTQS))
+    if _unknown:
+        raise WorkflowError(
+            f"`ocm` names {', '.join(_unknown)}, but there is no such FASTQ in "
+            f"{INPUT_DIR}.\n  FASTQs found: {', '.join(sorted(FASTQS))}.\n"
+            f"  Each `ocm` key is a channel FASTQ's name, its basename "
+            f"without .fastq/.fq/.gz.")
+    for _channel, _mapping in OCM.items():
+        try:
+            _sets = resolve_mapping(_mapping, config.get("ocm_overhangs"))
+        except ValueError as exc:
+            raise WorkflowError(f"`ocm` channel {_channel}: {exc}") from None
+        for _sample, _seqs in _sets.items():
+            if _sample in FASTQS or _sample in OCM_SAMPLE_CHANNEL:
+                raise WorkflowError(
+                    f"`ocm` sample name {_sample!r} is already used by another "
+                    f"FASTQ or OCM sample; results would share a folder.")
+            OCM_SAMPLE_CHANNEL[_sample] = _channel
+            OCM_OVERHANGS[_sample] = ",".join(sorted(_seqs))
+
+# Wildcard constraints that keep ocm_split and extract apart: both write
+# results/<sample>/<sample>_anchovy.csv, and an OCM sample's must come from the
+# split, never from an extract that has no FASTQ of its own to start from.
+_OCM_ALTS = "|".join(re.escape(s) for s in sorted(OCM_SAMPLE_CHANNEL, key=len,
+                                                   reverse=True))
+OCM_SAMPLE_RE = f"(?:{_OCM_ALTS})" if _OCM_ALTS else "(?!)"
+NOT_OCM_SAMPLE_RE = (f"(?!(?:{_OCM_ALTS})(?:/|_anchovy\\.csv$)).+"
+                     if _OCM_ALTS else ".+")
+
+# The samples that are mapped and extracted (one per FASTQ), and the samples
+# that get results (an OCM channel is replaced by its samples).
+EXTRACT_SAMPLES = sorted(FASTQS) if FASTQS else SAMPLES
+SAMPLES = sorted((set(SAMPLES) - set(OCM)) | set(OCM_SAMPLE_CHANNEL))
+
+# --------------------------------------------------------------------------- #
 # 10X chemistry: one key, because the two halves must agree
 # --------------------------------------------------------------------------- #
 # The signature's N-run carries the layout -- a fixed 22-base handle, a 16-base
@@ -280,12 +344,12 @@ else:
 # Every sample has to be named. A missing one would otherwise surface as a
 # KeyError deep inside a job, so the gap is reported here, before anything runs.
 if isinstance(WHITELIST, dict):
-    _missing = sorted(set(SAMPLES) - set(WHITELIST))
+    _missing = sorted(set(EXTRACT_SAMPLES) - set(WHITELIST))
     if _missing:
         raise WorkflowError(
             f"`whitelist` is a per-sample mapping but has no entry for "
             f"{', '.join(_missing)}.\n"
-            f"  Samples found: {', '.join(SAMPLES)}.\n"
+            f"  Samples found: {', '.join(EXTRACT_SAMPLES)}.\n"
             f"  A sample's name is its FASTQ's basename without "
             f".fastq/.fq/.gz.")
 
@@ -595,6 +659,7 @@ _DEFAULT_MEM_MB = {
                                           # the SAM is streamed, not buffered
     "extract":         _mb(_EXTRACT_GB * 1.3 + 2),      # 30% headroom
     "fasta":           _mb(READS_ESTIMATE * 6.3e-6 * 1.3 + 2),
+    "ocm_split":       _mb(4),            # one 200,000-row chunk at a time
     "map_cell":        _mb(2),            # one cell's reads
     "cell_consensus":  _mb(2),            # one cell's SAM
     "merge_consensus": _mb(2),            # streamed with copyfileobj
@@ -615,6 +680,7 @@ _DEFAULT_RUNTIME = {
     "map_reads": 240, "extract": 240, "fasta": 120, "consensus": 120,
     "annotate": 60, "frequencies": 120, "report": 60, "merge_consensus": 60,
     "get_whitelist": 60, "map_cell": 30, "cell_consensus": 30,
+    "ocm_split": 60,
 }
 
 
@@ -740,6 +806,8 @@ rule map_reads:
 
 
 rule extract:
+    wildcard_constraints:
+        sample=NOT_OCM_SAMPLE_RE,
     input:
         sam=RESULTS + "/" + SAMPLE + ".sam",
         whitelist=whitelist_for,
@@ -788,6 +856,33 @@ rule extract:
         "--signature {params.sig} -o {output} --threads {threads} "
         "{params.max_distance} {params.max_barcode_errors} {params.chunk_size} "
         "{params.min_exact_rate}) 2>&1 | tee {log}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1b: ocm_split  (channel anchovy CSV -> one sample's anchovy CSV)
+# --------------------------------------------------------------------------- #
+# Only for samples named under `ocm`. It produces the file extract produces for
+# an ordinary sample, so the two rules' wildcard constraints are exact
+# complements: ocm_split matches only OCM sample names and extract never does.
+# Each sample filters the channel CSV on its own overhangs; reads whose overhang
+# belongs to no listed sample (an unused inlet, a sequencing error in those two
+# bases) go to none.
+rule ocm_split:
+    input:
+        csv=lambda w: (f"{RESULTS_DIR}/{OCM_SAMPLE_CHANNEL[w.sample]}/"
+                       f"{OCM_SAMPLE_CHANNEL[w.sample]}_anchovy.csv"),
+    output:
+        RESULTS + "/" + SAMPLE + "_anchovy.csv",
+    wildcard_constraints:
+        sample=OCM_SAMPLE_RE,
+    params:
+        overhangs=lambda w: OCM_OVERHANGS[w.sample],
+    resources:
+        mem_mb=mem_mb("ocm_split"),
+        runtime=runtime("ocm_split"),
+    shell:
+        "anchovy ocm-split {input.csv} {output} "
+        "--overhangs {params.overhangs} --sample {wildcards.sample}"
 
 
 # --------------------------------------------------------------------------- #

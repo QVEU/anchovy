@@ -182,6 +182,24 @@ and point `whitelist` at `p10_5-8_cells.txt`, or at the full 10x list. Joining
 `_filtConsensus.csv` or `_annot_v3.csv` on `CBC_ID` against the table assigns
 each cell to its sample.
 
+#### On-Chip Multiplexing (OCM)
+
+With 10x On-Chip Multiplexing (GEM-X Universal 3′ v4 or 5′ v3 4-plex), each
+sample's inlet is written into the cell barcode itself, so anchovy can split
+the channel FASTQ into its samples without any join. Name the channel FASTQ
+and each sample's inlet, copied from the `cellranger multi` config:
+
+```yaml
+ocm:
+  p10_5-8: {P10_5: OB1, P10_6: OB2, P10_7: OB3, P10_8: OB4}
+```
+
+The channel is mapped and extracted once, and every sample then gets its own
+results under `results/<sample>/`. The
+[On-Chip Multiplexing guide](docs/ocm.md) covers how to tell whether a run is
+OCM, the built-in OB table and checking it with `anchovy ocm-table`, naming, what runs, and
+troubleshooting.
+
 Only if a library genuinely contains just some of the channel's cells, or you
 deliberately want one sample's cells out of a pooled library, lower the floor
 with `min_exact_rate: 0.01` (or `0` to turn the check off). Reads from other
@@ -249,6 +267,7 @@ See [network interpretation and Cytoscape import](docs/networks.md) for details.
 - [Configuration, output layout, GFF3 and individual commands](docs/usage.md)
 - [Memory, barcode matching and performance troubleshooting](docs/performance.md)
 - [Cluster allocations and SLURM execution](docs/cluster.md)
+- [On-Chip Multiplexing (OCM) samples](docs/ocm.md)
 - [Genotype networks and Cytoscape](docs/networks.md)
 - [Development, legacy fixtures and dependency locks](docs/development.md)
 - [Worked example using public enterovirus A71 data](examples/eva71_sra/README.md)
