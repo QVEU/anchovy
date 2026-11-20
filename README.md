@@ -222,6 +222,23 @@ whitelists to `<input_dir>/resources/`. `results_dir` and `resources_dir` overri
 those locations. Input reads are never overwritten. Snakemake keeps bookkeeping
 in `.snakemake/` in the directory where you launch it.
 
+### When a run fails or runs long
+
+Each stage writes a log to `<input_dir>/results/<sample>/logs/<stage>.log`. When
+a run fails, the workflow prints the anchovy error from those logs, a block
+starting `ANCHOVY ERROR`. If it finds none, the scheduler most likely killed the
+job for its time or memory limit.
+
+A settings key the workflow does not use is named with a warning at the start,
+so a misspelling such as `mismatches: 0` does not silently fall back to the
+default.
+
+Set `max_barcode_errors` (0, 1 or 2) on real runs. Without it, every read whose
+barcode is not an exact whitelist entry is compared with every barcode in the
+list. Against the full 3.7-million-barcode 5′ v3 list that is about 2.4
+core-seconds a read, and a run can take days. With it, the same search takes
+seconds. `extract` prints a warning with the projected time when that applies.
+
 ## Read the results
 
 Start with `<sample>_report.html`, which summarizes coverage, filtering, mutations,

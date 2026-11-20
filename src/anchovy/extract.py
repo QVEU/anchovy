@@ -27,6 +27,8 @@ DESIGN NOTES
 
 from __future__ import annotations
 
+import time
+
 from collections import Counter
 from multiprocessing import Pool
 
@@ -386,8 +388,49 @@ class _Tally:
               "of the run.")
 
 
-def _assign_chunk(sam, state, pool, tally):
-    """Pass 2 over one chunk. Returns the chunk's output rows."""
+# What one exhaustive-scan read costs per whitelist barcode: 0.47 s against
+# 737,280 barcodes on one core (see barcodes.assign_barcode). Only used to
+# warn, so it needs to be the right order of magnitude, not exact.
+_SCAN_SECONDS_PER_BARCODE = 0.47 / 737_280
+
+# How often a long pass-2 chunk says it is still alive.
+_PROGRESS_SECONDS = 600
+
+
+def _warn_scan_cost(n_scan, n_reads, whitelist_size, nthreads):
+    """Say, before it starts, what the exhaustive scan is about to cost.
+
+    WHY THIS IS PRINTED. With max_barcode_errors unset, every read whose
+    barcode is not an exact whitelist entry is compared with every barcode in
+    the list. Against the full 5' v3 list (3.7 million) that is ~2.4 core-
+    seconds a read, so a chunk where most reads miss runs for hours, and a
+    run can sit at its time limit with nothing on screen to say why. A config
+    key that never reaches anchovy (`mismatches: 0` instead of
+    `max_barcode_errors: 0`) lands here too.
+    """
+    seconds = (n_scan * whitelist_size * _SCAN_SECONDS_PER_BARCODE
+               / max(1, nthreads))
+    if seconds < 600:
+        return
+    print("\nWARNING: {:,} of this chunk's {:,} reads have no exact whitelist "
+          "barcode, and with max_barcode_errors unset each one is compared "
+          "with all {:,} barcodes. That is roughly {:.1f} hours for this chunk "
+          "on {} worker(s), and every chunk will cost about the same.\n"
+          "  Set `max_barcode_errors` in the config (--max-barcode-errors) "
+          "to 0, 1 or 2 to keep only reads within that many substitutions; "
+          "the search then takes seconds."
+          .format(n_scan, n_reads, whitelist_size, seconds / 3600, nthreads),
+          flush=True)
+
+
+def _assign_chunk(sam, state, pool, tally, first=False):
+    """Pass 2 over one chunk. Returns the chunk's output rows.
+
+    With `first`, the exact-match floor is checked BEFORE any read is
+    assigned. The exact count costs one dict lookup per read; the assignment
+    can cost hours, and a run that is going to fail on the floor should fail
+    in seconds, not after it.
+    """
     config = state.config
     kept = sam[sam.minD < config.min_distance_cutoff]
 
@@ -400,8 +443,14 @@ def _assign_chunk(sam, state, pool, tally):
     # lookup is ~46,000x cheaper than the scan, so the reads that miss are
     # essentially the whole cost.
     lo, hi = SIGNATURE_PREFIX_LEN, SIGNATURE_UMI_START
-    tally.exact += sum(1 for p in payloads if p[3][lo:hi] in state.index)
+    n_exact = sum(1 for p in payloads if p[3][lo:hi] in state.index)
+    tally.exact += n_exact
     tally.payloads += len(payloads)
+    if first:
+        tally.verify_whitelist_matches(config, len(state.whitelist))
+    if config.max_barcode_errors is None:
+        _warn_scan_cost(len(payloads) - n_exact, len(payloads),
+                        len(state.whitelist), config.nthreads)
 
     # DOES THE MATCHED BLOCK EVEN START WHERE THE SIGNATURE DOES? A block that
     # is shifted reports as a clean +2 per read, which is indistinguishable in
@@ -415,9 +464,18 @@ def _assign_chunk(sam, state, pool, tally):
     # imap over map for the same reason as pass 1, and it matters more here: a
     # payload carries the read's full sequence, so map's up-front pickle of
     # every one of them is a second copy of every base in the chunk.
-    results = list(pool.imap(_assign_worker, payloads,
-                             chunksize=_chunksize(len(payloads),
-                                                  config.nthreads)))
+    results = []
+    started = last = time.monotonic()
+    for result in pool.imap(_assign_worker, payloads,
+                            chunksize=_chunksize(len(payloads),
+                                                 config.nthreads)):
+        results.append(result)
+        now = time.monotonic()
+        if now - last >= _PROGRESS_SECONDS:
+            last = now
+            print("   ... {:,} of {:,} reads assigned in this chunk after "
+                  "{:.0f} min".format(len(results), len(payloads),
+                                      (now - started) / 60), flush=True)
 
     # Reads whose barcode exceeded the limit come back as None. They were
     # never scanned -- that is the point of bounding the search rather than
@@ -564,12 +622,14 @@ def run(sam: str, whitelist: str, signature: str | None = None,
             tally.mapped_hits += int((chunk.minPos >= 0).sum())
             chunk = chunk[chunk.matchseq != ""]
 
-            rows = _assign_chunk(chunk, state, pool, tally)
-            if n_chunk == 1:
-                # ONE CHUNK IS ENOUGH TO KNOW, AND IT IS THE LAST CHEAP MOMENT.
-                # The exact-match rate is settled statistically by the first
-                # hundred thousand reads, and nothing has been written yet.
-                tally.verify_whitelist_matches(config, len(wl_df))
+            # ONE CHUNK IS ENOUGH TO KNOW, AND IT IS THE LAST CHEAP MOMENT.
+            # The exact-match rate is settled statistically by the first
+            # hundred thousand reads, and nothing has been written yet. It is
+            # checked inside _assign_chunk, before the assignment rather than
+            # after it: against a full whitelist with max_barcode_errors unset
+            # the assignment of one chunk can take most of a day.
+            rows = _assign_chunk(chunk, state, pool, tally,
+                                 first=(n_chunk == 1))
             frame = pd.DataFrame(rows, columns=AnchovyColumns.ORDER)
             if sink is not None:
                 sink.write(frame)

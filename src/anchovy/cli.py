@@ -413,10 +413,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Marks an anchovy failure in a log, so the workflow can find and print it
+# (see onerror in workflow/Snakefile). Keep the two in step.
+ERROR_MARKER = "ANCHOVY ERROR"
+
+# Problems with the inputs or settings, which anchovy explains in its own
+# words. Anything else is a bug, and keeps its traceback.
+_EXPLAINED = (ValueError, FileNotFoundError, NotADirectoryError,
+              IsADirectoryError, PermissionError)
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Run one subcommand and turn its failure into a readable message.
+
+    WHY FAILURES ARE CAUGHT HERE. Every check that stops a stage -- a whitelist
+    the reads do not match, a malformed signature, a missing file -- raises
+    ValueError with a full explanation. Uncaught, that explanation sat at the
+    bottom of a Python traceback in whichever stderr the scheduler kept, and
+    what the person saw was Snakemake's "exit status 1". Printed here, it is
+    the last thing in the log and starts with ERROR_MARKER, which the workflow
+    looks for when a run fails. Set ANCHOVY_DEBUG=1 for the traceback too.
+    """
+    import os
+    import traceback
+
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    name = getattr(args, "command", None) or "anchovy"
+    try:
+        return args.func(args)
+    except _EXPLAINED as exc:
+        sys.stdout.flush()
+        if os.environ.get("ANCHOVY_DEBUG"):
+            traceback.print_exc()
+        print(f"\n{ERROR_MARKER}: anchovy {name} stopped.\n{exc}",
+              file=sys.stderr, flush=True)
+        return 1
+    except MemoryError:
+        sys.stdout.flush()
+        print(f"\n{ERROR_MARKER}: anchovy {name} ran out of memory. Give the "
+              f"job more memory (`mem_mb` in the config), or lower "
+              f"`extract_threads` / `extract_chunk_size`.",
+              file=sys.stderr, flush=True)
+        return 1
+    except Exception:
+        sys.stdout.flush()
+        traceback.print_exc()
+        print(f"\n{ERROR_MARKER}: anchovy {name} crashed with an unexpected "
+              f"error (traceback above). This is a bug; please report it with "
+              f"this log.", file=sys.stderr, flush=True)
+        return 1
 
 
 if __name__ == "__main__":
