@@ -13,10 +13,15 @@
 # README.md for the config-swap pattern, and workflow/config_cluster.yaml for a
 # fully commented example.
 
+import difflib
 import glob
 import os
 import re
 import shutil
+import sys
+import time
+
+_RUN_STARTED = time.time()
 
 # NO `configfile:` directive on purpose. It used to name workflow/config.yaml,
 # which meant every run MERGED that file underneath whatever --configfile you
@@ -42,6 +47,53 @@ import shutil
 # one definition of that rule, anchovy.io.sample_name_from_fastq, because when
 # a script derived it too the two disagreed and a run silently reused the
 # previous sample's SAM.
+# --------------------------------------------------------------------------- #
+# Config keys this workflow never reads
+# --------------------------------------------------------------------------- #
+# A MISSPELT KEY IS NOT AN ERROR TO SNAKEMAKE; IT IS SIMPLY NEVER READ. So
+# `mismatches: 0` where `max_barcode_errors: 0` was meant runs the default
+# instead -- for extract, the exhaustive scan, which against the full 5' v3
+# whitelist can take a day -- and nothing says the setting was ignored. Each
+# unknown top-level key is named here, with the nearest real one.
+#
+# The known keys are read from this file itself, so a new setting needs no
+# second list to keep in step: any key read as config.get("k"), config["k"],
+# "k" in config, _flag("k") or _under_input("k") counts.
+_KEY_ALIASES = {
+    "mismatches": "max_barcode_errors",
+    "barcode_mismatches": "max_barcode_errors",
+    "max_mismatches": "max_barcode_errors",
+    "barcode_errors": "max_barcode_errors",
+    "threads": "extract_threads",
+    "chunk_size": "extract_chunk_size",
+}
+
+
+def _known_config_keys():
+    with open(os.path.join(workflow.basedir, "Snakefile")) as handle:
+        text = handle.read()
+    patterns = (
+        r"""config(?:\.get\(|\[)\s*["']([A-Za-z_]\w*)["']""",
+        r"""["']([A-Za-z_]\w*)["']\s+(?:not\s+)?in\s+config\b""",
+        r"""_(?:flag|under_input)\(\s*["']([A-Za-z_]\w*)["']""",
+    )
+    return {k for pattern in patterns for k in re.findall(pattern, text)}
+
+
+def _warn_unknown_config_keys():
+    known = _known_config_keys()
+    for key in sorted(set(config) - known):
+        hint = _KEY_ALIASES.get(str(key).lower())
+        if hint is None:
+            close = difflib.get_close_matches(str(key), sorted(known), n=1)
+            hint = close[0] if close else None
+        print(f"WARNING: config key `{key}` is not used by this workflow and "
+              f"is ignored." + (f" Did you mean `{hint}`?" if hint else ""),
+              file=sys.stderr)
+
+
+_warn_unknown_config_keys()
+
 INPUT_DIR = config.get("input_dir")
 TEMPLATE  = config["template"]
 if INPUT_DIR is None and "samples" not in config:
@@ -377,6 +429,12 @@ SAMPLE  = "{sample}"
 RESULTS = RESULTS_DIR + "/{sample}"
 BARCODES      = RESULTS + "/" + SAMPLE + "_barcodes.csv"
 CELL_LIST_OUT = RESULTS + "/cell_lists/" + SAMPLE + "_{label}.csv"
+
+# ONE LOG PER STAGE PER SAMPLE, beside that sample's results. Each anchovy
+# stage's output is tee'd here as well as to the screen, so a failure on a
+# cluster node -- where the screen is a scheduler file nobody knows the name
+# of -- is still written down where the results are. See onerror below.
+LOGS = RESULTS + "/logs"
 
 ALL_CONSENSUS = RESULTS + "/" + SAMPLE + "_allConsensus.fasta"
 
@@ -771,6 +829,8 @@ rule map_reads:
         template=TEMPLATE,
     output:
         sam=RESULTS + "/" + SAMPLE + ".sam",
+    log:
+        LOGS + "/map_reads.log",
     threads: config.get("map_threads", _cores_or(8))
     params:
         # map-hifi for PacBio CCS, map-ont for Nanopore. Getting this wrong
@@ -781,7 +841,7 @@ rule map_reads:
         runtime=runtime("map_reads"),
     shell:
         "minimap2 -ax {params.preset} -t {threads} "
-        "{input.template} {input.fastq} > {output.sam}"
+        "{input.template} {input.fastq} > {output.sam} 2> {log}"
 
 
 rule extract:
@@ -792,6 +852,8 @@ rule extract:
         whitelist=whitelist_for,
     output:
         RESULTS + "/" + SAMPLE + "_anchovy.csv",
+    log:
+        LOGS + "/extract.log",
     # extract runs its own multiprocessing Pool, which is NOT snakemake's
     # --cores: that governs how many JOBS run at once, and extract is one job.
     # Without this the pool sits at the CLI default of 16 however large the
@@ -826,10 +888,10 @@ rule extract:
         mem_mb=mem_mb("extract"),
         runtime=runtime("extract"),
     shell:
-        "anchovy extract {input.sam} {input.whitelist} "
+        "(anchovy extract {input.sam} {input.whitelist} "
         "--signature {params.sig} -o {output} --threads {threads} "
         "{params.max_distance} {params.max_barcode_errors} {params.chunk_size} "
-        "{params.min_exact_rate}"
+        "{params.min_exact_rate}) 2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #
@@ -847,6 +909,8 @@ rule ocm_split:
                        f"{OCM_SAMPLE_CHANNEL[w.sample]}_anchovy.csv"),
     output:
         RESULTS + "/" + SAMPLE + "_anchovy.csv",
+    log:
+        LOGS + "/ocm_split.log",
     wildcard_constraints:
         sample=OCM_SAMPLE_RE,
     params:
@@ -855,8 +919,9 @@ rule ocm_split:
         mem_mb=mem_mb("ocm_split"),
         runtime=runtime("ocm_split"),
     shell:
-        "anchovy ocm-split {input.csv} {output} "
-        "--overhangs {params.overhangs} --sample {wildcards.sample}"
+        "(anchovy ocm-split {input.csv} {output} "
+        "--overhangs {params.overhangs} --sample {wildcards.sample}) "
+        "2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #
@@ -922,13 +987,16 @@ checkpoint fasta:
         csv=RESULTS + "/" + SAMPLE + "_anchovy.csv",
     output:
         cells=directory(RESULTS + "/cells"),
+    log:
+        LOGS + "/fasta.log",
     params:
         min_reads=f"--min-reads {config['min_reads']}" if "min_reads" in config else "",
     resources:
         mem_mb=mem_mb("fasta"),
         runtime=runtime("fasta"),
     shell:
-        "anchovy fasta {input.csv} {output.cells} {params.min_reads}"
+        "(anchovy fasta {input.csv} {output.cells} {params.min_reads}) "
+        "2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1061,6 +1129,8 @@ rule consensus:
     output:
         csv=RESULTS + "/" + SAMPLE + "_filtConsensus.csv",
         reference=RESULTS + "/" + SAMPLE + "_consensus_reference.txt",
+    log:
+        LOGS + "/consensus.log",
     params:
         window=WINDOW_ARGS,
         flags=CONSENSUS_FLAGS,
@@ -1078,10 +1148,10 @@ rule consensus:
         mem_mb=mem_mb("consensus"),
         runtime=runtime("consensus"),
     shell:
-        "anchovy consensus {input.fasta} {params.window} {params.flags} "
+        "(anchovy consensus {input.fasta} {params.window} {params.flags} "
         "--depth-min {params.depth_min} --out-prefix {params.out_prefix} "
         "{params.reference} {params.ambiguous} "
-        "{params.breadth} {params.depth_called}"
+        "{params.breadth} {params.depth_called}) 2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1114,6 +1184,8 @@ rule annotate:
         # The long-format per-region table exists only in region-aware mode, so
         # it is declared as an output only when a GFF3 is configured.
         **({"regions": REGION_ANNOTATIONS} if GFF else {}),
+    log:
+        LOGS + "/annotate.log",
     params:
         out_prefix=RESULTS + "/" + SAMPLE,
         flags=ANNOTATE_FLAGS,
@@ -1123,8 +1195,8 @@ rule annotate:
         mem_mb=mem_mb("annotate"),
         runtime=runtime("annotate"),
     shell:
-        "anchovy annotate {input.csv} {input.reference} {params.out_prefix} "
-        "{params.flags} {params.max_mutations}"
+        "(anchovy annotate {input.csv} {input.reference} {params.out_prefix} "
+        "{params.flags} {params.max_mutations}) 2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1147,6 +1219,8 @@ rule frequencies:
     output:
         population=ALLELE_FREQUENCIES,
         per_cell=CELL_ALLELE_FREQ,
+    log:
+        LOGS + "/frequencies.log",
     params:
         out_prefix=RESULTS + "/" + SAMPLE,
         counts_dir=WORK,
@@ -1162,11 +1236,11 @@ rule frequencies:
         mem_mb=mem_mb("frequencies"),
         runtime=runtime("frequencies"),
     shell:
-        "anchovy frequencies {input.fasta} --reference {input.reference} "
+        "(anchovy frequencies {input.fasta} --reference {input.reference} "
         "--out-prefix {params.out_prefix} --counts-dir {params.counts_dir} "
         "--reference-name {params.refname} --subset {input.subset} "
         "{params.gff} {params.min_alt_reads} {params.min_alt_freq} "
-        "{params.min_cells}"
+        "{params.min_cells}) 2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1232,3 +1306,42 @@ rule report:
         "params = list(results_dir = \"{params.results_dir}\", "
         "sample = \"{params.sample}\"), "
         "quiet = TRUE)'"
+
+
+# --------------------------------------------------------------------------- #
+# When a run fails: say why, from the logs
+# --------------------------------------------------------------------------- #
+# Snakemake's own report of a failed job is "exit status 1" and a command line.
+# The reason is in that job's log, and on a cluster nobody finds the scheduler's
+# copy of it. Every anchovy stage ends a failure with a line starting
+# anchovy.cli.ERROR_MARKER, so the logs written by THIS run that contain it
+# are printed here, from that line on.
+_ERROR_MARKER = "ANCHOVY ERROR"
+
+
+def _print_failed_logs():
+    found = False
+    for path in sorted(glob.glob(os.path.join(RESULTS_DIR, "*", "logs",
+                                              "*.log"))):
+        try:
+            if os.path.getmtime(path) < _RUN_STARTED:
+                continue
+            with open(path, errors="replace") as handle:
+                lines = handle.read().splitlines()
+        except OSError:
+            continue
+        starts = [i for i, line in enumerate(lines) if _ERROR_MARKER in line]
+        if not starts:
+            continue
+        found = True
+        print(f"\n==== {path} ====", file=sys.stderr)
+        print("\n".join(lines[starts[-1]:starts[-1] + 60]), file=sys.stderr)
+    if not found:
+        print(f"\nNo anchovy error message was found in this run's logs "
+              f"({RESULTS_DIR}/<sample>/logs/). A job killed by the scheduler "
+              f"(time or memory limit) leaves none; check the scheduler's "
+              f"record of the job.", file=sys.stderr)
+
+
+onerror:
+    _print_failed_logs()
