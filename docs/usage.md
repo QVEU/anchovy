@@ -30,7 +30,7 @@ working defaults for the rest. The complete list:
 | **Barcodes** | | |
 | `chemistry` | `v3` | `v2`, `v3` or `5p-v3`. Sets the read signature *and* the whitelist together |
 | `whitelist` | downloaded | A local copy of the full 10x list. Reads are always matched against the full list |
-| `cell_lists` | none | `{sample: path}` (or a list, or `{label: path}`) of Cell Ranger / Seurat cells, matched against each sample's `_barcodes.csv` after extract |
+| `cell_lists` | none | `{sample: path}` (or a list, or `{label: path}`) of Cell Ranger / Seurat cells, matched against each sample's `_barcodes.csv` after extract. Consensus and networks then run per list, on the listed cells only, in `results/<sample>_<label>/` |
 | `whitelist_url` | 10X's | Fetch the whitelist from your own mirror |
 | `whitelist_barcodes` | per chemistry | Override the barcode count a download is checked against |
 | `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
@@ -258,6 +258,7 @@ own command:
 anchovy extract     reads.sam whitelist.txt -o out_anchovy.csv
 anchovy barcodes    out_anchovy.csv out_barcodes.csv      # the master list
 anchovy match-cells out_barcodes.csv cellranger_barcodes.tsv.gz
+anchovy select-cells out_anchovy.csv cellranger_barcodes.tsv.gz listed_anchovy.csv
 anchovy fasta       out_anchovy.csv cells/
 anchovy consensus   allConsensus.fasta 96 10272 --out-prefix results/sample
 anchovy annotate    filtConsensus.csv reference.txt results/sample

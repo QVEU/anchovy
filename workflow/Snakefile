@@ -371,7 +371,9 @@ def whitelist_for(wildcards):
 #     P10_7: {cellranger: /data/cr/P10_7/barcodes.tsv.gz,
 #             seurat_res08: /data/seurat/P10_7.csv}
 #
-# Keys are result sample names (an OCM sample, not its channel).
+# Keys are result sample names (an OCM sample, not its channel). A sample with
+# lists runs its per-cell stages once per list, in results/<sample>_<label>/;
+# see LIST_UNITS below.
 from anchovy.cell_lists import label_for as _label_for
 
 CELL_LISTS = {}
@@ -382,10 +384,12 @@ if config.get("cell_lists") and not FASTQS:
         "`samples`/`cells_dir`. Use `anchovy match-cells` on an earlier run's "
         "_barcodes.csv instead.")
 for _sample, _lists in (config.get("cell_lists") or {}).items():
-    if _sample not in SAMPLES and _sample not in OCM:
+    if _sample not in SAMPLES:
         raise WorkflowError(
             f"`cell_lists` names {_sample!r}, which is not a sample in this "
-            f"run.\n  Samples: {', '.join(SAMPLES)}.")
+            f"run.\n  Samples: {', '.join(SAMPLES)}."
+            + ("\n  For OCM, name the samples, not the channel."
+               if _sample in OCM else ""))
     if isinstance(_lists, str):
         _lists = [_lists]
     if not isinstance(_lists, dict):
@@ -394,6 +398,37 @@ for _sample, _lists in (config.get("cell_lists") or {}).items():
         raise WorkflowError(f"`cell_lists` for {_sample}: two lists share a "
                             f"label; give them as a {{label: path}} mapping.")
     CELL_LISTS[_sample] = {str(k): str(v) for k, v in _lists.items()}
+
+# EACH CELL LIST IS ITS OWN ANALYSIS, IN ITS OWN FOLDER. A sample with lists
+# runs the per-cell stages (cells, consensus, genotypes, networks, frequencies,
+# report) once per list, on the listed cells only, under
+# results/<sample>_<label>/ -- and not on every matched barcode. Its own
+# folder keeps the anchovy CSV, the master list and the cell_lists/ matches.
+# A sample with no list runs the per-cell stages on every matched barcode, as
+# before.
+LIST_UNITS = {}                       # unit name -> (sample, label)
+for _sample, _lists in CELL_LISTS.items():
+    for _label in _lists:
+        _unit = f"{_sample}_{_label}"
+        if _unit in SAMPLES or _unit in FASTQS or _unit in LIST_UNITS:
+            raise WorkflowError(
+                f"`cell_lists` {_sample}: {_label!r} would write to "
+                f"{RESULTS_DIR}/{_unit}/, which another sample already uses. "
+                f"Give the list a different label.")
+        LIST_UNITS[_unit] = (_sample, _label)
+
+# Samples whose own anchovy CSV, master list and matches are written (every
+# extracted or OCM sample), and samples that get per-cell results.
+BARCODE_SAMPLES = sorted(SAMPLES)
+SAMPLES = sorted((set(SAMPLES) - set(CELL_LISTS)) | set(LIST_UNITS))
+
+# A list unit's anchovy CSV comes from select_cells, never from extract.
+_UNIT_ALTS = "|".join(re.escape(u) for u in sorted(LIST_UNITS, key=len,
+                                                    reverse=True))
+LIST_UNIT_RE = f"(?:{_UNIT_ALTS})" if _UNIT_ALTS else "(?!)"
+_NOT_EXTRACT = "|".join(a for a in (_OCM_ALTS, _UNIT_ALTS) if a)
+NOT_OCM_SAMPLE_RE = (f"(?!(?:{_NOT_EXTRACT})(?:/|_anchovy\\.csv$)).+"
+                     if _NOT_EXTRACT else ".+")
 
 
 # --------------------------------------------------------------------------- #
@@ -693,6 +728,7 @@ _DEFAULT_MEM_MB = {
     "ocm_split":       _mb(4),            # one 200,000-row chunk at a time
     "barcode_list":    _mb(4),            # a chunk + one entry per barcode
     "match_cells":     _mb(2),            # the master list and one cell list
+    "select_cells":    _mb(4),            # one 200,000-row chunk at a time
     "map_cell":        _mb(2),            # one cell's reads
     "cell_consensus":  _mb(2),            # one cell's SAM
     "merge_consensus": _mb(2),            # streamed with copyfileobj
@@ -714,6 +750,7 @@ _DEFAULT_RUNTIME = {
     "annotate": 60, "frequencies": 120, "report": 60, "merge_consensus": 60,
     "get_whitelist": 60, "map_cell": 30, "cell_consensus": 30,
     "ocm_split": 60, "barcode_list": 60, "match_cells": 30,
+    "select_cells": 60,
 }
 
 
@@ -733,7 +770,8 @@ rule all:
         # The master list for every sample, and for each OCM channel (with an
         # ocm_sample column), then each custom cell list matched against it.
         # Not on the `cells_dir` resume path: it has no anchovy CSV to list.
-        *(expand(BARCODES, sample=SAMPLES + sorted(OCM)) if FASTQS else []),
+        *(expand(BARCODES, sample=BARCODE_SAMPLES + sorted(OCM))
+          if FASTQS else []),
         *[CELL_LIST_OUT.format(sample=s, label=l)
           for s, lists in CELL_LISTS.items() for l in lists],
         # Region annotations are only produced (and only requested) when the
@@ -937,6 +975,8 @@ rule barcode_list:
         csv=RESULTS + "/" + SAMPLE + "_anchovy.csv",
     output:
         BARCODES,
+    log:
+        LOGS + "/barcode_list.log",
     params:
         ocm=lambda w: " ".join(
             f"--ocm {s}={OCM_OVERHANGS[s]}"
@@ -945,7 +985,7 @@ rule barcode_list:
         mem_mb=mem_mb("barcode_list"),
         runtime=runtime("barcode_list"),
     shell:
-        "anchovy barcodes {input.csv} {output} {params.ocm}"
+        "(anchovy barcodes {input.csv} {output} {params.ocm}) 2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #
@@ -960,11 +1000,40 @@ rule match_cells:
         cells=lambda w: CELL_LISTS[w.sample][w.label],
     output:
         CELL_LIST_OUT,
+    log:
+        LOGS + "/match_cells_{label}.log",
     resources:
         mem_mb=mem_mb("match_cells"),
         runtime=runtime("match_cells"),
     shell:
-        "anchovy match-cells {input.barcodes} {input.cells} -o {output}"
+        "(anchovy match-cells {input.barcodes} {input.cells} -o {output}) "
+        "2>&1 | tee {log}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1e: select_cells  (a sample's anchovy CSV -> one cell list's)
+# --------------------------------------------------------------------------- #
+# Only for results/<sample>_<label>/ units from `cell_lists`. Produces the file
+# extract produces for an ordinary sample, so every per-cell stage after it
+# runs unchanged, on the listed cells only.
+rule select_cells:
+    wildcard_constraints:
+        sample=LIST_UNIT_RE,
+    input:
+        csv=lambda w: (f"{RESULTS_DIR}/{LIST_UNITS[w.sample][0]}/"
+                       f"{LIST_UNITS[w.sample][0]}_anchovy.csv"),
+        cells=lambda w: CELL_LISTS[LIST_UNITS[w.sample][0]][
+            LIST_UNITS[w.sample][1]],
+    output:
+        RESULTS + "/" + SAMPLE + "_anchovy.csv",
+    log:
+        LOGS + "/select_cells.log",
+    resources:
+        mem_mb=mem_mb("select_cells"),
+        runtime=runtime("select_cells"),
+    shell:
+        "(anchovy select-cells {input.csv} {input.cells} {output}) "
+        "2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #

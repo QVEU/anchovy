@@ -58,6 +58,8 @@ chemistry: "v3"
 # barcode, with reads and UMIs), and each cell list is matched against it into
 # results/<sample>/cell_lists/<sample>_<label>.csv. A new list later needs only
 # `anchovy match-cells results/<sample>/<sample>_barcodes.csv new.csv`.
+# A sample with lists runs consensus, genotypes and networks once per list, on
+# the listed cells only, in results/<sample>_<label>/ -- not on every barcode.
 #
 # You still set `chemistry`, because it also sets the read signature. A list is
 # checked on load for the things that silently produce nonsense -- the "-1"

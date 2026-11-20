@@ -135,13 +135,36 @@ cell_lists:
           seurat_res08: /data/seurat/P10_6_cells.csv}
 ```
 
+**A sample with cell lists gets one analysis per list, in its own folder.**
+Consensus, genotypes, networks, frequencies and the report run on the listed
+cells only, under `results/<sample>_<label>/` (for example
+`results/P10_6_seurat_res08/P10_6_seurat_res08_annot_v3.csv`), and are not run
+on every barcode of the sample. A sample without a list runs them on every
+matched barcode with at least `min_reads` reads, as before.
+
+```
+results/
+  P10_6/                         # the sample: matching, whatever the cell calls
+    P10_6_anchovy.csv            #   every read's barcode and UMI
+    P10_6_barcodes.csv           #   master list: every matched barcode
+    cell_lists/
+      P10_6_cellranger.csv       #   master-list rows in each cell list
+      P10_6_seurat_res08.csv
+  P10_6_cellranger/              # per-cell analysis on the Cell Ranger cells
+    cells/  P10_6_cellranger_allConsensus.fasta  ..._annot_v3.csv  ..._epistaticNetwork.csv
+  P10_6_seurat_res08/            # the same on the Seurat cells
+```
+
 Cell lists can be used as exported: Cell Ranger's `barcodes.tsv.gz` with its
 `-1` suffix, a Seurat CSV with a header, or Seurat cell names with a sample
 prefix. Keys are result sample names, so with OCM they are the samples, not
 the channel.
 
 When the cell calls change, match the new list against the master list from
-the earlier run. It takes seconds and does not re-run extract:
+the earlier run. It takes seconds and does not re-run extract. To also get
+the per-cell analysis for the new list, add it under `cell_lists` and re-run
+the workflow: extract's output is reused, and only the new list's folder is
+built.
 
 ```bash
 anchovy match-cells results/P10_6/P10_6_barcodes.csv new_cells.csv

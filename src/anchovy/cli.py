@@ -125,6 +125,12 @@ def _cmd_match_cells(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_select_cells(args: argparse.Namespace) -> int:
+    from anchovy import cell_lists
+    cell_lists.run_select(args.csv, args.cell_list, args.out)
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # ocm-split / ocm-table
 # --------------------------------------------------------------------------- #
@@ -265,7 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
                         version=f"%(prog)s {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True,
-                                metavar="{extract,barcodes,match-cells,ocm-split,ocm-table,fasta,consensus,annotate,frequencies}")
+                                metavar="{extract,barcodes,match-cells,select-cells,ocm-split,ocm-table,fasta,consensus,annotate,frequencies}")
 
     # --- extract ---
     p_extract = sub.add_parser(
@@ -342,6 +348,16 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Output CSV (default: <sample>_<list name>.csv "
                               "beside the master list).")
     p_match.set_defaults(func=_cmd_match_cells)
+
+    p_select = sub.add_parser(
+        "select-cells",
+        help="Keep the rows of an anchovy CSV whose barcode is in a cell "
+             "list, so the per-cell stages run on those cells only.")
+    p_select.add_argument("csv", help="An anchovy CSV.")
+    p_select.add_argument("cell_list", help="Cell barcodes, as for "
+                                            "match-cells.")
+    p_select.add_argument("out", help="Output anchovy CSV.")
+    p_select.set_defaults(func=_cmd_select_cells)
 
     # --- ocm-split / ocm-table ---
     p_split = sub.add_parser(

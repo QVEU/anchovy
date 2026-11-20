@@ -182,7 +182,9 @@ p10_5-8.fastq.gz ─ map_reads ─ extract ─► results/p10_5-8/p10_5-8_anchov
   `ocm_sample` column naming the sample its bases belong to.
 - Each sample gets `results/<sample>/<sample>_barcodes.csv`, and one
   `results/<sample>/cell_lists/<sample>_<label>.csv` per entry under
-  `cell_lists`. A later Cell Ranger or Seurat list is matched with
+  `cell_lists`. A sample with a cell list runs consensus and the networks on
+  those cells only, in `results/<sample>_<label>/`, instead of on every
+  barcode. A later Cell Ranger or Seurat list is matched with
   `anchovy match-cells results/<sample>/<sample>_barcodes.csv <list>`.
 
 Each sample's split prints the share of the channel's reads it kept:

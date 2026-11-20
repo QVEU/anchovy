@@ -221,3 +221,50 @@ def test_a_cell_list_for_an_unknown_sample_fails_before_any_job(tmp_path):
     proc = _dry_run(tmp_path, "cell_lists:\n  nobody: /nowhere.txt\n")
     assert proc.returncode != 0
     assert "not a sample" in proc.stderr + proc.stdout
+
+
+def test_select_cells_keeps_only_listed_reads(run_csv, tmp_path):
+    cells = tmp_path / "cells.txt"
+    cells.write_text(f"{BC_OB1_A}-1\n{BC_OB2_A}-1\n")
+    out = tmp_path / "sel" / "x_anchovy.csv"
+    assert main(["select-cells", str(run_csv), str(cells), str(out)]) == 0
+    frame = pd.read_csv(out, index_col=0)
+    assert list(frame.columns) == AnchovyColumns.ORDER
+    assert set(frame.CBC) == {BC_OB1_A, BC_OB2_A}
+    assert len(frame) == 5
+    assert list(frame.index) == list(range(5))
+
+
+def test_select_cells_writes_a_header_when_nothing_matches(run_csv, tmp_path):
+    cells = tmp_path / "cells.txt"
+    cells.write_text("ACGTACGTACGTACGT\n")
+    out = tmp_path / "x_anchovy.csv"
+    kept, total = cell_lists.select_cells(
+        str(run_csv), cell_lists.read_cell_list(str(cells)), str(out))
+    assert (kept, total) == (0, 7)
+    assert list(pd.read_csv(out, index_col=0).columns) == AnchovyColumns.ORDER
+
+
+@needs_snakemake
+def test_a_cell_list_gets_its_own_per_cell_analysis(tmp_path):
+    """With a list, consensus and networks run on the listed cells only, in
+    results/<sample>_<label>/, and not on every barcode of the sample."""
+    cells = tmp_path / "res08.txt"
+    cells.write_text("AAACCCAAGAAACACT-1\n")
+    proc = _dry_run(tmp_path, f"cell_lists:\n  example: {{seurat: {cells}}}\n")
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    out = proc.stdout
+    assert "anchovy select-cells" in out
+    assert "example_seurat/example_seurat_anchovy.csv" in out
+    assert "anchovy fasta" in out
+    assert "example_seurat/cells" in out
+    assert "results/example/cells" not in out, (
+        "the sample's own per-cell stages should not run when it has a list")
+
+
+@needs_snakemake
+def test_a_cell_list_keyed_by_an_ocm_channel_is_refused(tmp_path):
+    proc = _dry_run(tmp_path, "ocm:\n  example: {S1: OB1}\n"
+                              "cell_lists:\n  example: /nowhere.txt\n")
+    assert proc.returncode != 0
+    assert "name the samples, not the channel" in proc.stderr + proc.stdout

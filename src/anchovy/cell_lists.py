@@ -189,6 +189,50 @@ def run_match(barcodes_csv: str, cell_list: str, out_path: str,
     return stats
 
 
+def select_cells(anchovy_csv: str, cells: set[str], out_path: str,
+                 chunksize: int = 200_000) -> tuple[int, int]:
+    """Write the rows of an anchovy CSV whose barcode is in `cells`.
+
+    The per-cell stages then see only the listed cells. Streams in chunks and
+    always writes a header, so an empty selection still gives the next stage a
+    readable table. Returns (kept, total).
+    """
+    target = Path(out_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".partial")
+    kept = total = 0
+    try:
+        with tmp.open("w", newline="") as handle:
+            wrote_header = False
+            for chunk in pd.read_csv(anchovy_csv, chunksize=chunksize,
+                                     index_col=0):
+                total += len(chunk)
+                sub = chunk[chunk[AnchovyColumns.CBC].astype(str).isin(cells)]
+                sub = sub[AnchovyColumns.ORDER]
+                sub.index = range(kept, kept + len(sub))
+                kept += len(sub)
+                if len(sub) or not wrote_header:
+                    sub.to_csv(handle, header=not wrote_header)
+                    wrote_header = True
+            if not wrote_header:
+                pd.DataFrame(columns=AnchovyColumns.ORDER).to_csv(handle)
+        os.replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return kept, total
+
+
+def run_select(anchovy_csv: str, cell_list: str, out_path: str) -> int:
+    """`anchovy select-cells`: an anchovy CSV restricted to a cell list."""
+    cells = read_cell_list(cell_list)
+    kept, total = select_cells(anchovy_csv, cells, out_path)
+    print(f"{Path(cell_list).name}: kept {kept:,} of {total:,} reads "
+          f"({kept / max(total, 1):.1%}) from the {len(cells):,} listed cells "
+          f"-> {out_path}")
+    return kept
+
+
 def label_for(path: str) -> str:
     """A filename-safe label for a cell list, from its file name."""
     name = Path(path).name
