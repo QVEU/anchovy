@@ -46,36 +46,29 @@ chemistry: "v3"
 # wrong file fails the run rather than producing wrong cells. Leave `whitelist`
 # unset and there is nothing to do.
 #
-# Override it when you have a run-specific barcode list -- the usual case being
-# the cell barcodes called from your own Illumina run by Cell Ranger and Seurat,
-# which restricts the analysis to cells you have already validated:
+# Reads are ALWAYS matched against the full list. Set `whitelist` only to use
+# a local copy of it. Which barcodes are real cells -- Cell Ranger or Seurat
+# calls -- is applied afterwards, per sample, from `cell_lists`:
 #
-#   whitelist: "path/to/filtered_barcodes.txt"  # one 16 nt barcode per line
+#   cell_lists:
+#     sample_A: "path/to/cellranger/barcodes.tsv.gz"
+#     sample_B: {cellranger: "cr/barcodes.tsv.gz", seurat_res08: "seurat.csv"}
 #
-# You still set `chemistry`, because it also sets the read signature; the
-# barcode is 16 nt in both v2 and v3, so a custom list does not tell the
-# workflow which chemistry produced it. A list is checked on load for the
-# things that silently produce nonsense -- the "-1" GEM-well suffix Cell Ranger
-# writes, mixed widths, non-ACGTN characters -- and the error names the fix.
+# Every sample writes results/<sample>/<sample>_barcodes.csv (every matched
+# barcode, with reads and UMIs), and each cell list is matched against it into
+# results/<sample>/cell_lists/<sample>_<label>.csv. A new list later needs only
+# `anchovy match-cells results/<sample>/<sample>_barcodes.csv new.csv`.
 #
-# Samples with their own cell calls take a mapping instead, one entry per
-# sample (a sample's name is its FASTQ's basename without .fastq/.fq/.gz):
-#
-#   whitelist:
-#     P10_5: "path/to/p10_5_barcodes.txt"
-#     P10_8: "path/to/p10_8_barcodes.txt"
-#
-# A list that holds only some of a library's cells -- one sample's calls from a
-# multiplexed (cellranger multi) well -- leaves most reads without an exact
-# match, and extract stops when under `min_exact_rate` (default 0.05) of them
-# match. Give such a library the combined list for its whole well, or lower
-# `min_exact_rate`.
+# You still set `chemistry`, because it also sets the read signature. A list is
+# checked on load for the things that silently produce nonsense -- the "-1"
+# GEM-well suffix Cell Ranger writes, mixed widths, non-ACGTN characters -- and
+# the error names the fix.
 #
 # `whitelist_url` points the download at your own mirror instead.
 #
-# The fixture's six barcodes, sitting beside the reads -- which is also where a
-# real run-specific list belongs, since it comes from the same Illumina run.
-# Omit this key entirely and the chemistry-matched 10X list downloads instead.
+# The fixture's six barcodes, sitting beside the reads, standing in for a full
+# list so nothing is downloaded. Omit this key on a real run and the
+# chemistry-matched 10X list downloads instead.
 whitelist: "tests/data/fastqs/whitelist.txt"
 
 # `signature` overrides the one derived from `chemistry`, for an assay whose
@@ -148,16 +141,11 @@ depth_min: 0
 # six cells 8, so this keeps all of them and would drop stray mis-assignments.
 min_reads: 8
 
-# The fixture's barcodes are exact whitelist entries, so nothing needs correcting
-# -- but leaving this unset means any read is assigned to its NEAREST entry with
-# no floor, which on real data turns unreadable barcodes into plausible cells.
-#
-# On a real run this is also the stage's biggest RUNTIME lever: barcode
-# assignment is ~90% of extract's time. 2 costs about 2.5x what 1 does and
-# keeps every read, so prefer it unless extract is your bottleneck -- it used
-# to cost 5.2x, before the search learned to stop at the first shell that hits.
-# workflow/config_cluster.yaml has the measured table, including the case where
-# leaving it unset beats setting it.
+# Barcode errors tolerated before a read is dropped. The default, 0, keeps exact
+# whitelist matches only: a lookup per read, so it is also the fastest. 1 or 2
+# accept that many substitutions at a higher cost; null restores the original
+# nearest-entry search with no floor, which is very slow on a full 10x list.
+# workflow/config_cluster.yaml has the measured table.
 max_barcode_errors: 2
 
 # The second analysis, over every mapped cell rather than the filtered subset:

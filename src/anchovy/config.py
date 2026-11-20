@@ -81,20 +81,25 @@ class ExtractConfig:
     # Maximum number of errors tolerated INSIDE the 16 nt barcode before a read
     # is dropped rather than assigned to a cell.
     #
-    # None (the default) keeps every read, which is the original behavior: the
-    # barcode search returns the NEAREST whitelist entry with no floor, so a
-    # read whose barcode region is noise is still assigned to some cell, and
-    # goes on to become per-cell reads, a consensus, and a genotype. On a real
-    # run 43.7% of reads had no exact whitelist barcode, and all of them were
-    # assigned anyway.
+    # 0 (THE DEFAULT) ADMITS ONLY EXACT WHITELIST BARCODES. That is a lookup per
+    # read, so extract's runtime no longer depends on how many reads miss, and
+    # a read whose barcode carries an error is left out rather than guessed at.
+    # 1 allows a single substitution (the usual 10X correction), 2 two, and so
+    # on, each costing more as the neighbourhood searched grows.
+    #
+    # None restores the original behavior: every read goes to its NEAREST
+    # whitelist entry with no floor, by an exhaustive scan of the whole list
+    # for every read that misses. Against a 3.7-6.8 million barcode list that
+    # scan is what turns a run of hours into days, and a read whose barcode
+    # region is noise still becomes a cell. On a real run 43.7% of reads had no
+    # exact whitelist barcode, and all of them were assigned anyway.
     #
     # Counted in ERRORS, not in raw Levenshtein distance, because the distance
     # a perfect match scores is the width of the UMI: every block is padded
     # with one N per UMI base, and an N never equals a real base. That is 10
     # for v2 and 12 for v3, so a raw threshold would silently mean something
-    # different per chemistry. 0 admits only exact barcodes, 1 allows a single
-    # substitution (the usual 10X correction), and so on.
-    max_barcode_errors: int | None = None
+    # different per chemistry.
+    max_barcode_errors: int | None = 0
 
     # How far PAST the mapped offset to search, in nt.
     #

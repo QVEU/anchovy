@@ -30,6 +30,27 @@ from anchovy.config import ExtractConfig, FastaConfig, ConsensusConfig
 # --------------------------------------------------------------------------- #
 # extract
 # --------------------------------------------------------------------------- #
+_UNSET = object()   # a non-string, so argparse does not run `type` on it
+
+
+def _barcode_errors(value: str):
+    """--max-barcode-errors: a count, or `none` for the unbounded nearest match.
+
+    `none` (also `null`, as a YAML null renders through the workflow) is the
+    original behavior. It has to be spelled out because 0 is now the default.
+    """
+    if str(value).strip().lower() in ("none", "null", "unbounded"):
+        return None
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected a whole number of errors or `none`, got {value!r}")
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more, or `none`")
+    return n
+
+
 def _cmd_extract(args: argparse.Namespace) -> int:
     from anchovy import extract
 
@@ -40,7 +61,9 @@ def _cmd_extract(args: argparse.Namespace) -> int:
         nthreads=args.threads if args.threads is not None else defaults.nthreads,
         min_distance_cutoff=(args.max_distance if args.max_distance is not None
                              else defaults.min_distance_cutoff),
-        max_barcode_errors=args.max_barcode_errors,
+        max_barcode_errors=(args.max_barcode_errors
+                            if args.max_barcode_errors is not _UNSET
+                            else defaults.max_barcode_errors),
         chunk_size=(args.chunk_size if args.chunk_size is not None
                     else defaults.chunk_size),
         downstream_window=(args.downstream_window
@@ -61,6 +84,44 @@ def _cmd_extract(args: argparse.Namespace) -> int:
                            out_path=out, signature=config.signature,
                            config=config)
     print(f"Wrote {out} ({n} reads assigned).")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# barcodes / match-cells
+# --------------------------------------------------------------------------- #
+def _parse_ocm_args(items):
+    """--ocm SAMPLE=OB1 (or SAMPLE=GT,AC), repeated -> {sample: overhangs}."""
+    if not items:
+        return None
+    from anchovy import ocm
+    mapping = {}
+    for item in items:
+        sample, sep, value = item.partition("=")
+        if not sep or not sample or not value:
+            raise ValueError(f"--ocm {item!r}: expected SAMPLE=OB1 or "
+                             f"SAMPLE=GT,AC")
+        mapping[sample] = value
+    return ocm.resolve_mapping(mapping)
+
+
+def _cmd_barcodes(args: argparse.Namespace) -> int:
+    from anchovy import cell_lists
+    cell_lists.write_barcode_table(args.csv, args.out,
+                                   ocm=_parse_ocm_args(args.ocm))
+    return 0
+
+
+def _cmd_match_cells(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from anchovy import cell_lists
+    out = args.out
+    if out is None:
+        master = Path(args.barcodes)
+        stem = master.name.removesuffix("_barcodes.csv").removesuffix(".csv")
+        out = str(master.with_name(
+            f"{stem}_{cell_lists.label_for(args.cell_list)}.csv"))
+    cell_lists.run_match(args.barcodes, args.cell_list, out)
     return 0
 
 
@@ -204,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
                         version=f"%(prog)s {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True,
-                                metavar="{extract,fasta,consensus,annotate,frequencies}")
+                                metavar="{extract,barcodes,match-cells,ocm-split,ocm-table,fasta,consensus,annotate,frequencies}")
 
     # --- extract ---
     p_extract = sub.add_parser(
@@ -217,13 +278,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_extract.add_argument("--max-distance", type=int, dest="max_distance",
                            help="Max Levenshtein distance for the SIGNATURE match "
                                 "to keep a read (default: 42).")
-    p_extract.add_argument("--max-barcode-errors", type=int,
-                           dest="max_barcode_errors",
-                           help="Drop reads whose assigned barcode carries more "
-                                "than this many errors. Unset, every read is "
-                                "assigned to its nearest whitelist barcode with "
-                                "no floor, however poorly it matched. 0 admits "
-                                "only exact barcodes, 1 allows one substitution.")
+    p_extract.add_argument("--max-barcode-errors", type=_barcode_errors,
+                           dest="max_barcode_errors", default=_UNSET,
+                           help="Barcode errors tolerated before a read is "
+                                "dropped (default: 0, exact matches only). 1 "
+                                "allows one substitution, 2 two. `none` "
+                                "assigns every read to its nearest whitelist "
+                                "barcode however poorly it matched, by a full "
+                                "scan of the list -- slow on a full 10x list.")
     p_extract.add_argument("--downstream-window", type=int,
                            dest="downstream_window",
                            help="How far past the mapped offset to search "
@@ -249,6 +311,37 @@ def build_parser() -> argparse.ArgumentParser:
                                 "whitelist from the wrong kit looks like. 0 "
                                 "turns the check off.")
     p_extract.set_defaults(func=_cmd_extract)
+
+    # --- barcodes / match-cells ---
+    p_bc = sub.add_parser(
+        "barcodes",
+        help="Write a run's master list: every barcode extract matched, with "
+             "its read and UMI counts.")
+    p_bc.add_argument("csv", help="An anchovy CSV (from `anchovy extract` or "
+                                  "`anchovy ocm-split`).")
+    p_bc.add_argument("out", help="Output CSV (the workflow writes "
+                                  "<sample>_barcodes.csv).")
+    p_bc.add_argument("--ocm", action="append", metavar="SAMPLE=OB",
+                      help="For an On-Chip Multiplexing channel: add an "
+                           "ocm_sample column. Repeat per sample, e.g. --ocm "
+                           "P10_5=OB1 --ocm P10_6=OB2.")
+    p_bc.set_defaults(func=_cmd_barcodes)
+
+    p_match = sub.add_parser(
+        "match-cells",
+        help="Keep the rows of a run's master barcode list that are in a "
+             "custom cell list (Cell Ranger or Seurat calls). Seconds, not a "
+             "re-run of extract.")
+    p_match.add_argument("barcodes",
+                         help="The run's <sample>_barcodes.csv master list.")
+    p_match.add_argument("cell_list",
+                         help="Cell barcodes, one per line: barcodes.tsv(.gz), "
+                              "a Seurat export, or plain text. -1 suffixes, "
+                              "sample prefixes and a header are handled.")
+    p_match.add_argument("-o", "--out",
+                         help="Output CSV (default: <sample>_<list name>.csv "
+                              "beside the master list).")
+    p_match.set_defaults(func=_cmd_match_cells)
 
     # --- ocm-split / ocm-table ---
     p_split = sub.add_parser(
