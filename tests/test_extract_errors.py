@@ -128,7 +128,8 @@ def test_an_unexpected_error_keeps_its_traceback(monkeypatch, capsys):
 def test_every_anchovy_stage_writes_a_log():
     text = SNAKEFILE.read_text()
     for rule in ("rule map_reads:", "rule extract:", "checkpoint fasta:",
-                 "rule consensus:", "rule annotate:", "rule frequencies:"):
+                 "rule ocm_split:", "rule consensus:", "rule annotate:",
+                 "rule frequencies:"):
         body = text.split(rule)[1].split("\nrule ")[0].split("\ncheckpoint ")[0]
         assert "log:" in body, rule
         assert "{log}" in body, rule

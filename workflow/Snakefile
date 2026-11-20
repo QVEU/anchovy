@@ -873,6 +873,8 @@ rule ocm_split:
                        f"{OCM_SAMPLE_CHANNEL[w.sample]}_anchovy.csv"),
     output:
         RESULTS + "/" + SAMPLE + "_anchovy.csv",
+    log:
+        LOGS + "/ocm_split.log",
     wildcard_constraints:
         sample=OCM_SAMPLE_RE,
     params:
@@ -881,8 +883,9 @@ rule ocm_split:
         mem_mb=mem_mb("ocm_split"),
         runtime=runtime("ocm_split"),
     shell:
-        "anchovy ocm-split {input.csv} {output} "
-        "--overhangs {params.overhangs} --sample {wildcards.sample}"
+        "(anchovy ocm-split {input.csv} {output} "
+        "--overhangs {params.overhangs} --sample {wildcards.sample}) "
+        "2>&1 | tee {log}"
 
 
 # --------------------------------------------------------------------------- #
