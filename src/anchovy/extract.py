@@ -339,19 +339,24 @@ class _Tally:
             "coincidental neighbour two substitutions away, and the cells, "
             "consensuses and genotypes that come out of it look ordinary.\n"
             "\n"
-            "  A list that holds only SOME of this library's cells -- one "
-            "sample's calls from a multiplexed well -- also lands here. Use "
-            "the list for every sample in the well, or lower the floor.\n"
+            "  A list that holds only SOME of this library's cells -- Cell "
+            "Ranger or Seurat calls, or one sample's cells from a multiplexed "
+            "channel -- also lands here. Match against the full 10x list for "
+            "the chemistry instead (leave `whitelist` unset) and give the "
+            "called cells as `cell_lists`; they are applied after matching.\n"
             "  Set `min_exact_rate` in the workflow config (or "
-            "--min-exact-rate) to change it; 0 turns the check off."
+            "--min-exact-rate) to change the floor; 0 turns the check off."
             .format(rate, self.payloads, whitelist_size, chance))
 
     def report(self, config, baseline):
         if self.payloads:
-            rest = ("the rest are resolved within {} error(s) or dropped"
-                    .format(config.max_barcode_errors)
-                    if config.max_barcode_errors is not None
-                    else "the rest fall back to the full scan")
+            if config.max_barcode_errors == 0:
+                rest = "only these are kept (exact matches only)"
+            elif config.max_barcode_errors is not None:
+                rest = ("the rest are resolved within {} error(s) or dropped"
+                        .format(config.max_barcode_errors))
+            else:
+                rest = "the rest fall back to the full scan"
             print("\n2. Identifying Cell Barcodes...")
             print("   {:,}/{:,} reads ({:.1%}) match a whitelist barcode "
                   "exactly; {}.".format(self.exact, self.payloads,

@@ -10,7 +10,7 @@ frequencies.
 
 If your samples were pooled some other way (hashtag antibodies, CellPlex), or
 each sample has its own channel, this page does not apply. See
-[whitelists and multiplexed samples](../README.md#whitelists-per-sample-lists-and-multiplexed-samples)
+[whitelists and cell lists](../README.md#whitelists-and-cell-lists)
 in the README instead.
 
 ## Is my run OCM?
@@ -105,6 +105,9 @@ ocm:
     P10_6: OB2
     P10_7: OB3
     P10_8: OB4
+
+cell_lists:                          # optional: Cell Ranger / Seurat cells, per sample
+  P10_5: /data/cr/p10_5-8/outs/per_sample_outs/P10_5/count/sample_filtered_feature_bc_matrix/barcodes.tsv.gz
 ```
 
 You don't need to paste `ocm_overhangs:`. The built-in table covers it. If
@@ -124,7 +127,7 @@ template: "/data/p10/reference.fasta"
 reference: "/data/p10/reference.fasta"
 gff: "/data/p10/regions.gff3"
 chemistry: "5p-v3"                   # leave `whitelist` unset: the full list holds every OB set
-max_barcode_errors: 2
+# max_barcode_errors: 1              # optional; the default keeps exact barcode matches only
 
 ocm:
   p10_5-8:                           # the channel: a FASTQ in input_dir
@@ -174,7 +177,15 @@ p10_5-8.fastq.gz ─ map_reads ─ extract ─► results/p10_5-8/p10_5-8_anchov
   listed sample are dropped. They come from an unused inlet, from background
   barcodes, or from a sequencing error in those two bases.
 - Everything after the split is an ordinary per-sample run. The channel
-  itself has no results beyond its SAM and anchovy CSV.
+  itself has no results beyond its SAM, its anchovy CSV, and
+  `<channel>_barcodes.csv`: every matched barcode in the channel, with an
+  `ocm_sample` column naming the sample its bases belong to.
+- Each sample gets `results/<sample>/<sample>_barcodes.csv`, and one
+  `results/<sample>/cell_lists/<sample>_<label>.csv` per entry under
+  `cell_lists`. A sample with a cell list runs consensus and the networks on
+  those cells only, in `results/<sample>_<label>/`, instead of on every
+  barcode. A later Cell Ranger or Seurat list is matched with
+  `anchovy match-cells results/<sample>/<sample>_barcodes.csv <list>`.
 
 Each sample's split prints the share of the channel's reads it kept:
 
@@ -222,9 +233,7 @@ with the multi config's `[samples]`. Then run `ocm-table` and check that
 sample's bases.
 
 **`extract` stops on a low exact-match rate.** That check runs on the whole
-channel before the split. With the full 5′ v3 list it should pass. If you set
-`whitelist` to one sample's Cell Ranger list, it will fail, so leave
-`whitelist` unset for OCM.
-
-**A per-sample `whitelist` mapping.** Its keys are the extracted FASTQs, so an
-OCM channel is listed under its channel name, not its sample names.
+channel before the split. With the full 5′ v3 list it should pass. If it
+fails, check `chemistry` (5′ and 3′ kits use different lists) and that
+`whitelist` is unset or points at the full list. Give each sample's Cell
+Ranger cells as `cell_lists`, never as `whitelist`.

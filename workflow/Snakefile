@@ -334,30 +334,101 @@ else:
         f"{CHEM['whitelist']}.gz  (gunzip it)\n"
         f"  or set `whitelist_url` to a mirror you can reach.")
 
-# A WHITELIST PER SAMPLE. `whitelist` may also be a mapping of sample name to
-# list, for samples that each come with their own Cell Ranger cell calls:
+# ONE WHITELIST, THE FULL ONE. Every run matches against the complete 10x list
+# for the chemistry, and an OCM channel is demultiplexed from those matches.
+# Which barcodes are real cells is decided afterwards, from `cell_lists` (see
+# below), because that answer comes from Cell Ranger or Seurat and changes
+# whenever the single-cell analysis is re-run.
 #
-#   whitelist:
-#     P10_5: /path/to/p10_5_barcodes.txt
-#     P10_8: /path/to/p10_8_barcodes.txt
-#
-# Every sample has to be named. A missing one would otherwise surface as a
-# KeyError deep inside a job, so the gap is reported here, before anything runs.
+# `whitelist` used to take a {sample: list} mapping of called cells, matched
+# against directly. That is refused now rather than quietly honoured: a cell
+# list covers only some of the reads, which tripped min_exact_rate on good data,
+# and tied extract's output to one version of the cell calls.
 if isinstance(WHITELIST, dict):
-    _missing = sorted(set(EXTRACT_SAMPLES) - set(WHITELIST))
-    if _missing:
-        raise WorkflowError(
-            f"`whitelist` is a per-sample mapping but has no entry for "
-            f"{', '.join(_missing)}.\n"
-            f"  Samples found: {', '.join(EXTRACT_SAMPLES)}.\n"
-            f"  A sample's name is its FASTQ's basename without "
-            f".fastq/.fq/.gz.")
+    raise WorkflowError(
+        "`whitelist` is a per-sample mapping. Reads are now always matched "
+        "against the full 10x list, and called cells are applied afterwards.\n"
+        "  Rename the key to `cell_lists` (same {sample: path} shape) and leave "
+        "`whitelist` unset, or point it at a local copy of the full list.")
 
 
 def whitelist_for(wildcards):
-    if isinstance(WHITELIST, dict):
-        return WHITELIST[wildcards.sample]
     return WHITELIST
+
+
+# --------------------------------------------------------------------------- #
+# Custom cell lists: applied to the run's master barcode list, not to extract
+# --------------------------------------------------------------------------- #
+# Every sample gets results/<sample>/<sample>_barcodes.csv -- every barcode
+# extract matched against the full whitelist, with reads and UMIs. A cell list
+# (Cell Ranger's barcodes.tsv.gz, a Seurat export) is then matched against that
+# into results/<sample>/cell_lists/<sample>_<label>.csv. A new list later needs
+# only `anchovy match-cells`, not a re-run:
+#
+#   cell_lists:
+#     P10_5: /data/cr/P10_5/barcodes.tsv.gz             # label from file name
+#     P10_6: [/data/cr/P10_6/barcodes.tsv.gz, /data/seurat/P10_6_res0.8.csv]
+#     P10_7: {cellranger: /data/cr/P10_7/barcodes.tsv.gz,
+#             seurat_res08: /data/seurat/P10_7.csv}
+#
+# Keys are result sample names (an OCM sample, not its channel). A sample with
+# lists runs its per-cell stages once per list, in results/<sample>_<label>/;
+# see LIST_UNITS below.
+from anchovy.cell_lists import label_for as _label_for
+
+CELL_LISTS = {}
+if config.get("cell_lists") and not FASTQS:
+    raise WorkflowError(
+        "`cell_lists` are matched against the barcodes extract found, so they "
+        "need FASTQs in `input_dir`; they cannot be combined with "
+        "`samples`/`cells_dir`. Use `anchovy match-cells` on an earlier run's "
+        "_barcodes.csv instead.")
+for _sample, _lists in (config.get("cell_lists") or {}).items():
+    if _sample not in SAMPLES:
+        raise WorkflowError(
+            f"`cell_lists` names {_sample!r}, which is not a sample in this "
+            f"run.\n  Samples: {', '.join(SAMPLES)}."
+            + ("\n  For OCM, name the samples, not the channel."
+               if _sample in OCM else ""))
+    if isinstance(_lists, str):
+        _lists = [_lists]
+    if not isinstance(_lists, dict):
+        _lists = {_label_for(p): p for p in _lists}
+    if len(set(_lists)) != len(_lists):
+        raise WorkflowError(f"`cell_lists` for {_sample}: two lists share a "
+                            f"label; give them as a {{label: path}} mapping.")
+    CELL_LISTS[_sample] = {str(k): str(v) for k, v in _lists.items()}
+
+# EACH CELL LIST IS ITS OWN ANALYSIS, IN ITS OWN FOLDER. A sample with lists
+# runs the per-cell stages (cells, consensus, genotypes, networks, frequencies,
+# report) once per list, on the listed cells only, under
+# results/<sample>_<label>/ -- and not on every matched barcode. Its own
+# folder keeps the anchovy CSV, the master list and the cell_lists/ matches.
+# A sample with no list runs the per-cell stages on every matched barcode, as
+# before.
+LIST_UNITS = {}                       # unit name -> (sample, label)
+for _sample, _lists in CELL_LISTS.items():
+    for _label in _lists:
+        _unit = f"{_sample}_{_label}"
+        if _unit in SAMPLES or _unit in FASTQS or _unit in LIST_UNITS:
+            raise WorkflowError(
+                f"`cell_lists` {_sample}: {_label!r} would write to "
+                f"{RESULTS_DIR}/{_unit}/, which another sample already uses. "
+                f"Give the list a different label.")
+        LIST_UNITS[_unit] = (_sample, _label)
+
+# Samples whose own anchovy CSV, master list and matches are written (every
+# extracted or OCM sample), and samples that get per-cell results.
+BARCODE_SAMPLES = sorted(SAMPLES)
+SAMPLES = sorted((set(SAMPLES) - set(CELL_LISTS)) | set(LIST_UNITS))
+
+# A list unit's anchovy CSV comes from select_cells, never from extract.
+_UNIT_ALTS = "|".join(re.escape(u) for u in sorted(LIST_UNITS, key=len,
+                                                    reverse=True))
+LIST_UNIT_RE = f"(?:{_UNIT_ALTS})" if _UNIT_ALTS else "(?!)"
+_NOT_EXTRACT = "|".join(a for a in (_OCM_ALTS, _UNIT_ALTS) if a)
+NOT_OCM_SAMPLE_RE = (f"(?!(?:{_NOT_EXTRACT})(?:/|_anchovy\\.csv$)).+"
+                     if _NOT_EXTRACT else ".+")
 
 
 # --------------------------------------------------------------------------- #
@@ -391,6 +462,8 @@ REFNAME = config.get("reference_name") or _reference_name(TEMPLATE)
 # touching the rules.
 SAMPLE  = "{sample}"
 RESULTS = RESULTS_DIR + "/{sample}"
+BARCODES      = RESULTS + "/" + SAMPLE + "_barcodes.csv"
+CELL_LIST_OUT = RESULTS + "/cell_lists/" + SAMPLE + "_{label}.csv"
 
 # ONE LOG PER STAGE PER SAMPLE, beside that sample's results. Each anchovy
 # stage's output is tee'd here as well as to the screen, so a failure on a
@@ -627,17 +700,10 @@ CHUNK_SIZE = int(config.get("extract_chunk_size", 100_000))
 # A per-sample mapping is sized by its LARGEST list: extract's reservation is
 # one figure for every sample, so it has to fit the biggest of them.
 def _whitelist_barcodes():
-    paths = config.get("whitelist")
-    if isinstance(paths, dict):
-        paths = list(paths.values())
-    elif paths:
-        paths = [paths]
-    if paths and all(os.path.exists(p) for p in paths):
-        counts = []
-        for p in paths:
-            with open(p) as handle:
-                counts.append(sum(1 for line in handle if line.strip()))
-        return max(counts)
+    path = config.get("whitelist")
+    if path and os.path.exists(path):
+        with open(path) as handle:
+            return sum(1 for line in handle if line.strip())
     # A chemistry whose list has no published count and no URL (5p-v3) can
     # only reach here before its local file exists -- a dry run, say. Size it
     # as a full 10x list rather than as nothing, so the reservation errs high.
@@ -651,7 +717,7 @@ def _whitelist_barcodes():
 # whitelist. See anchovy.extract.projected_memory_gb for the measurements.
 _EXTRACT_GB = projected_memory_gb(
     _whitelist_barcodes(), EXTRACT_THREADS, CHUNK_SIZE,
-    bounded=config.get("max_barcode_errors") is not None)
+    bounded=config.get("max_barcode_errors", 0) is not None)
 
 _DEFAULT_MEM_MB = {
     "get_whitelist":   _mb(2),            # a download and a line count
@@ -660,6 +726,9 @@ _DEFAULT_MEM_MB = {
     "extract":         _mb(_EXTRACT_GB * 1.3 + 2),      # 30% headroom
     "fasta":           _mb(READS_ESTIMATE * 6.3e-6 * 1.3 + 2),
     "ocm_split":       _mb(4),            # one 200,000-row chunk at a time
+    "barcode_list":    _mb(4),            # a chunk + one entry per barcode
+    "match_cells":     _mb(2),            # the master list and one cell list
+    "select_cells":    _mb(4),            # one 200,000-row chunk at a time
     "map_cell":        _mb(2),            # one cell's reads
     "cell_consensus":  _mb(2),            # one cell's SAM
     "merge_consensus": _mb(2),            # streamed with copyfileobj
@@ -680,7 +749,8 @@ _DEFAULT_RUNTIME = {
     "map_reads": 240, "extract": 240, "fasta": 120, "consensus": 120,
     "annotate": 60, "frequencies": 120, "report": 60, "merge_consensus": 60,
     "get_whitelist": 60, "map_cell": 30, "cell_consensus": 30,
-    "ocm_split": 60,
+    "ocm_split": 60, "barcode_list": 60, "match_cells": 30,
+    "select_cells": 60,
 }
 
 
@@ -697,6 +767,13 @@ def runtime(rule):
 rule all:
     input:
         expand(RESULTS + "/" + SAMPLE + "_annot_v3.csv", sample=SAMPLES),
+        # The master list for every sample, and for each OCM channel (with an
+        # ocm_sample column), then each custom cell list matched against it.
+        # Not on the `cells_dir` resume path: it has no anchovy CSV to list.
+        *(expand(BARCODES, sample=BARCODE_SAMPLES + sorted(OCM))
+          if FASTQS else []),
+        *[CELL_LIST_OUT.format(sample=s, label=l)
+          for s, lists in CELL_LISTS.items() for l in lists],
         # Region annotations are only produced (and only requested) when the
         # config supplies a GFF3.
         *(expand(REGION_ANNOTATIONS, sample=SAMPLES) if GFF else []),
@@ -828,13 +905,11 @@ rule extract:
         # The default of 42 is very permissive on a 58-character signature.
         max_distance=(f"--max-distance {config['max_distance']}"
                       if "max_distance" in config else ""),
-        # How wrong the assigned BARCODE may be. Unset, every read that clears
-        # the signature filter is assigned to its nearest whitelist entry with
-        # no floor however poorly it matched, and those assignments become
-        # cells, consensus sequences and genotypes indistinguishable from good
-        # ones. Setting it also makes the stage far faster, because a bounded
-        # search can answer "is anything within k errors" by enumerating the
-        # neighbourhood instead of scanning all 737,280 entries.
+        # How wrong the assigned BARCODE may be. Unset, extract's default of 0
+        # keeps exact whitelist matches only -- one lookup per read. 1 or 2
+        # accept substitutions; null passes `none`, the original nearest-entry
+        # search with no floor, which scans the whole list for every read that
+        # misses and is what turns a full-list run from hours into days.
         max_barcode_errors=(
             f"--max-barcode-errors {config['max_barcode_errors']}"
             if "max_barcode_errors" in config else ""),
@@ -842,9 +917,8 @@ rule extract:
         # the stage's footprint -- it no longer scales with the size of the run.
         chunk_size=(f"--chunk-size {config['extract_chunk_size']}"
                     if "extract_chunk_size" in config else ""),
-        # The floor on exact whitelist matches (default 0.05). A list holding
-        # only SOME of the library's cells -- one sample's calls from a
-        # multiplexed well -- can sit below it legitimately; see
+        # The floor on exact whitelist matches (default 0.05). Against the full
+        # list a rate below it means the wrong chemistry's list; see
         # anchovy.config.min_exact_rate before lowering it.
         min_exact_rate=(f"--min-exact-rate {config['min_exact_rate']}"
                         if "min_exact_rate" in config else ""),
@@ -885,6 +959,80 @@ rule ocm_split:
     shell:
         "(anchovy ocm-split {input.csv} {output} "
         "--overhangs {params.overhangs} --sample {wildcards.sample}) "
+        "2>&1 | tee {log}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1c: barcode_list  (anchovy CSV -> the run's master barcode list)
+# --------------------------------------------------------------------------- #
+# Every barcode matched against the full whitelist, with read and UMI counts.
+# For an OCM channel this is the whole channel with an ocm_sample column, the
+# demultiplexed list in one file; each OCM sample also gets its own.
+rule barcode_list:
+    wildcard_constraints:
+        sample="[^/]+",
+    input:
+        csv=RESULTS + "/" + SAMPLE + "_anchovy.csv",
+    output:
+        BARCODES,
+    log:
+        LOGS + "/barcode_list.log",
+    params:
+        ocm=lambda w: " ".join(
+            f"--ocm {s}={OCM_OVERHANGS[s]}"
+            for s, c in OCM_SAMPLE_CHANNEL.items() if c == w.sample),
+    resources:
+        mem_mb=mem_mb("barcode_list"),
+        runtime=runtime("barcode_list"),
+    shell:
+        "(anchovy barcodes {input.csv} {output} {params.ocm}) 2>&1 | tee {log}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1d: match_cells  (master list x one custom cell list)
+# --------------------------------------------------------------------------- #
+rule match_cells:
+    wildcard_constraints:
+        sample="[^/]+",
+        label="[^/]+",
+    input:
+        barcodes=BARCODES,
+        cells=lambda w: CELL_LISTS[w.sample][w.label],
+    output:
+        CELL_LIST_OUT,
+    log:
+        LOGS + "/match_cells_{label}.log",
+    resources:
+        mem_mb=mem_mb("match_cells"),
+        runtime=runtime("match_cells"),
+    shell:
+        "(anchovy match-cells {input.barcodes} {input.cells} -o {output}) "
+        "2>&1 | tee {log}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1e: select_cells  (a sample's anchovy CSV -> one cell list's)
+# --------------------------------------------------------------------------- #
+# Only for results/<sample>_<label>/ units from `cell_lists`. Produces the file
+# extract produces for an ordinary sample, so every per-cell stage after it
+# runs unchanged, on the listed cells only.
+rule select_cells:
+    wildcard_constraints:
+        sample=LIST_UNIT_RE,
+    input:
+        csv=lambda w: (f"{RESULTS_DIR}/{LIST_UNITS[w.sample][0]}/"
+                       f"{LIST_UNITS[w.sample][0]}_anchovy.csv"),
+        cells=lambda w: CELL_LISTS[LIST_UNITS[w.sample][0]][
+            LIST_UNITS[w.sample][1]],
+    output:
+        RESULTS + "/" + SAMPLE + "_anchovy.csv",
+    log:
+        LOGS + "/select_cells.log",
+    resources:
+        mem_mb=mem_mb("select_cells"),
+        runtime=runtime("select_cells"),
+    shell:
+        "(anchovy select-cells {input.csv} {input.cells} {output}) "
         "2>&1 | tee {log}"
 
 

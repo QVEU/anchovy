@@ -99,88 +99,91 @@ The GFF3 supplies coding frames and non-coding regions; see the
 [GFF3 guide and tab-separated example](docs/usage.md#annotating-by-genome-region).
 Without a GFF3, the default assumes one coding region beginning at base one.
 
-A chemistry-matched 10X barcode whitelist downloads automatically unless you
-supply `whitelist`. Run-specific lists of called cells are also supported, either
-one shared by all samples or one per sample; see
-[whitelists and multiplexed samples](#whitelists-per-sample-lists-and-multiplexed-samples)
-below. When
+A chemistry-matched 10X barcode whitelist downloads automatically, and every
+run is matched against all of it. Lists of called cells from Cell Ranger or
+Seurat are applied afterwards as `cell_lists`; see
+[whitelists and cell lists](#whitelists-and-cell-lists) below. When
 adapting `workflow/config.yaml`, replace its bundled `whitelist`, `template`,
 `reference`, GFF and analysis-window settings; those values belong to the example.
 
-### Whitelists, per-sample lists and multiplexed samples
+### Whitelists and cell lists
 
-The whitelist is the set of cell barcodes that reads may be assigned to. There
-are three ways to supply one, and which is right depends on how the PacBio
-library relates to the Cell Ranger run.
+Anchovy separates two questions that used to share one setting:
 
-**The full 10x list (default).** Leave `whitelist` unset and the list matching
-`chemistry` downloads once. Every barcode in the library can be matched,
-including background barcodes outside called cells, so expect more cells than
-Cell Ranger called. Restrict to Cell Ranger's cells afterward by barcode.
+1. **Which 10x barcode does each read carry?** Reads are always matched
+   against the full 10x list for `chemistry`, which downloads once. Leave
+   `whitelist` unset, or point it at a local copy of the same full list.
+2. **Which of those barcodes are real cells?** That answer comes from Cell
+   Ranger or Seurat and changes whenever the single-cell analysis is re-run,
+   so it is applied afterwards from `cell_lists` and never changes what
+   extract does.
 
-**One shared list for all samples.** `whitelist: "/path/cells.txt"`, used for
-every FASTQ in `input_dir`, with one 16 nt
-barcode per line. Cell Ranger writes barcodes with a `-1` GEM-well suffix;
-strip it (`zcat barcodes.tsv.gz | cut -d- -f1 > cells.txt`).
+Only exact barcode matches are kept by default. `max_barcode_errors: 1` (or 2)
+also accepts barcodes with that many substitutions, at a higher cost, and
+`max_barcode_errors: null` restores the original nearest-match search over the
+whole list, which is very slow against a full 10x list.
 
-**A list per sample.** When each FASTQ has its own called cells, map sample
-names to lists. A sample's name is its FASTQ filename without `.fastq`, `.fq`
-and `.gz`; every sample must be listed, and the run stops before any job if
-one is missing.
+Every sample gets `results/<sample>/<sample>_barcodes.csv`, the run's **master
+list**: every barcode matched, with its `reads` and distinct `umis`. Each
+custom list is then matched against it into
+`results/<sample>/cell_lists/<sample>_<label>.csv`:
 
 ```yaml
-whitelist:
-  P10_1: "/data/cellranger/p10_1/barcodes.txt"
-  P10_2: "/data/cellranger/p10_2/barcodes.txt"
+cell_lists:
+  P10_5: /data/cellranger/P10_5/barcodes.tsv.gz        # label from the file name
+  P10_6: {cellranger: /data/cr/P10_6/barcodes.tsv.gz,  # or name each list
+          seurat_res08: /data/seurat/P10_6_cells.csv}
 ```
 
-#### Multiplexed samples: one list per library, not per sample
+**A sample with cell lists gets one analysis per list, in its own folder.**
+Consensus, genotypes, networks, frequencies and the report run on the listed
+cells only, under `results/<sample>_<label>/` (for example
+`results/P10_6_seurat_res08/P10_6_seurat_res08_annot_v3.csv`), and are not run
+on every barcode of the sample. A sample without a list runs them on every
+matched barcode with at least `min_reads` reads, as before.
 
-A list must cover the cells **in the library being sequenced**, not the cells
-of one sample. The distinction matters whenever several samples were pooled
-into one 10x channel (one GEM well), using hashtag antibodies, CellPlex, on-chip
-multiplexing or similar, and demultiplexed by `cellranger multi`. Its output
-then has a `per_sample_outs/<sample>/` folder for each sample.
+```
+results/
+  P10_6/                         # the sample: matching, whatever the cell calls
+    P10_6_anchovy.csv            #   every read's barcode and UMI
+    P10_6_barcodes.csv           #   master list: every matched barcode
+    cell_lists/
+      P10_6_cellranger.csv       #   master-list rows in each cell list
+      P10_6_seurat_res08.csv
+  P10_6_cellranger/              # per-cell analysis on the Cell Ranger cells
+    cells/  P10_6_cellranger_allConsensus.fasta  ..._annot_v3.csv  ..._epistaticNetwork.csv
+  P10_6_seurat_res08/            # the same on the Seurat cells
+```
 
-In that case:
+Cell lists can be used as exported: Cell Ranger's `barcodes.tsv.gz` with its
+`-1` suffix, a Seurat CSV with a header, or Seurat cell names with a sample
+prefix. Keys are result sample names, so with OCM they are the samples, not
+the channel.
 
-- Every cell in the channel gets a 10x barcode, whichever sample it came from.
-  The long-read library made from that channel therefore holds reads from all
-  of its samples' cells.
-- `per_sample_outs/<sample>/.../barcodes.tsv.gz` holds only that sample's
-  cells. Used as the whitelist for the pooled library, it covers a fraction of
-  the reads: with four samples, roughly a quarter at best.
-- `extract` checks that at least `min_exact_rate` (default 5%) of reads carry
-  a barcode that is exactly in the list, because a list from the wrong kit
-  looks the same: a run that matches almost nothing. A single sample's list
-  on a pooled library can fall below that floor with nothing wrong in the
-  data, and the stage stops with "only X% of the first N reads carry a barcode
-  that is an EXACT entry in this whitelist".
-
-So treat each **channel** as one anchovy sample, give it the combined list for
-every sample in the channel, and split the results by sample afterward:
+When the cell calls change, match the new list against the master list from
+the earlier run. It takes seconds and does not re-run extract. To also get
+the per-cell analysis for the new list, add it under `cell_lists` and re-run
+the workflow: extract's output is reused, and only the new list's folder is
+built.
 
 ```bash
-# One whitelist for the channel: all samples' called cells, suffix stripped.
-for d in cellranger/p10_5-8/outs/per_sample_outs/*/; do
-  zcat "$d"count/sample_filtered_feature_bc_matrix/barcodes.tsv.gz
-done | cut -d- -f1 | sort -u > p10_5-8_cells.txt
-
-# A barcode -> sample table, to split anchovy's per-cell outputs (CBC_ID) later.
-for d in cellranger/p10_5-8/outs/per_sample_outs/*/; do
-  s=$(basename "$d")
-  zcat "$d"count/sample_filtered_feature_bc_matrix/barcodes.tsv.gz \
-    | cut -d- -f1 | sed "s/$/,$s/"
-done > p10_5-8_barcode_to_sample.csv
-
-# Barcodes in more than one sample cannot be split by barcode; check for any.
-cut -d, -f1 p10_5-8_barcode_to_sample.csv | sort | uniq -d | wc -l
+anchovy match-cells results/P10_6/P10_6_barcodes.csv new_cells.csv
+# -> results/P10_6/P10_6_new_cells.csv, and a line saying how many of the
+#    listed cells were found and what share of the reads they hold
 ```
 
-Then name the channel's FASTQ for the channel (for example `p10_5-8.fastq.gz`)
-and point `whitelist` at `p10_5-8_cells.txt`, or at the full 10x list. Joining
-`_filtConsensus.csv` or `_annot_v3.csv` on `CBC_ID` against the table assigns
-each cell to its sample.
+`whitelist` no longer takes a `{sample: list}` mapping; a config that still
+has one stops with a message to rename it to `cell_lists`. Matching reads
+against a filtered list covered only some of the library, which tripped the
+`min_exact_rate` check (5% of reads must match exactly) on good data, and tied
+extract's output to one version of the cell calls.
+
+#### Multiplexed samples
+
+When several samples share one 10x channel (hashtags, CellPlex), the long-read
+library holds reads from every sample's cells. Treat the channel as one
+anchovy sample. Its master list then covers every sample, and each sample's
+Cell Ranger list can be matched against it with `anchovy match-cells`.
 
 #### On-Chip Multiplexing (OCM)
 
@@ -200,11 +203,9 @@ results under `results/<sample>/`. The
 OCM, the built-in OB table and checking it with `anchovy ocm-table`, naming, what runs, and
 troubleshooting.
 
-Only if a library genuinely contains just some of the channel's cells, or you
-deliberately want one sample's cells out of a pooled library, lower the floor
-with `min_exact_rate: 0.01` (or `0` to turn the check off). Reads from other
-samples' cells are then dropped when `max_barcode_errors` is set, and assigned
-to the nearest listed cell when it is not, so set it.
+For an OCM channel the channel's own `results/<channel>/<channel>_barcodes.csv`
+has an `ocm_sample` column, so one file holds the whole demultiplexed list;
+each sample also gets its own master list.
 
 Run from the Anchovy checkout, using your settings file:
 

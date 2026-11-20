@@ -1032,7 +1032,8 @@ def test_the_lookup_tables_are_built_once_not_per_chunk(tmp_path, capsys):
                                                            real(*a, **k))[1]
     try:
         run(sam=sam, whitelist=wl, signature=query,
-            config=ExtractConfig(signature=query, nthreads=2, chunk_size=10))
+            config=ExtractConfig(signature=query, nthreads=2, chunk_size=10,
+                                 max_barcode_errors=None))
     finally:
         barcodes.build_barcode_query_blocks = real
     capsys.readouterr()
@@ -1109,8 +1110,12 @@ def test_the_array_is_skipped_when_the_search_is_bounded():
         "the per-barcode array is being built for a bounded run again; on a v3 "
         "whitelist that is 1.6 GB in every worker that never reads it")
 
-    # Unset, the scan needs every template and this is the cost of asking.
-    unbounded = _BarcodeState(query, wl, ExtractConfig(signature=query))
+    # The default (exact only) is bounded too, and skips it the same way.
+    assert _BarcodeState(query, wl, ExtractConfig(signature=query)).blocks is None
+
+    # Unbounded, the scan needs every template and this is the cost of asking.
+    unbounded = _BarcodeState(query, wl, ExtractConfig(signature=query,
+                                                       max_barcode_errors=None))
     assert unbounded.blocks is not None
     assert len(unbounded.blocks) == 2
 
@@ -1236,7 +1241,7 @@ def test_the_guard_can_be_switched_off(tmp_path, capsys):
     sam, wl, query = _mismatch_fixture(tmp_path, matching=False)
     df = run(sam=sam, whitelist=wl, signature=query,
              config=ExtractConfig(signature=query, nthreads=1,
-                                  min_exact_rate=0))
+                                  min_exact_rate=0, max_barcode_errors=None))
     capsys.readouterr()
     assert len(df) == 60, "disabled, the old permissive behaviour is intact"
 
