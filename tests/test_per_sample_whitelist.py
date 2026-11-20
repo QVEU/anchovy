@@ -1,6 +1,6 @@
 """
-test_per_sample_whitelist.py -- a whitelist per sample, and a reachable
-min_exact_rate.
+test_per_sample_whitelist.py -- a reachable min_exact_rate, and the per-sample
+whitelist mapping that `cell_lists` replaced.
 
 Samples with their own Cell Ranger cell calls each need their own list, and a
 list that covers only some of a library's cells can sit below the exact-match
@@ -65,7 +65,7 @@ def test_min_exact_rate_defaults_when_the_flag_is_absent():
             == ExtractConfig().min_exact_rate)
 
 
-def test_the_extract_rule_passes_min_exact_rate_and_a_per_sample_list():
+def test_the_extract_rule_passes_min_exact_rate_and_the_whitelist():
     text = SNAKEFILE.read_text()
     rule = text.split("rule extract:")[1].split("\nrule ")[0]
     assert "--min-exact-rate" in rule
@@ -105,19 +105,18 @@ def _dry_run(tmp_path, extra_yaml: str):
 
 
 @needs_snakemake
-def test_a_per_sample_mapping_gives_each_sample_its_list(tmp_path):
+def test_a_per_sample_mapping_is_refused_and_points_at_cell_lists(tmp_path):
+    """Matching against called cells was replaced by matching the full list
+    and applying `cell_lists` afterwards. An old config must say so, not run."""
     wl = tmp_path / "example_cells.txt"
     shutil.copy(REPO / "tests/data/fastqs/whitelist.txt", wl)
-    proc = _dry_run(tmp_path,
-                    f"whitelist:\n  example: {wl}\nmin_exact_rate: 0.01\n")
-    assert proc.returncode == 0, proc.stderr[-3000:]
-    assert str(wl) in proc.stdout
-    assert "--min-exact-rate 0.01" in proc.stdout
+    proc = _dry_run(tmp_path, f"whitelist:\n  example: {wl}\n")
+    assert proc.returncode != 0
+    assert "cell_lists" in proc.stderr + proc.stdout
 
 
 @needs_snakemake
-def test_a_mapping_missing_a_sample_fails_before_any_job(tmp_path):
-    proc = _dry_run(tmp_path,
-                    "whitelist:\n  someone_else: /nowhere/barcodes.txt\n")
-    assert proc.returncode != 0
-    assert "has no entry for example" in proc.stderr + proc.stdout
+def test_min_exact_rate_reaches_the_extract_command(tmp_path):
+    proc = _dry_run(tmp_path, "min_exact_rate: 0.01\n")
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert "--min-exact-rate 0.01" in proc.stdout

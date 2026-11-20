@@ -29,11 +29,12 @@ working defaults for the rest. The complete list:
 | `map_threads` | `--cores` | Threads for the initial mapping. Follows the run's core count unless set |
 | **Barcodes** | | |
 | `chemistry` | `v3` | `v2`, `v3` or `5p-v3`. Sets the read signature *and* the whitelist together |
-| `whitelist` | downloaded | A local or run-specific barcode list |
+| `whitelist` | downloaded | A local copy of the full 10x list. Reads are always matched against the full list |
+| `cell_lists` | none | `{sample: path}` (or a list, or `{label: path}`) of Cell Ranger / Seurat cells, matched against each sample's `_barcodes.csv` after extract |
 | `whitelist_url` | 10X's | Fetch the whitelist from your own mirror |
 | `whitelist_barcodes` | per chemistry | Override the barcode count a download is checked against |
 | `signature` | from `chemistry` | For an assay whose handles differ from 10X's |
-| `max_barcode_errors` | unset | Errors a barcode may carry. Unset, every read is assigned to its nearest entry with no floor. **The stage's biggest runtime lever** — see [performance tuning](performance.md) |
+| `max_barcode_errors` | 0 | Errors a barcode may carry. 0 keeps exact whitelist matches only; 1 or 2 also accepts substitutions; `null` assigns every read to its nearest entry with no floor (very slow on a full list). See [performance tuning](performance.md) |
 | `max_distance` | `42` | How far the *signature* match may be before a read is dropped |
 | `extract_threads` | `--cores` | Worker pool inside `extract`. Follows the run's core count unless set. **Sets the stage's memory** — see [performance tuning](performance.md) |
 | `downstream_window` | `12` | How far past the alignment offset to search for the signature — see [performance tuning](performance.md) |
@@ -255,6 +256,8 @@ own command:
 
 ```bash
 anchovy extract     reads.sam whitelist.txt -o out_anchovy.csv
+anchovy barcodes    out_anchovy.csv out_barcodes.csv      # the master list
+anchovy match-cells out_barcodes.csv cellranger_barcodes.tsv.gz
 anchovy fasta       out_anchovy.csv cells/
 anchovy consensus   allConsensus.fasta 96 10272 --out-prefix results/sample
 anchovy annotate    filtConsensus.csv reference.txt results/sample
